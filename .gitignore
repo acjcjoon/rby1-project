@@ -1,2 +1,42 @@
 __pycache__/
 *.pyc
+
+# ROS 2 and colcon build artifacts
+build/
+install/
+log/
+
+# Python test, coverage, and packaging artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Generated tooling files
+compile_commands.json
+*.log
