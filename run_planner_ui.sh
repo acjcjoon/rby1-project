@@ -361,7 +361,7 @@ wait_for_topic() {
     done
 
     if timeout 3 ros2 topic info "${topic}" 2>/dev/null | \
-        grep -Eq 'Publisher count: [1-9][0-9]*'; then
+        grep -E 'Publisher count: [1-9][0-9]*' >/dev/null; then
       printf '[launcher] Ready: %s publishes %s\n' "${owner}" "${topic}"
       return 0
     fi
