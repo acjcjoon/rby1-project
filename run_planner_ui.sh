@@ -6,9 +6,9 @@
 set -Eeo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-WORKING_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-DRIVER_REPO="${RBY1_DRIVER_REPO:-${WORKING_ROOT}/rby1-ros2}"
-INSTALL_PREFIX="${RBY1_INSTALL_PREFIX:-${WORKING_ROOT}/install}"
+WORKSPACE_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+DRIVER_REPO="${RBY1_DRIVER_REPO:-${WORKSPACE_ROOT}/src/rby1-ros2}"
+INSTALL_PREFIX="${RBY1_INSTALL_PREFIX:-${WORKSPACE_ROOT}/install}"
 
 NAMESPACE="${RBY1_NAMESPACE:-rby1}"
 ROBOT_IP="${RBY1_ROBOT_IP:-192.168.30.1:50051}"
@@ -27,7 +27,7 @@ GRIPPER_TRANSPORT="${RBY1_GRIPPER_TRANSPORT:-real}"
 # Homing moves both physical grippers through their full strokes. Require an
 # explicit opt-in on every real-hardware startup unless the environment says
 # otherwise.
-GRIPPER_AUTO_HOME="${RBY1_GRIPPER_AUTO_HOME:-false}"
+GRIPPER_AUTO_HOME="${RBY1_GRIPPER_AUTO_HOME:-true}"
 BUILD_MODE="${RBY1_BUILD_WORKSPACE:-auto}"
 CHECK_ROBOT_CONNECTION="${RBY1_CHECK_ROBOT_CONNECTION:-true}"
 STARTUP_TIMEOUT_SEC="${RBY1_STARTUP_TIMEOUT_SEC:-45}"
@@ -248,9 +248,9 @@ elif [[ "${BUILD_MODE}" == "auto" ]] && workspace_needs_build; then
 fi
 
 if [[ "${DO_BUILD}" == "true" ]]; then
-  printf '[launcher] Building required packages in %s\n' "${WORKING_ROOT}"
+  printf '[launcher] Building required packages in %s\n' "${WORKSPACE_ROOT}"
   (
-    cd "${WORKING_ROOT}"
+    cd "${WORKSPACE_ROOT}"
     colcon build \
       --symlink-install \
       --base-paths "${DRIVER_REPO}" "${SCRIPT_DIR}" \
@@ -413,7 +413,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 printf '%s\n' \
-  "[launcher] source_root=${WORKING_ROOT}" \
+  "[launcher] workspace=${WORKSPACE_ROOT}" \
   "[launcher] install=${INSTALL_PREFIX}" \
   "[launcher] namespace=/${NAMESPACE}" \
   "[launcher] robot=${ROBOT_MODEL} v${ROBOT_VERSION}" \
