@@ -1,0 +1,32 @@
+/**:
+  ros__parameters:
+    # RealSense TF 트리를 왼쪽 end-effector에 연결합니다.
+    parent_frame: ee_left
+    camera_center_frame: camera_center
+    camera_frame: camera_link
+
+    # 단위: translation=m, rotation=degree
+    # rotation_rpy_deg의 순서는 [roll(X), pitch(Y), yaw(Z)]입니다.
+    # 정확한 로봇 기준 카메라 포즈를 위해 실제 장착 extrinsic
+    # 보정값으로 교체해야 합니다.
+    # translation_xyz: [0.077391, 0.009, 0.019559]
+    # ee_left -> camera_center
+    translation_xyz: [0.077391, -0.0035, 0.019559]
+    #d435i
+    #[0.082157, 0.0175, 0.031976 - 0.02185] 
+    #0.02185 = 26.05mm - 4.2mm
+    #d405
+    #[0.084308, 0.009, 0.037577 - 0.0193]
+    #카메라 뒷면에서 camera_link까지의 거리: 0.0193 = 23mm - 3.7mm
+    rotation_rpy_deg: [0.0, 111.0, 0.0]
+    #[0.0, 90.0+21.0, 0.0]
+
+    # 카메라 물리 중심 -> camera_link 원점 벡터 [m].
+    # camera_center 축을 기준으로 camera_link가 -Z 방향 9mm에 있음.
+    # camera_center -> camera_link
+    camera_center_to_link_xyz: [0.0, 0.009, 0.0]
+
+    # 물리 중심(camera_center)을 피벗으로 camera_link에 적용할 회전.
+    # [roll(X), pitch(Y), yaw(Z)] [degree].
+    # [0, 0, 0]이면 추가 회전 없이 위 -Z 9mm 오프셋만 적용됨.
+    camera_center_rotation_rpy_deg: [90.0, 0.0, 0.0]

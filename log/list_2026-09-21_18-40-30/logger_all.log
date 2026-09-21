@@ -1,0 +1,120 @@
+[0.314s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'list', '--base-paths', '/home/physrobotics4/rby1_merge_workspace/working/rby1_project']
+[0.314s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='list', build_base='build', ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['/home/physrobotics4/rby1_merge_workspace/working/rby1_project'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], topological_order=False, names_only=False, paths_only=False, topological_graph=False, topological_graph_dot=False, topological_graph_density=False, topological_graph_legend=False, topological_graph_dot_cluster=False, topological_graph_dot_include_skipped=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0x718d6138d8b0>, verb_extension=<colcon_package_information.verb.list.ListVerb object at 0x718d61e13ec0>, main=<bound method ListVerb.main of <colcon_package_information.verb.list.ListVerb object at 0x718d61e13ec0>>, mixin_verb=('list',))
+[0.351s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.351s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.351s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.351s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.351s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.351s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/physrobotics4/rby1_merge_workspace/working/rby1_project'
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['ignore', 'ignore_ament_install']
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'ignore'
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'ignore_ament_install'
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['colcon_pkg']
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'colcon_pkg'
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['colcon_meta']
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'colcon_meta'
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['ros']
+[0.351s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'ros'
+[0.364s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['cmake', 'python']
+[0.364s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'cmake'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'python'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extensions ['python_setup_py']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project) by extension 'python_setup_py'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/log) by extensions ['ignore', 'ignore_ament_install']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/log) by extension 'ignore'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/log) ignored
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extensions ['ignore', 'ignore_ament_install']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extension 'ignore'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extension 'ignore_ament_install'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extensions ['colcon_pkg']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extension 'colcon_pkg'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extensions ['colcon_meta']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extension 'colcon_meta'
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extensions ['ros']
+[0.365s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup) by extension 'ros'
+[0.366s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_bringup' with type 'ros.ament_cmake' and name 'rby1_bringup'
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extensions ['ignore', 'ignore_ament_install']
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extension 'ignore'
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extension 'ignore_ament_install'
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extensions ['colcon_pkg']
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extension 'colcon_pkg'
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extensions ['colcon_meta']
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extension 'colcon_meta'
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extensions ['ros']
+[0.366s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera) by extension 'ros'
+[0.367s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_camera' with type 'ros.ament_cmake' and name 'rby1_camera'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extensions ['ignore', 'ignore_ament_install']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extension 'ignore'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extension 'ignore_ament_install'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extensions ['colcon_pkg']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extension 'colcon_pkg'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extensions ['colcon_meta']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extension 'colcon_meta'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extensions ['ros']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control) by extension 'ros'
+[0.367s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_control' with type 'ros.ament_python' and name 'rby1_control'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extensions ['ignore', 'ignore_ament_install']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extension 'ignore'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extension 'ignore_ament_install'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extensions ['colcon_pkg']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extension 'colcon_pkg'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extensions ['colcon_meta']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extension 'colcon_meta'
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extensions ['ros']
+[0.367s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface) by extension 'ros'
+[0.367s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_interface' with type 'ros.ament_cmake' and name 'rby1_interface'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extensions ['ignore', 'ignore_ament_install']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extension 'ignore'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extension 'ignore_ament_install'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extensions ['colcon_pkg']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extension 'colcon_pkg'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extensions ['colcon_meta']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extension 'colcon_meta'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extensions ['ros']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation) by extension 'ros'
+[0.368s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_navigation' with type 'ros.ament_python' and name 'rby1_navigation'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extensions ['ignore', 'ignore_ament_install']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extension 'ignore'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extension 'ignore_ament_install'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extensions ['colcon_pkg']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extension 'colcon_pkg'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extensions ['colcon_meta']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extension 'colcon_meta'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extensions ['ros']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner) by extension 'ros'
+[0.368s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/rby1_planner' with type 'ros.ament_python' and name 'rby1_planner'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['ignore', 'ignore_ament_install']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'ignore'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'ignore_ament_install'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['colcon_pkg']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'colcon_pkg'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['colcon_meta']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'colcon_meta'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['ros']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'ros'
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['cmake', 'python']
+[0.368s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'cmake'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'python'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extensions ['python_setup_py']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware) by extension 'python_setup_py'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extensions ['ignore', 'ignore_ament_install']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extension 'ignore'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extension 'ignore_ament_install'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extensions ['colcon_pkg']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extension 'colcon_pkg'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extensions ['colcon_meta']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extension 'colcon_meta'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extensions ['ros']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver) by extension 'ros'
+[0.369s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/Lakibeam_ROS2_Driver' with type 'ros.ament_cmake' and name 'lakibeam1'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extensions ['ignore', 'ignore_ament_install']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extension 'ignore'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extension 'ignore_ament_install'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extensions ['colcon_pkg']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extension 'colcon_pkg'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extensions ['colcon_meta']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extension 'colcon_meta'
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extensions ['ros']
+[0.369s] Level 1:colcon.colcon_core.package_identification:_identify(/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver) by extension 'ros'
+[0.369s] DEBUG:colcon.colcon_core.package_identification:Package '/home/physrobotics4/rby1_merge_workspace/working/rby1_project/robot_hardware/rby1_gripper_driver' with type 'ros.ament_python' and name 'rby1_gripper_driver'
+[0.369s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults

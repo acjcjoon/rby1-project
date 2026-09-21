@@ -1,0 +1,28 @@
+/**:
+  ros__parameters:
+    # Shared versioned std_msgs/String transport to rby1_control.
+    control_command_topic: control/command
+    control_state_topic: control/state
+    control_event_topic: control/event
+    control_response_topic: control/response
+    control_state_timeout_sec: 1.0
+
+    # Relative odometry navigation command/state interface.
+    navigation_command_topic: /rby1/navigation/command
+    navigation_state_topic: /rby1/navigation/state
+
+    # AprilTag identity/freshness input; processed pose itself comes from TF.
+    object_pose_topic: /detections
+    object_pose_target_frame: base
+    object_pose_max_age_sec: 0.5
+    object_pose_min_confidence: 0.5
+    object_pose_future_tolerance_sec: 0.05
+
+    # Keep TF lookup non-blocking in the default single-threaded executor.
+    object_pose_tf_timeout_sec: 0.0
+
+    # AprilTag PnP 연속 프레임 평균. 위치 중앙값에서 가장 먼 프레임을
+    # outlier_count만큼 버리고 나머지 XYZ/자세를 평균합니다.
+    object_pose_average_enabled: true
+    object_pose_average_sample_count: 10
+    object_pose_average_outlier_count: 2

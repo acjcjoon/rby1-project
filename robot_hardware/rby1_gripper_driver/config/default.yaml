@@ -1,0 +1,56 @@
+/**:
+  ros__parameters:
+    # Transport is selected by launch argument: transport:=real or
+    # transport:=sim. Existing launches default to real.
+    transport: real
+
+    # Isaac Sim UDP gripper bridge. These are ignored in real mode.
+    sim_host: "127.0.0.1"
+    sim_command_port: 5007
+    sim_state_port: 5008
+    sim_feedback_timeout_sec: 1.0
+
+    # Empty uses rby1_sdk.upc.GripperDeviceName (/dev/rby1_gripper).
+    device_name: ""
+    baud_rate: 2000000
+    # Physical robot: Dynamixel ID 0=right, ID 1=left.
+    # Isaac's opposite mapping is applied internally in sim mode, so these
+    # two parameters affect real mode only. Driver arrays stay [right, left].
+    right_motor_id: 0
+    left_motor_id: 1
+    torque_constants: [1.0, 1.0]
+
+    # Values match the upstream SDK gripper example. Validate them on your
+    # hardware before carrying payloads.
+    position_torque_limit: 5.0
+    homing_torque: 0.1
+
+    # Real-only direction setting. Normalized semantics are 0.0=open and
+    # 1.0=closed. Both physical grippers use the larger encoder endpoint as
+    # closed. Isaac's mapping is derived internally from this pair.
+    closed_at_minimum: [false, false]
+    endpoint_margin_ratio: 0.0
+    minimum_calibration_span_rad: 0.01
+
+    # Startup automatically homes both grippers through their full strokes.
+    # Override with auto_home:=false when startup motion is not acceptable.
+    auto_home: true
+    homing_sample_period_sec: 0.05
+    # Encoder values are quantized, so this effectively requires no encoder
+    # tick movement for 30 consecutive samples, matching the SDK example.
+    homing_stall_threshold_rad: 0.01
+    homing_stall_samples: 30
+    homing_direction_timeout_sec: 15.0
+    homing_max_read_failures: 3
+
+    # Keep false while auto_home=true to measure endpoints on every startup.
+    # A successful home's reported endpoints can instead be copied here and
+    # this set true with auto_home=false. Values are [right, left].
+    use_saved_calibration: false
+    calibration_min_rad: [0.0, 0.0]
+    calibration_max_rad: [0.0, 0.0]
+    auto_enable_torque: true
+    disable_torque_on_shutdown: true
+
+    control_rate_hz: 10.0
+    state_rate_hz: 10.0

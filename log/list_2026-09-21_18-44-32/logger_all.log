@@ -1,0 +1,190 @@
+[0.252s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'list', '--base-paths', '.']
+[0.252s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='list', build_base='build', ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], topological_order=False, names_only=False, paths_only=False, topological_graph=False, topological_graph_dot=False, topological_graph_density=False, topological_graph_legend=False, topological_graph_dot_cluster=False, topological_graph_dot_include_skipped=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0x7db65b69dfd0>, verb_extension=<colcon_package_information.verb.list.ListVerb object at 0x7db65b83ecc0>, main=<bound method ListVerb.main of <colcon_package_information.verb.list.ListVerb object at 0x7db65b83ecc0>>, mixin_verb=('list',))
+[0.273s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.273s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.273s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.273s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.273s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.273s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/physrobotics4/rby1_merge_workspace/working/rby1_project'
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.273s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['cmake', 'python']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'cmake'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['python_setup_py']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python_setup_py'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extensions ['ignore', 'ignore_ament_install']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extension 'ignore'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(log) ignored
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['ignore', 'ignore_ament_install']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'ignore'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'ignore_ament_install'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['colcon_pkg']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'colcon_pkg'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['colcon_meta']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'colcon_meta'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['ros']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'ros'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['cmake', 'python']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'cmake'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'python'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extensions ['python_setup_py']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4) by extension 'python_setup_py'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['ignore', 'ignore_ament_install']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'ignore'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'ignore_ament_install'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['colcon_pkg']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'colcon_pkg'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['colcon_meta']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'colcon_meta'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['ros']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'ros'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['cmake', 'python']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'cmake'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'python'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extensions ['python_setup_py']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0) by extension 'python_setup_py'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['ignore', 'ignore_ament_install']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'ignore'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'ignore_ament_install'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['colcon_pkg']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'colcon_pkg'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['colcon_meta']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'colcon_meta'
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['ros']
+[0.285s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'ros'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['cmake', 'python']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'cmake'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'python'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extensions ['python_setup_py']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_gripper_task_commands_rou0) by extension 'python_setup_py'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['ignore', 'ignore_ament_install']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'ignore'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'ignore_ament_install'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['colcon_pkg']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'colcon_pkg'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['colcon_meta']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'colcon_meta'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['ros']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'ros'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['cmake', 'python']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'cmake'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'python'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extensions ['python_setup_py']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_task_extend_and_catalog_r0) by extension 'python_setup_py'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['ignore', 'ignore_ament_install']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'ignore'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'ignore_ament_install'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['colcon_pkg']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'colcon_pkg'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['colcon_meta']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'colcon_meta'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['ros']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'ros'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['cmake', 'python']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'cmake'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'python'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extensions ['python_setup_py']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(pytest-of-physrobotics4/pytest-0/test_whole_body_joint_command_0) by extension 'python_setup_py'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extensions ['ignore', 'ignore_ament_install']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extension 'ignore'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extension 'ignore_ament_install'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extensions ['colcon_pkg']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extension 'colcon_pkg'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extensions ['colcon_meta']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extension 'colcon_meta'
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extensions ['ros']
+[0.286s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_bringup) by extension 'ros'
+[0.287s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_bringup' with type 'ros.ament_cmake' and name 'rby1_bringup'
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extensions ['ignore', 'ignore_ament_install']
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extension 'ignore'
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extension 'ignore_ament_install'
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extensions ['colcon_pkg']
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extension 'colcon_pkg'
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extensions ['colcon_meta']
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extension 'colcon_meta'
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extensions ['ros']
+[0.287s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_camera) by extension 'ros'
+[0.288s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_camera' with type 'ros.ament_cmake' and name 'rby1_camera'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extensions ['ignore', 'ignore_ament_install']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extension 'ignore'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extension 'ignore_ament_install'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extensions ['colcon_pkg']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extension 'colcon_pkg'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extensions ['colcon_meta']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extension 'colcon_meta'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extensions ['ros']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_control) by extension 'ros'
+[0.288s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_control' with type 'ros.ament_python' and name 'rby1_control'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extensions ['ignore', 'ignore_ament_install']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extension 'ignore'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extension 'ignore_ament_install'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extensions ['colcon_pkg']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extension 'colcon_pkg'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extensions ['colcon_meta']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extension 'colcon_meta'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extensions ['ros']
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_interface) by extension 'ros'
+[0.288s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_interface' with type 'ros.ament_cmake' and name 'rby1_interface'
+[0.288s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extensions ['ignore', 'ignore_ament_install']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extension 'ignore'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extension 'ignore_ament_install'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extensions ['colcon_pkg']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extension 'colcon_pkg'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extensions ['colcon_meta']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extension 'colcon_meta'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extensions ['ros']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_navigation) by extension 'ros'
+[0.289s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_navigation' with type 'ros.ament_python' and name 'rby1_navigation'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extensions ['ignore', 'ignore_ament_install']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extension 'ignore'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extension 'ignore_ament_install'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extensions ['colcon_pkg']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extension 'colcon_pkg'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extensions ['colcon_meta']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extension 'colcon_meta'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extensions ['ros']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(rby1_planner) by extension 'ros'
+[0.289s] DEBUG:colcon.colcon_core.package_identification:Package 'rby1_planner' with type 'ros.ament_python' and name 'rby1_planner'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['ignore', 'ignore_ament_install']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'ignore'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'ignore_ament_install'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['colcon_pkg']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'colcon_pkg'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['colcon_meta']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'colcon_meta'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['ros']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'ros'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['cmake', 'python']
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'cmake'
+[0.289s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'python'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extensions ['python_setup_py']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware) by extension 'python_setup_py'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extensions ['ignore', 'ignore_ament_install']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extension 'ignore'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extension 'ignore_ament_install'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extensions ['colcon_pkg']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extension 'colcon_pkg'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extensions ['colcon_meta']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extension 'colcon_meta'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extensions ['ros']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/Lakibeam_ROS2_Driver) by extension 'ros'
+[0.290s] DEBUG:colcon.colcon_core.package_identification:Package 'robot_hardware/Lakibeam_ROS2_Driver' with type 'ros.ament_cmake' and name 'lakibeam1'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extensions ['ignore', 'ignore_ament_install']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extension 'ignore'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extension 'ignore_ament_install'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extensions ['colcon_pkg']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extension 'colcon_pkg'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extensions ['colcon_meta']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extension 'colcon_meta'
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extensions ['ros']
+[0.290s] Level 1:colcon.colcon_core.package_identification:_identify(robot_hardware/rby1_gripper_driver) by extension 'ros'
+[0.290s] DEBUG:colcon.colcon_core.package_identification:Package 'robot_hardware/rby1_gripper_driver' with type 'ros.ament_python' and name 'rby1_gripper_driver'
+[0.290s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults

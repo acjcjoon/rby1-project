@@ -1,0 +1,27 @@
+rby1_navigation_node:
+  ros__parameters:
+    use_sim_time: false
+
+    # Planner <-> navigation JSON protocol (std_msgs/msg/String).
+    command_topic: "/rby1/navigation/command"
+    state_topic: "/rby1/navigation/state"
+
+    # Robot I/O. Navigation emits raw velocity; rby1_control applies the final
+    # watchdog/safety policy and remains the only /rby1/cmd_vel publisher.
+    odom_topic: "/rby1/odom"
+    cmd_raw_topic: "/rby1/cmd_raw"
+
+    # Holonomic SE(2) P controller.
+    max_linear_velocity: 0.15
+    max_angular_velocity: 0.35
+    linear_kp: 1.0
+    angular_kp: 1.5
+    position_tolerance: 0.007
+    yaw_tolerance: 0.017453292519943295  # 1 degree, radians
+    control_rate_hz: 50.0
+
+    # Freshness, feedback and timeout guards.
+    state_publish_rate_hz: 5.0
+    odom_timeout_sec: 0.5
+    default_command_timeout_sec: 30.0
+    max_command_timeout_sec: 120.0
