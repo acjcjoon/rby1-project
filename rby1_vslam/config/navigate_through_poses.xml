@@ -1,0 +1,19 @@
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="2" name="NavigateWithReplanning">
+      <PipelineSequence name="PlanAndFollow">
+        <RateController hz="1.0">
+          <Sequence>
+            <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.3"/>
+            <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+          </Sequence>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="goal_checker"/>
+      </PipelineSequence>
+      <Sequence name="ClearObservedCostmaps">
+        <ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/>
+        <ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

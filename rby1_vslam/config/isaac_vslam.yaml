@@ -1,0 +1,38 @@
+/visual_slam:
+  ros__parameters:
+    num_cameras: 2
+    min_num_images: 2
+    tracking_mode: 1
+    rectified_images: true
+    enable_image_denoising: false
+    enable_localization_n_mapping: true
+    enable_ground_constraint_in_odometry: false
+    enable_ground_constraint_in_slam: false
+    base_frame: d435_link
+    imu_frame: d435_gyro_optical_frame
+    camera_optical_frames: [d435_infra1_optical_frame, d435_infra2_optical_frame]
+    map_frame: vslam_map
+    odom_frame: vslam_odom
+    publish_map_to_odom_tf: false
+    publish_odom_to_base_tf: false
+    override_publishing_stamp: false
+    image_qos: SENSOR_DATA
+    imu_qos: SENSOR_DATA
+    sync_matching_threshold_ms: 5.0
+    image_jitter_threshold_ms: 40.0
+    imu_jitter_threshold_ms: 10.0
+    image_buffer_size: 10
+    imu_buffer_size: 100
+    # NVIDIA's RealSense tutorial defaults, not measured D435i calibration.
+    gyro_noise_density: 0.000244
+    gyro_random_walk: 0.000019393
+    accel_noise_density: 0.001862
+    accel_random_walk: 0.003
+    calibration_frequency: 200.0
+    # slam_odometry is a visualization output and needs this enabled.
+    enable_slam_visualization: true
+    enable_landmarks_view: false
+    enable_observations_view: false
+    localize_on_startup: false
+    enable_request_hint: true
+    path_max_size: 1024

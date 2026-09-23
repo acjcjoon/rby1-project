@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    port: 7447
+    stereo_slop_ms: 5.0
+    socket_timeout_sec: 2.0
+    reconnect_delay_sec: 1.0
+    max_imu_queue: 512
+    enable_imu: true
+    forward_clock: false
+    camera_frame_prefix: d435_
+    camera_root_frame: d435_link

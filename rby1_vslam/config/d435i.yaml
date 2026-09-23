@@ -1,0 +1,25 @@
+/d435/d435:
+  ros__parameters:
+    camera_name: d435
+    device_type: d435i
+    enable_infra1: true
+    enable_infra2: true
+    depth_module.infra_profile: '640,480,30'
+    depth_module.infra1_format: Y8
+    depth_module.infra2_format: Y8
+    depth_module.emitter_enabled: 0
+    depth_module.enable_auto_exposure: true
+    enable_color: false
+    enable_depth: false
+    enable_sync: true
+    align_depth.enable: false
+    pointcloud.enable: false
+    enable_gyro: true
+    enable_accel: true
+    gyro_fps: 200
+    accel_fps: 250
+    unite_imu_method: 2
+    publish_tf: true
+    tf_publish_rate: 0.0
+    rgb_camera.color_profile: '640,480,30'
+    depth_module.depth_profile: '640,480,30'
