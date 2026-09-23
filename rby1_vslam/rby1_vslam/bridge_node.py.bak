@@ -101,8 +101,8 @@ def _validate_image(image, info):
         raise ProtocolError('image byte count disagrees with dimensions')
     if (info.width, info.height) != (image.width, image.height):
         raise ProtocolError('camera calibration dimensions disagree with image')
-    if not image.header.frame_id or not info.header.frame_id:
-        raise ProtocolError('camera image/calibration frame is empty')
+    if image.header.frame_id != info.header.frame_id or not image.header.frame_id:
+        raise ProtocolError('camera image/calibration frame mismatch')
     if _stamp_ns(image.header.stamp) != _stamp_ns(info.header.stamp):
         raise ProtocolError('camera info stamp must match image stamp')
     if not 0 <= image.header.stamp.nanosec < 1_000_000_000:
@@ -170,8 +170,8 @@ class BridgeNode(Node):
         self._lab_first_image_stamp = None
         self._forwarded_clock_ns = None
         self._static_candidates = {}
-        self._bridge_subscriptions = []
-        self._bridge_publishers = {}
+        self._subscriptions = []
+        self._publishers = {}
         self._synchronizer = StereoSynchronizer(
             int(self.cfg['stereo_slop_ms'] * 1_000_000), self.cfg['stereo_queue_size'])
         if self.cfg['tracking_timeout_sec'] <= 0:
@@ -200,35 +200,35 @@ class BridgeNode(Node):
                 ('left_info', CameraInfo, 'left_info_topic'),
                 ('right_info', CameraInfo, 'right_info_topic'),
             ):
-                self._bridge_subscriptions.append(self.create_subscription(
+                self._subscriptions.append(self.create_subscription(
                     msg_type, self.cfg[param],
                     lambda msg, name=name: self._on_camera(name, msg), sensor_qos))
             if self.cfg['enable_imu']:
-                self._bridge_subscriptions.append(self.create_subscription(
+                self._subscriptions.append(self.create_subscription(
                     Imu, self.cfg['imu_topic'], self._on_imu,
                     QoSProfile(depth=200, reliability=ReliabilityPolicy.BEST_EFFORT)))
-            self._bridge_subscriptions.append(self.create_subscription(
+            self._subscriptions.append(self.create_subscription(
                 TFMessage, '/tf_static', self._on_static_tf, static_qos))
             if self.cfg['forward_clock']:
-                self._bridge_subscriptions.append(self.create_subscription(
+                self._subscriptions.append(self.create_subscription(
                     ClockMessage, '/clock', lambda msg: self.link.send(Packet('clock', _to_dict(msg))),
                     sensor_qos))
             for kind, param in (('tracking_odom', 'upc_tracking_odom_topic'),
                                 ('slam_odom', 'upc_slam_odom_topic')):
-                self._bridge_publishers[kind] = self.create_publisher(Odometry, self.cfg[param], 5)
+                self._publishers[kind] = self.create_publisher(Odometry, self.cfg[param], 5)
         else:
             for name, msg_type, param in (
                 ('left', Image, 'left_image_topic'), ('right', Image, 'right_image_topic'),
                 ('left_info', CameraInfo, 'left_info_topic'),
                 ('right_info', CameraInfo, 'right_info_topic'), ('imu', Imu, 'imu_topic'),
             ):
-                self._bridge_publishers[name] = self.create_publisher(msg_type, self.cfg[param], 5)
-            self._bridge_publishers['static_tf'] = self.create_publisher(TFMessage, '/tf_static', static_qos)
+                self._publishers[name] = self.create_publisher(msg_type, self.cfg[param], 5)
+            self._publishers['static_tf'] = self.create_publisher(TFMessage, '/tf_static', static_qos)
             if self.cfg['forward_clock']:
-                self._bridge_publishers['clock'] = self.create_publisher(ClockMessage, '/clock', 5)
+                self._publishers['clock'] = self.create_publisher(ClockMessage, '/clock', 5)
             for kind, param in (('tracking_odom', 'tracking_odom_topic'),
                                 ('slam_odom', 'slam_odom_topic')):
-                self._bridge_subscriptions.append(self.create_subscription(
+                self._subscriptions.append(self.create_subscription(
                     Odometry, self.cfg[param],
                     lambda msg, kind=kind: self._on_odometry(kind, msg), sensor_qos))
             # UPC installs no Isaac ROS packages. This import only occurs on LAB.
@@ -237,9 +237,9 @@ class BridgeNode(Node):
                 from diagnostic_msgs.msg import DiagnosticArray
             except ImportError as exc:
                 raise RuntimeError('LAB requires isaac_ros_visual_slam_interfaces (Isaac ROS 4.5)') from exc
-            self._bridge_subscriptions.append(self.create_subscription(
+            self._subscriptions.append(self.create_subscription(
                 VisualSlamStatus, self.cfg['tracking_status_topic'], self._on_tracking_status, sensor_qos))
-            self._bridge_subscriptions.append(self.create_subscription(
+            self._subscriptions.append(self.create_subscription(
                 DiagnosticArray, self.cfg['diagnostics_topic'], self._on_diagnostics, 10))
         # Never wait on ROS time to process the first forwarded /clock packet.
         self._timer = self.create_timer(
@@ -366,7 +366,7 @@ class BridgeNode(Node):
             # Publish calibration first. Neither camera's timestamp is modified.
             for name, message in zip(('left_info', 'right_info', 'left', 'right'),
                                      (messages[2], messages[3], messages[0], messages[1])):
-                self._bridge_publishers[name].publish(message)
+                self._publishers[name].publish(message)
         elif packet.kind == 'static_tf':
             if set(packet.payload) != {'transforms'} or not isinstance(packet.payload['transforms'], list):
                 raise ProtocolError('invalid static TF fields')
@@ -378,7 +378,7 @@ class BridgeNode(Node):
             transforms = self._camera_transforms(message.transforms)
             if len(transforms) != len(message.transforms):
                 raise ProtocolError('TF outside camera subtree')
-            self._bridge_publishers['static_tf'].publish(message)
+            self._publishers['static_tf'].publish(message)
         elif packet.kind == 'tracking_status':
             fields = {'vo_state', 'localized', 'require_localized', 'localization_age_sec'}
             if set(packet.payload) not in (fields, fields | {'stamp'}):
@@ -413,7 +413,7 @@ class BridgeNode(Node):
                 if not 0 <= message.clock.nanosec < 1_000_000_000:
                     raise ProtocolError('invalid forwarded clock timestamp')
                 self._forwarded_clock_ns = _stamp_ns(message.clock)
-            self._bridge_publishers[packet.kind].publish(message)
+            self._publishers[packet.kind].publish(message)
 
     def _tick(self):
         state = self.link.state()
