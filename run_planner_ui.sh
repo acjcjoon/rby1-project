@@ -31,6 +31,8 @@ GRIPPER_AUTO_HOME="${RBY1_GRIPPER_AUTO_HOME:-true}"
 BUILD_MODE="${RBY1_BUILD_WORKSPACE:-auto}"
 CHECK_ROBOT_CONNECTION="${RBY1_CHECK_ROBOT_CONNECTION:-true}"
 STARTUP_TIMEOUT_SEC="${RBY1_STARTUP_TIMEOUT_SEC:-45}"
+D405_SERIAL="${RBY1_D405_SERIAL:-}"
+D435_SERIAL="${RBY1_D435_SERIAL:-}"
 
 usage() {
   printf '%s\n' \
@@ -57,6 +59,8 @@ usage() {
     "  --no-build                   Never build; require an existing installation" \
     "  --skip-robot-check           Do not test the robot RPC port before launch" \
     "  --startup-timeout SEC        Per-topic startup timeout (default: 45)" \
+    "  --d405-serial SERIAL         Pin the D405; default: select by model" \
+    "  --d435-serial SERIAL         Pin the D435; default: select by model" \
     "  -h, --help                   Show this help"
 }
 
@@ -158,6 +162,16 @@ while (($# > 0)); do
       STARTUP_TIMEOUT_SEC="$2"
       shift 2
       ;;
+    --d405-serial)
+      require_value "$1" "$#"
+      D405_SERIAL="$2"
+      shift 2
+      ;;
+    --d435-serial)
+      require_value "$1" "$#"
+      D435_SERIAL="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -171,7 +185,15 @@ while (($# > 0)); do
 done
 
 NAMESPACE="${NAMESPACE#/}"
+D405_SERIAL="${D405_SERIAL#_}"
+D435_SERIAL="${D435_SERIAL#_}"
 [[ -n "${NAMESPACE}" ]] || die 'Namespace must not be empty.'
+[[ -z "${D405_SERIAL}" || "${D405_SERIAL}" =~ ^[0-9]+$ ]] || \
+  die 'D405 serial must contain digits only.'
+[[ -z "${D435_SERIAL}" || "${D435_SERIAL}" =~ ^[0-9]+$ ]] || \
+  die 'D435 serial must contain digits only.'
+[[ -z "${D405_SERIAL}" || -z "${D435_SERIAL}" || "${D405_SERIAL}" != "${D435_SERIAL}" ]] || \
+  die 'D405 and D435 serial numbers must be different.'
 [[ "${ROBOT_MODEL}" == "a" || "${ROBOT_MODEL}" == "m" ]] || \
   die 'Robot model must be a or m.'
 [[ "${GRIPPER_TRANSPORT}" == "real" || "${GRIPPER_TRANSPORT}" == "sim" ]] || \
@@ -418,7 +440,9 @@ printf '%s\n' \
   "[launcher] namespace=/${NAMESPACE}" \
   "[launcher] robot=${ROBOT_MODEL} v${ROBOT_VERSION}" \
   "[launcher] robot_ip=${ROBOT_IP}" \
-  "[launcher] gripper=${GRIPPER_TRANSPORT}, auto_home=${GRIPPER_AUTO_HOME}"
+  "[launcher] gripper=${GRIPPER_TRANSPORT}, auto_home=${GRIPPER_AUTO_HOME}" \
+  "[launcher] d405=${D405_SERIAL:-auto-by-model}" \
+  "[launcher] d435=${D435_SERIAL:-auto-by-model}"
 
 if [[ "${GRIPPER_TRANSPORT}" == "real" && "${GRIPPER_AUTO_HOME}" == "true" ]]; then
   printf '%s\n' \
@@ -449,12 +473,36 @@ start_process gripper_driver \
   "auto_home:=${GRIPPER_AUTO_HOME}"
 wait_for_topic "/${NAMESPACE}/gripper/ready" gripper_driver
 
-start_process realsense \
-  ros2 launch realsense2_camera rs_launch.py \
-  enable_color:=true \
-  enable_depth:=true \
-  align_depth.enable:=true
-wait_for_topic '/camera/camera/color/image_raw' realsense
+D405_REALSENSE_ARGS=(
+  ros2 launch realsense2_camera rs_launch.py
+  camera_namespace:=d405
+  camera_name:=d405
+  device_type:=d405
+  enable_color:=true
+  enable_depth:=false
+  align_depth.enable:=false
+)
+if [[ -n "${D405_SERIAL}" ]]; then
+  D405_REALSENSE_ARGS+=("serial_no:=_${D405_SERIAL}")
+fi
+start_process realsense_d405 "${D405_REALSENSE_ARGS[@]}"
+wait_for_topic '/d405/d405/color/image_raw' realsense_d405
+
+D435_REALSENSE_ARGS=(
+  ros2 launch realsense2_camera rs_launch.py
+  camera_namespace:=d435
+  camera_name:=d435
+  device_type:=d435
+  enable_color:=true
+  rgb_camera.color_profile:=1920,1080,8
+  enable_depth:=false
+  align_depth.enable:=false
+)
+if [[ -n "${D435_SERIAL}" ]]; then
+  D435_REALSENSE_ARGS+=("serial_no:=_${D435_SERIAL}")
+fi
+start_process realsense_d435 "${D435_REALSENSE_ARGS[@]}"
+wait_for_topic '/d435/d435/color/image_raw' realsense_d435
 
 start_process apriltag_vision \
   ros2 launch rby1_camera apriltag_vision.launch.py

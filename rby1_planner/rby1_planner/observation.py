@@ -233,6 +233,26 @@ def quaternion_to_rpy_deg(
     )
 
 
+def rpy_deg_to_quaternion(
+    values: Iterable[object],
+) -> Quaternion:
+    """Convert fixed-axis roll/pitch/yaw degrees to ROS x/y/z/w."""
+
+    roll_deg, pitch_deg, yaw_deg = _finite_tuple(values, 3, 'rpy_deg')
+    roll = math.radians(roll_deg)
+    pitch = math.radians(pitch_deg)
+    yaw = math.radians(yaw_deg)
+    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+    return normalize_quaternion((
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    ))
+
+
 def rotate_vector(vector: Vector3, quaternion: Quaternion) -> Vector3:
     """Rotate a vector with a normalized x/y/z/w quaternion."""
 
@@ -277,6 +297,22 @@ def compose_pose_right(
         ),
         quaternion_multiply(parent_orientation, local_orientation),
     )
+
+
+def invert_pose(
+    position: Iterable[object],
+    orientation_xyzw: Iterable[object],
+) -> PoseTuple:
+    """Invert one rigid transform represented as position and quaternion."""
+
+    px, py, pz = _finite_tuple(position, 3, 'position')
+    qx, qy, qz, qw = normalize_quaternion(orientation_xyzw)
+    inverse_orientation = (-qx, -qy, -qz, qw)
+    inverse_position = rotate_vector(
+        (-px, -py, -pz),
+        inverse_orientation,
+    )
+    return inverse_position, inverse_orientation
 
 
 def compose_pose_yaw_only(
@@ -386,10 +422,12 @@ __all__ = [
     'average_observations',
     'compose_pose_right',
     'compose_pose_yaw_only',
+    'invert_pose',
     'normalize_quaternion',
     'observation_to_cartesian_target',
     'quaternion_multiply',
     'quaternion_to_rpy_deg',
     'rotate_vector',
+    'rpy_deg_to_quaternion',
     'transform_observation',
 ]

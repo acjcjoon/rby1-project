@@ -8,14 +8,25 @@ from typing import Callable, Optional
 
 from .backend_contract import TaskBackendState, TaskCommandStatus
 
-from .observation import ObjectObservation, average_observations
+from .observation import (
+    ObjectObservation,
+    average_observations,
+    compose_pose_right,
+    compose_pose_yaw_only,
+    invert_pose,
+    observation_to_cartesian_target,
+    rotate_vector,
+    rpy_deg_to_quaternion,
+)
 from .navigation_protocol import (
     NavigationCommandState,
     NavigationCommandStatus,
 )
 from .task_commands import (
+    CameraFrameLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
     CameraLinearAbsoluteStep,
+    CameraMoveToTagStep,
     CommandKind,
     DynamicTaskDefinition,
     MoveToStep,
@@ -44,6 +55,7 @@ class PlannerTaskRunner:
         backend,
         *,
         camera=None,
+        cameras=None,
         navigation=None,
         on_status: Optional[Callable[[str], None]] = None,
         on_active_changed: Optional[Callable[[bool], None]] = None,
@@ -78,7 +90,10 @@ class PlannerTaskRunner:
                 'smaller than camera_average_sample_count'
             )
         self.backend = backend
-        self.camera = camera
+        self.cameras = dict(cameras or {})
+        if camera is not None:
+            self.cameras.setdefault('d405', camera)
+        self.camera = self.cameras.get('d405', camera)
         self.navigation = navigation
         self.camera_average_enabled = camera_average_enabled
         self.camera_average_sample_count = int(camera_average_sample_count)
@@ -107,9 +122,11 @@ class PlannerTaskRunner:
         self._camera_idle_deadline: Optional[float] = None
         self._camera_observations: list[ObjectObservation] = []
         self._last_camera_observation = None
+        self._last_camera_source: Optional[str] = None
         self._last_camera_object_id: Optional[str] = None
         self._last_camera_selected_yaw: Optional[float] = None
         self._last_camera_yaw_symmetry_deg: Optional[float] = None
+        self._pending_camera_navigation_goal = None
         self._run_number = 0
 
     @property
@@ -147,9 +164,11 @@ class PlannerTaskRunner:
         self._camera_idle_deadline = None
         self._camera_observations = []
         self._last_camera_observation = None
+        self._last_camera_source = None
         self._last_camera_object_id = None
         self._last_camera_selected_yaw = None
         self._last_camera_yaw_symmetry_deg = None
+        self._pending_camera_navigation_goal = None
         self._run_number = 1
         self.on_active_changed(True)
         self.on_status(f'Task started: {task.name}')
@@ -247,6 +266,10 @@ class PlannerTaskRunner:
                 self._rewind(command)
                 return
 
+            if isinstance(command, CameraMoveToTagStep):
+                self._tick_camera_move_to_tag(command, state, now)
+                return
+
             # The stock driver reports a streamed Cartesian command as kOk
             # after minimum_time without verifying target convergence. Task
             # motions therefore always use the driver's blocking command path.
@@ -335,6 +358,7 @@ class PlannerTaskRunner:
         if command.reuse_previous_observation:
             if (
                 self._last_camera_observation is None
+                or self._last_camera_source != command.camera_source
                 or self._last_camera_object_id != command.object_id
                 or self._task is None
                 or self._index == 0
@@ -349,109 +373,24 @@ class PlannerTaskRunner:
                 )
             observation = self._last_camera_observation
         else:
-            camera = self.camera
-            if camera is None:
-                raise RuntimeError(
-                    f'{step_name} requires a camera client'
-                )
-
-            if self._camera_marker_ns is None:
-                capture_marker = getattr(camera, 'capture_marker', None)
-                if not callable(capture_marker):
-                    raise RuntimeError(
-                        'camera must provide capture_marker()'
-                    )
-                marker = capture_marker()
-                if isinstance(marker, bool):
-                    raise RuntimeError(
-                        'camera capture marker must be a nonnegative integer'
-                    )
-                try:
-                    marker_ns = int(marker)
-                except (TypeError, ValueError) as exc:
-                    raise RuntimeError(
-                        'camera capture marker must be a nonnegative integer'
-                    ) from exc
-                if marker_ns < 0:
-                    raise RuntimeError(
-                        'camera capture marker must be a nonnegative integer'
-                    )
-                self._camera_marker_ns = marker_ns
-                self._camera_deadline = now + command.detection_timeout_sec
-                self._camera_observations = []
-                sample_count = self._camera_sample_count()
-                outlier_count = self._camera_outlier_count()
-                self.on_status(
-                    f'Task step {self._index + 1}/{len(self._task.commands)}: '
-                    f'{step_name} waiting for new '
-                    f'{command.object_id!r} detections '
-                    f'(samples={sample_count}, outliers={outlier_count})'
-                )
-                return
-
-            getter = getattr(camera, 'get_observation', None)
-            if not callable(getter):
-                raise RuntimeError(
-                    'camera must provide get_observation(object_id, ...)'
-                )
-
-            newer_than_ns = (
-                self._camera_observations[-1].stamp_ns
-                if self._camera_observations
-                else self._camera_marker_ns
+            camera = self._camera_for(command.camera_source)
+            observation = self._collect_camera_observation(
+                command,
+                camera,
+                step_name,
+                now,
             )
-            query: dict[str, object] = {
-                'target_frame': 'base',
-                'newer_than_ns': newer_than_ns,
-            }
-            if command.max_age_sec is not None:
-                query['max_age_sec'] = command.max_age_sec
-            if command.minimum_confidence is not None:
-                query['minimum_confidence'] = command.minimum_confidence
-            observation = getter(command.object_id, **query)
-
             if observation is None:
-                if now >= float(self._camera_deadline):
-                    detail = self._camera_unavailable_reason(command.object_id)
-                    suffix = f': {detail}' if detail else ''
-                    raise RuntimeError(
-                        f'camera detection timed out for {command.object_id!r} '
-                        f'after {command.detection_timeout_sec:.3f}s{suffix}'
-                    )
                 return
 
-            if not isinstance(observation, ObjectObservation):
-                raise TypeError('camera must return an ObjectObservation')
-            if observation.stamp_ns <= int(newer_than_ns):
-                if now >= float(self._camera_deadline):
-                    raise RuntimeError(
-                        f'camera detection timed out for '
-                        f'{command.object_id!r} after '
-                        f'{command.detection_timeout_sec:.3f}s: '
-                        'camera returned no distinct new frame'
-                    )
-                return
-            self._camera_observations.append(observation)
-            sample_count = self._camera_sample_count()
-            if len(self._camera_observations) < sample_count:
-                return
-
-            observation = average_observations(
-                self._camera_observations,
-                outlier_count=self._camera_outlier_count(),
+        if isinstance(command, CameraFrameLinearAbsoluteStep):
+            resolved = self._resolve_camera_frame_command(
+                command,
+                observation,
+                state,
             )
-            if self.camera_average_enabled:
-                self.on_status(
-                    f'Camera average {command.object_id!r}: '
-                    f'collected={sample_count}, '
-                    f'kept={sample_count - self._camera_outlier_count()}, '
-                    f'discarded={self._camera_outlier_count()}'
-                )
-
-            self._last_camera_observation = observation
-            self._last_camera_object_id = command.object_id
-
-        resolved = command.resolve_observation(observation)
+        else:
+            resolved = command.resolve_observation(observation)
         resolved = self._apply_camera_yaw_symmetry(command, resolved, state)
         self._camera_marker_ns = None
         self._camera_deadline = None
@@ -471,8 +410,278 @@ class PlannerTaskRunner:
         )
         self.on_status(
             f'Task step {self._index + 1}/{len(self._task.commands)}: '
-            f'camera_linear_absolute resolved {command.object_id!r}'
+            f'camera_linear_absolute [{command.camera_source}] resolved '
+            f'{command.object_id!r}'
         )
+
+    def _tick_camera_move_to_tag(
+        self,
+        command: CameraMoveToTagStep,
+        state: TaskBackendState,
+        now: float,
+    ) -> None:
+        if self.navigation is None:
+            raise RuntimeError('navigation client is unavailable')
+
+        if self._pending_camera_navigation_goal is None:
+            if state.stream_enabled is not False:
+                self._request_stream_transition(False, now)
+                return
+            camera = self._camera_for(command.camera_source)
+            observation = self._collect_camera_observation(
+                command,
+                camera,
+                'camera_move_to_tag',
+                now,
+            )
+            if observation is None:
+                return
+
+            yaw = command.relative_yaw
+            cosine = math.cos(yaw)
+            sine = math.sin(yaw)
+            desired_x = command.desired_tag_x
+            desired_y = command.desired_tag_y
+            rotated_desired_x = cosine * desired_x - sine * desired_y
+            rotated_desired_y = sine * desired_x + cosine * desired_y
+            move_x = observation.position[0] - rotated_desired_x
+            move_y = observation.position[1] - rotated_desired_y
+            translation = math.hypot(move_x, move_y)
+            if translation > command.max_translation_m:
+                raise RuntimeError(
+                    'camera-derived base translation exceeds safety limit: '
+                    f'{translation:.3f} m > {command.max_translation_m:.3f} m'
+                )
+            self._pending_camera_navigation_goal = (
+                move_x,
+                move_y,
+                yaw,
+                command.navigation_timeout_sec,
+            )
+            self._camera_marker_ns = None
+            self._camera_deadline = None
+            self._camera_observations = []
+            self.on_status(
+                f'Camera base goal [{command.camera_source}] '
+                f'{command.object_id!r}: tag=('
+                f'{observation.position[0]:.3f}, '
+                f'{observation.position[1]:.3f}) m, move=('
+                f'{move_x:.3f}, {move_y:.3f}, {yaw:.3f})'
+            )
+
+        if state.stream_enabled is not True:
+            self._request_stream_transition(True, now)
+            return
+
+        move_x, move_y, yaw, timeout_sec = (
+            self._pending_camera_navigation_goal
+        )
+        self._navigation_command_id = self.navigation.send_move_to(
+            move_x,
+            move_y,
+            yaw,
+            timeout_sec,
+        )
+        self._navigation_deadline = (
+            now + timeout_sec + self.NAVIGATION_FINALIZATION_MARGIN_SEC
+        )
+        self._navigation_last_report = None
+        self._pending_camera_navigation_goal = None
+        self.on_status(
+            f'Task step {self._index + 1}/{len(self._task.commands)}: '
+            f'camera_move_to_tag x={move_x:.3f} m, y={move_y:.3f} m, '
+            f'yaw={yaw:.3f} rad'
+        )
+
+    def _collect_camera_observation(
+        self,
+        command,
+        camera,
+        step_name: str,
+        now: float,
+    ) -> Optional[ObjectObservation]:
+        if self._camera_marker_ns is None:
+            capture_marker = getattr(camera, 'capture_marker', None)
+            if not callable(capture_marker):
+                raise RuntimeError('camera must provide capture_marker()')
+            marker = capture_marker()
+            if isinstance(marker, bool):
+                raise RuntimeError(
+                    'camera capture marker must be a nonnegative integer'
+                )
+            try:
+                marker_ns = int(marker)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    'camera capture marker must be a nonnegative integer'
+                ) from exc
+            if marker_ns < 0:
+                raise RuntimeError(
+                    'camera capture marker must be a nonnegative integer'
+                )
+            self._camera_marker_ns = marker_ns
+            self._camera_deadline = now + command.detection_timeout_sec
+            self._camera_observations = []
+            sample_count = self._camera_sample_count()
+            outlier_count = self._camera_outlier_count()
+            self.on_status(
+                f'Task step {self._index + 1}/{len(self._task.commands)}: '
+                f'{step_name} [{command.camera_source}] waiting for new '
+                f'{command.object_id!r} detections '
+                f'(samples={sample_count}, outliers={outlier_count})'
+            )
+            return None
+
+        getter = getattr(camera, 'get_observation', None)
+        if not callable(getter):
+            raise RuntimeError(
+                'camera must provide get_observation(object_id, ...)'
+            )
+        newer_than_ns = (
+            self._camera_observations[-1].stamp_ns
+            if self._camera_observations
+            else self._camera_marker_ns
+        )
+        query: dict[str, object] = {
+            'target_frame': 'base',
+            'newer_than_ns': newer_than_ns,
+        }
+        if command.max_age_sec is not None:
+            query['max_age_sec'] = command.max_age_sec
+        if command.minimum_confidence is not None:
+            query['minimum_confidence'] = command.minimum_confidence
+        observation = getter(command.object_id, **query)
+
+        if observation is None:
+            if now >= float(self._camera_deadline):
+                detail = self._camera_unavailable_reason(
+                    camera,
+                    command.object_id,
+                )
+                suffix = f': {detail}' if detail else ''
+                raise RuntimeError(
+                    f'camera [{command.camera_source}] detection timed out '
+                    f'for {command.object_id!r} after '
+                    f'{command.detection_timeout_sec:.3f}s{suffix}'
+                )
+            return None
+        if not isinstance(observation, ObjectObservation):
+            raise TypeError('camera must return an ObjectObservation')
+        if observation.stamp_ns <= int(newer_than_ns):
+            if now >= float(self._camera_deadline):
+                raise RuntimeError(
+                    f'camera [{command.camera_source}] detection timed out '
+                    f'for {command.object_id!r} after '
+                    f'{command.detection_timeout_sec:.3f}s: '
+                    'camera returned no distinct new frame'
+                )
+            return None
+        self._camera_observations.append(observation)
+        sample_count = self._camera_sample_count()
+        if len(self._camera_observations) < sample_count:
+            return None
+
+        result = average_observations(
+            self._camera_observations,
+            outlier_count=self._camera_outlier_count(),
+        )
+        if self.camera_average_enabled:
+            self.on_status(
+                f'Camera average [{command.camera_source}] '
+                f'{command.object_id!r}: collected={sample_count}, '
+                f'kept={sample_count - self._camera_outlier_count()}, '
+                f'discarded={self._camera_outlier_count()}'
+            )
+        self._last_camera_observation = result
+        self._last_camera_source = command.camera_source
+        self._last_camera_object_id = command.object_id
+        return result
+
+    def _resolve_camera_frame_command(
+        self,
+        command: CameraFrameLinearAbsoluteStep,
+        observation: ObjectObservation,
+        state: TaskBackendState,
+    ) -> TaskCommand:
+        compose = (
+            compose_pose_yaw_only
+            if command.yaw_only
+            else compose_pose_right
+        )
+        controlled_position, controlled_orientation = compose(
+            observation.position,
+            observation.orientation_xyzw,
+            command.object_to_controlled_frame_position,
+            command.object_to_controlled_frame_orientation_xyzw,
+        )
+        ee_frame = {
+            'left_arm': 'ee_left',
+            'right_arm': 'ee_right',
+        }.get(command.group)
+        if ee_frame is None:
+            raise RuntimeError(
+                f'camera-frame control does not support {command.group!r}'
+            )
+        camera = self._camera_for(command.camera_source)
+        lookup = getattr(camera, 'lookup_frame_pose', None)
+        if not callable(lookup):
+            raise RuntimeError('camera must provide lookup_frame_pose()')
+        ee_to_controlled_position, ee_to_controlled_orientation = lookup(
+            ee_frame,
+            command.controlled_frame,
+        )
+
+        if command.preserve_end_effector_orientation:
+            current = self._fresh_values(
+                state.cartesian.get(command.group),
+                state.cartesian_updated_at.get(command.group),
+                state.captured_at,
+                6,
+            )
+            if current is None:
+                raise RuntimeError(
+                    'fresh Cartesian state is required to preserve EE '
+                    'orientation'
+                )
+            ee_orientation = rpy_deg_to_quaternion(current[3:6])
+            mount_offset = rotate_vector(
+                ee_to_controlled_position,
+                ee_orientation,
+            )
+            ee_position = tuple(
+                target - offset
+                for target, offset in zip(
+                    controlled_position,
+                    mount_offset,
+                )
+            )
+        else:
+            controlled_to_ee = invert_pose(
+                ee_to_controlled_position,
+                ee_to_controlled_orientation,
+            )
+            ee_position, ee_orientation = compose_pose_right(
+                controlled_position,
+                controlled_orientation,
+                *controlled_to_ee,
+            )
+
+        target = observation_to_cartesian_target(
+            replace(
+                observation,
+                position=ee_position,
+                orientation_xyzw=ee_orientation,
+            ),
+            target_frame='base',
+        )
+        return command.resolve(target)
+
+    def _camera_for(self, source: str):
+        key = str(source).strip()
+        camera = self.cameras.get(key)
+        if camera is None:
+            raise RuntimeError(f'camera source {key!r} is unavailable')
+        return camera
 
     def _camera_sample_count(self) -> int:
         return (
@@ -615,7 +824,7 @@ class PlannerTaskRunner:
             and self._index < len(self._task.commands)
             and isinstance(
                 self._task.commands[self._index],
-                CameraLinearAbsoluteStep,
+                (CameraLinearAbsoluteStep, CameraMoveToTagStep),
             )
         )
 
@@ -701,8 +910,9 @@ class PlannerTaskRunner:
             )
         return False
 
-    def _camera_unavailable_reason(self, object_id: str) -> str:
-        getter = getattr(self.camera, 'unavailable_reason', None)
+    @staticmethod
+    def _camera_unavailable_reason(camera, object_id: str) -> str:
+        getter = getattr(camera, 'unavailable_reason', None)
         if not callable(getter):
             return ''
         try:
@@ -744,9 +954,11 @@ class PlannerTaskRunner:
         self._camera_idle_after_state_at = None
         self._camera_idle_deadline = None
         self._last_camera_observation = None
+        self._last_camera_source = None
         self._last_camera_object_id = None
         self._last_camera_selected_yaw = None
         self._last_camera_yaw_symmetry_deg = None
+        self._pending_camera_navigation_goal = None
         total = 'infinite' if repeat_count is None else str(repeat_count)
         self.on_status(
             f'Task rewind: {self._task.name} '
@@ -759,6 +971,7 @@ class PlannerTaskRunner:
         self._camera_observations = []
         self._camera_idle_after_state_at = None
         self._camera_idle_deadline = None
+        self._pending_camera_navigation_goal = None
         self._index += 1
         if self._task is not None:
             self.on_status(
@@ -809,9 +1022,11 @@ class PlannerTaskRunner:
         self._camera_idle_after_state_at = None
         self._camera_idle_deadline = None
         self._last_camera_observation = None
+        self._last_camera_source = None
         self._last_camera_object_id = None
         self._last_camera_selected_yaw = None
         self._last_camera_yaw_symmetry_deg = None
+        self._pending_camera_navigation_goal = None
         self._run_number = 0
         if was_active:
             self.on_active_changed(False)

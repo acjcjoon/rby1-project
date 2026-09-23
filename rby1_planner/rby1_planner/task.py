@@ -389,6 +389,61 @@ def object_handover_demo6() -> RunnableTaskDefinition:
 
     return task.build()
 
+
+# D435로 태그를 거칠게 정렬한 뒤 D405 카메라 중심을 태그 위로 이동
+def object_handover_demo7() -> RunnableTaskDefinition:
+    task = Task('object_handover_demo7')
+
+    target_tag = 'tag_4'
+    desired_tag_x = 0.45
+    desired_tag_y = 0.25
+    d405_hover_height = 0.18
+
+    ready_left_tcp = [
+        0.374034,
+        0.243053,
+        0.921057,
+        0.008670,
+        0.007028,
+        -89.997544,
+    ]
+    tcp_motion = [3.0, 0.20, 0.20, 0.30]
+
+    # 팔과 몸통을 정면 안전 자세로 회수한 뒤 D435로 새 관측을 받는다.
+    task.extend(object_gripping_initial_pose())
+    task.move_base_to_detected_tag(
+        camera_source='d435',
+        object_id=target_tag,
+        desired_tag_x=desired_tag_x,
+        desired_tag_y=desired_tag_y,
+        relative_yaw=0.0,
+        detection_timeout_sec=5.0,
+        navigation_timeout_sec=30.0,
+        max_translation_m=0.8,
+    )
+    task.delay(1000)
+
+    # base 이동 뒤 D405 관측 자세로 이동하고 반드시 새 D405 관측을 쓴다.
+    task.linear_absolute('left_arm', ready_left_tcp, tcp_motion)
+    task.camera_frame_linear_absolute(
+        'left_arm',
+        target_tag,
+        tcp_motion,
+        camera_source='d405',
+        controlled_frame='d405_camera_center',
+        detection_timeout_sec=5.0,
+        yaw_only=True,
+        preserve_end_effector_orientation=True,
+        log_target_and_actual=True,
+        object_to_controlled_frame_position=(
+            0.0,
+            0.0,
+            d405_hover_height,
+        ),
+    )
+
+    return task.build()
+
 # 시작 자세 기준 오른쪽으로 10 cm 이동
 def move_right_10cm() -> RunnableTaskDefinition:
     task = Task('move_right_10cm')
@@ -459,6 +514,7 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         'object_handover_demo4': object_handover_demo4(),
         'object_handover_demo5': object_handover_demo5(),
         'object_handover_demo6': object_handover_demo6(),
+        'object_handover_demo7': object_handover_demo7(),
         'object_gripping_initial_pose': object_gripping_initial_pose().build(),
         'ready_pose': ready_pose().build(),
         'object_gripping_initial_pose_and_move': object_gripping_initial_pose_and_move(),
@@ -474,6 +530,7 @@ __all__ = [
     'object_gripping_initial_pose', 'object_gripping_initial_pose_and_print_tcp',
     'object_handover_demo2', 'object_handover_demo', 'object_handover_demo3',
     'object_handover_demo4', 'object_handover_demo5', 'object_handover_demo6',
+    'object_handover_demo7',
     'torso_rotation_left', 'torso_rotation_right', 'ready_pose',
     'object_gripping_initial_pose_and_move',
     'move_right_10cm',

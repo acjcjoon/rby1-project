@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 """
-AprilTag과 aligned depth로 태그 포즈를 발행한다.
+AprilTag 포즈를 PnP와 aligned depth의 독립 경로로 발행한다.
 
-apriltag_ros의 /detections(태그 ID + 코너 픽셀)와 RealSense의 aligned depth를 결합해
-태그 포즈를 두 가지 방식으로 만들고 TF/PoseArray로 퍼블리시하는 노드.
+  1) depth 기반: detections + aligned depth로 평면 추정 -> tag_depth_<id>
+  2) PnP 기반: detections + CameraInfo(K, D)로 계산    -> tag_pnp_<id>
 
-  1) depth 기반: 코너 depth로 평면을 추정해 직접 계산  -> tag_depth_<id>
-  2) PnP 기반:  apriltag_ros TF를 재가공하거나, 왜곡 보정 시
-                검출 코너와 CameraInfo(K, D)로 직접 계산 -> tag_pnp_<id>
-
-두 방식 모두 공통 설정(config/vision.yaml)의 trigger_mode / samples_per_trigger /
-축 반전(apply_flip, pnp_apply_flip)을 따른다.
-
-- 카메라 장치를 직접 열지 않는다. realsense2_camera 드라이버 노드가 송출하는 토픽만 구독한다.
-- realsense2_camera는 align_depth.enable:=true 로 실행되어야 한다.
-  (aligned_depth_to_color 이미지는 color와 같은 픽셀 좌표계이므로 color intrinsics로 deproject 가능)
+PnP 경로는 depth 토픽 없이 동작한다. depth_pose_enable이 true일 때만
+aligned depth를 구독하며, 이때 RealSense의 align_depth.enable도 켜야 한다.
+두 방식 모두 config/camera_system.yaml의 trigger/좌표축 설정을 따른다.
 """
 
 import math
@@ -289,27 +282,31 @@ class DepthTagTFNode(Node):
     def __init__(self):
         super().__init__('depth_tag_tf_node')
 
-        # ---- 파라미터 (config/vision.yaml에서 조절) ----
-        self.declare_parameter('output_frame', '')
-        self.declare_parameter('tf_prefix', 'tag_depth_')
+        # ---- 파라미터 (config/camera_system.yaml에서 조절) ----
+        self.declare_parameter('tag_output_parent_frame', '')
+        self.declare_parameter('depth_tag_child_frame_prefix', 'tag_depth_')
+        self.declare_parameter('depth_pose_enable', True)
         self.declare_parameter('depth_window_radius', 1)
         self.declare_parameter('apply_distortion_correction', False)
         # 태그 프레임에 추가로 곱할 회전 오프셋 [roll, pitch, yaw] (도).
         # [180, 0, 0] = 기존 apply_flip과 동일, [0, 0, 0] = 오프셋 없음, 임의 축 치환 가능.
-        self.declare_parameter('rotation_offset_rpy_deg', [180.0, 0.0, 0.0])
+        self.declare_parameter('depth_tag_frame_rotation_correction', [180.0, 0.0, 0.0])
         self.declare_parameter('trigger_mode', False)
         self.declare_parameter('samples_per_trigger', 100)
         # 트리거 모드에서 평균 전에 버릴 outlier 비율 (0.0 = 안 버림, 0.2 = 20% 버림)
         self.declare_parameter('outlier_trim_ratio', 0.2)
         # PnP(apriltag_ros TF) 재가공 관련
         self.declare_parameter('pnp_enable', True)
-        self.declare_parameter('pnp_tf_prefix', 'tag_pnp_')
-        self.declare_parameter('pnp_tag_frame_format', 'tag36h11:{id}')
+        self.declare_parameter('pnp_tag_child_frame_prefix', 'tag_pnp_')
+        self.declare_parameter('pnp_raw_tag_frame_format', 'tag36h11:{id}')
         self.declare_parameter('size', 0.035)
-        self.declare_parameter('pnp_rotation_offset_rpy_deg', [0.0, 0.0, 0.0])
+        self.declare_parameter('pnp_tag_frame_rotation_correction', [0.0, 0.0, 0.0])
 
-        self.output_frame = str(self.get_parameter('output_frame').value).strip()
-        self.tf_prefix = self.get_parameter('tf_prefix').value
+        self.output_frame = str(self.get_parameter('tag_output_parent_frame').value).strip()
+        self.tf_prefix = self.get_parameter(
+            'depth_tag_child_frame_prefix').value
+        self.depth_pose_enable = bool(
+            self.get_parameter('depth_pose_enable').value)
         self.win_r = int(self.get_parameter('depth_window_radius').value)
         self.apply_distortion_correction = bool(
             self.get_parameter('apply_distortion_correction').value)
@@ -320,8 +317,8 @@ class DepthTagTFNode(Node):
                 0.0,
                 float(self.get_parameter('outlier_trim_ratio').value)))
         self.pnp_enable = bool(self.get_parameter('pnp_enable').value)
-        self.pnp_tf_prefix = self.get_parameter('pnp_tf_prefix').value
-        self.pnp_frame_fmt = self.get_parameter('pnp_tag_frame_format').value
+        self.pnp_tf_prefix = self.get_parameter('pnp_tag_child_frame_prefix').value
+        self.pnp_frame_fmt = self.get_parameter('pnp_raw_tag_frame_format').value
         self.pnp_tag_size = float(self.get_parameter('size').value)
         if not math.isfinite(self.pnp_tag_size) or self.pnp_tag_size <= 0.0:
             raise ValueError('size must be a positive finite number')
@@ -331,16 +328,16 @@ class DepthTagTFNode(Node):
             R = rpy_deg_to_matrix(rpy)
             return None if np.allclose(R, np.eye(3)) else R
 
-        self.rot_offset = offset_matrix('rotation_offset_rpy_deg')
-        self.pnp_rot_offset = offset_matrix('pnp_rotation_offset_rpy_deg')
+        self.rot_offset = offset_matrix('depth_tag_frame_rotation_correction')
+        self.pnp_rot_offset = offset_matrix('pnp_tag_frame_rotation_correction')
 
         self.prefix_by_source = {'depth': self.tf_prefix, 'pnp': self.pnp_tf_prefix}
 
-        # 트리거 모드 상태
+        # 트리거 모드 상태. PnP와 depth는 각자 유효 프레임 수를 센다.
         self.collecting = False
-        self.frames_left = 0
+        self.frames_left_by_source = {}
         self.samples = {}          # (source, tag_id) -> {'t': [...], 'q': [...]}
-        self.last_frame_id = ''
+        self.last_frame_by_source = {}
 
         # color intrinsics 캐시 (aligned depth는 color와 같은 좌표계)
         self.fx = self.fy = self.cx = self.cy = None
@@ -350,14 +347,33 @@ class DepthTagTFNode(Node):
         self.distortion_supported = False
         self.distortion_warning_emitted = False
 
-        self.create_subscription(CameraInfo, 'camera_info', self.camera_info_callback, 10)
+        self.create_subscription(
+            CameraInfo, 'camera_info', self.camera_info_callback, 10)
 
-        # detections와 depth 이미지를 타임스탬프 기준으로 근사 동기화
-        detections_sub = Subscriber(self, AprilTagDetectionArray, 'detections')
-        depth_sub = Subscriber(self, Image, 'depth_image')
-        self.sync = ApproximateTimeSynchronizer([detections_sub, depth_sub],
-                                                queue_size=10, slop=0.05)
-        self.sync.registerCallback(self.detections_callback)
+        # PnP는 detections만 직접 구독하므로 depth 토픽 없이 동작한다.
+        self.pnp_detection_subscription = None
+        if self.pnp_enable:
+            self.pnp_detection_subscription = self.create_subscription(
+                AprilTagDetectionArray,
+                'detections',
+                self.pnp_detections_callback,
+                10,
+            )
+
+        # Depth 포즈를 사용할 때만 detections와 aligned depth를 동기화한다.
+        self.depth_detections_sub = None
+        self.depth_image_sub = None
+        self.depth_sync = None
+        if self.depth_pose_enable:
+            self.depth_detections_sub = Subscriber(
+                self, AprilTagDetectionArray, 'detections')
+            self.depth_image_sub = Subscriber(self, Image, 'depth_image')
+            self.depth_sync = ApproximateTimeSynchronizer(
+                [self.depth_detections_sub, self.depth_image_sub],
+                queue_size=10,
+                slop=0.05,
+            )
+            self.depth_sync.registerCallback(self.depth_detections_callback)
 
         # apriltag_ros가 송출한 PnP TF를 조회하기 위한 리스너
         self.tf_buffer = Buffer()
@@ -375,13 +391,16 @@ class DepthTagTFNode(Node):
         self.create_subscription(Empty, 'capture', self.capture_callback, 10)
 
         mode = 'trigger' if self.trigger_mode else 'realtime'
+        depth = 'on' if self.depth_pose_enable else 'off'
         pnp = 'on' if self.pnp_enable else 'off'
         distortion = 'on' if self.apply_distortion_correction else 'off'
         self.get_logger().info(
-            f'depth_tag_tf_node started (mode: {mode}, pnp: {pnp}, '
+            f'depth_tag_tf_node started (mode: {mode}, depth: {depth}, '
+            f'pnp: {pnp}, tag size: {self.pnp_tag_size:.6f} m, '
             f'distortion correction: {distortion}). '
-            f'output_frame: {self.output_frame or "input image frame"}. '
-            'Waiting for camera_info / detections / depth...')
+            f'tag_output_parent_frame: '
+            f'{self.output_frame or "input image frame"}. '
+            'Waiting for camera_info / detections...')
 
     # ---------------- 공통 유틸 ----------------
 
@@ -583,8 +602,8 @@ class DepthTagTFNode(Node):
                 quaternion_to_rotation_matrix(q) @ self.pnp_rot_offset)
         return t, q
 
-    def compute_distortion_corrected_pnp_pose(self, det):
-        """Raw 검출 코너와 CameraInfo K/D로 태그 포즈를 계산한다."""
+    def compute_direct_pnp_pose(self, det):
+        """검출 코너와 CameraInfo K, 선택적으로 D를 사용해 PnP를 계산한다."""
         try:
             normalized = np.array([
                 self.pixel_to_normalized(corner.x, corner.y)
@@ -594,7 +613,7 @@ class DepthTagTFNode(Node):
                 normalized, self.pnp_tag_size)
         except (ValueError, np.linalg.LinAlgError) as exc:
             self.get_logger().warn(
-                f'Distortion-corrected PnP failed for tag {det.id}: {exc}',
+                f'Direct PnP failed for tag {det.id}: {exc}',
                 throttle_duration_sec=5.0)
             return None
 
@@ -631,40 +650,60 @@ class DepthTagTFNode(Node):
 
     def capture_callback(self, _msg):
         if not self.trigger_mode:
-            self.get_logger().warn('capture ignored: trigger_mode is False (실시간 모드).')
+            self.get_logger().warn(
+                'capture ignored: trigger_mode is False (실시간 모드).')
             return
+
+        active_sources = []
+        if self.depth_pose_enable:
+            active_sources.append('depth')
+        if self.pnp_enable:
+            active_sources.append('pnp')
+        if not active_sources:
+            self.get_logger().warn(
+                'capture ignored: both depth and PnP are disabled.')
+            return
+
         self.samples = {}
-        self.frames_left = self.samples_per_trigger
+        self.last_frame_by_source = {}
+        self.frames_left_by_source = {
+            source: self.samples_per_trigger for source in active_sources
+        }
         self.collecting = True
-        self.get_logger().info(f'capture started: collecting {self.samples_per_trigger} frames...')
+        self.get_logger().info(
+            f'capture started: collecting {self.samples_per_trigger} valid '
+            f'frames for {", ".join(active_sources)}...')
 
     def finish_capture(self, stamp):
-        """수집 종료: (방식, 태그)별 평균 포즈를 계산해 static TF + PoseArray로 1회 퍼블리시."""
+        """평균 포즈를 source별 static TF와 PoseArray로 한 번 발행한다."""
         self.collecting = False
 
         pose_arrays = {}
         static_tfs = []
         for (source, tag_id), entry in sorted(self.samples.items()):
             t_avg, q_avg, n_used, n_total = self.robust_average(entry)
+            frame_id = self.last_frame_by_source[source]
             child = f'{self.prefix_by_source[source]}{tag_id}'
-            static_tfs.append(self.make_transform(stamp, self.last_frame_id, child, t_avg, q_avg))
+            static_tfs.append(
+                self.make_transform(stamp, frame_id, child, t_avg, q_avg))
 
             if source not in pose_arrays:
                 pa = PoseArray()
                 pa.header.stamp = stamp
-                pa.header.frame_id = self.last_frame_id
+                pa.header.frame_id = frame_id
                 pose_arrays[source] = pa
             pose_arrays[source].poses.append(self.make_pose(t_avg, q_avg))
 
             roll, pitch, yaw = quaternion_to_euler_deg(*q_avg)
             self.get_logger().info(
-                f'[{source.upper():5s} ID: {tag_id}] {n_used}/{n_total} samples avg '
+                f'[{source.upper():5s} ID: {tag_id}] '
+                f'{n_used}/{n_total} samples avg '
                 f'(trim {self.outlier_trim_ratio:.0%}) | '
-                f'X:{t_avg[0]:.4f}m Y:{t_avg[1]:.4f}m Z:{t_avg[2]:.4f}m | '
-                f'Roll:{roll:6.1f} Pitch:{pitch:6.1f} Yaw:{yaw:6.1f} deg')
+                f'X:{t_avg[0]:.4f}m Y:{t_avg[1]:.4f}m '
+                f'Z:{t_avg[2]:.4f}m | Roll:{roll:6.1f} '
+                f'Pitch:{pitch:6.1f} Yaw:{yaw:6.1f} deg')
 
         if static_tfs:
-            # 평균 결과는 static TF로 송출 -> 다음 트리거 전까지 RViz에 계속 표시됨
             self.static_tf_broadcaster.sendTransform(static_tfs)
             for source, pa in pose_arrays.items():
                 self.pose_pubs[source].publish(pa)
@@ -672,17 +711,100 @@ class DepthTagTFNode(Node):
                 'capture finished: averaged poses published '
                 '(static TF + PoseArray).')
         else:
-            self.get_logger().warn('capture finished but no valid samples collected.')
+            self.get_logger().warn(
+                'capture finished but no valid samples collected.')
         self.samples = {}
+        self.frames_left_by_source = {}
 
-    # ---------------- 메인 콜백 ----------------
+    # ---------------- 결과 발행 ----------------
 
-    def detections_callback(self, det_msg: AprilTagDetectionArray, depth_msg: Image):
-        # 트리거 모드에서는 수집 중일 때만 프레임을 처리
+    def process_results(self, source, results, source_frame, stamp):
+        """한 source의 결과를 출력 frame으로 바꿔 누적하거나 발행한다."""
+        if not results:
+            return
+
+        tagged_results = [
+            (source, tag_id, translation, rotation)
+            for tag_id, translation, rotation in results
+        ]
+        transformed, result_frame = self.transform_results_to_output_frame(
+            tagged_results, source_frame, stamp)
+        if transformed is None:
+            return
+        self.last_frame_by_source[source] = result_frame
+
+        if self.trigger_mode:
+            for result_source, tag_id, translation, rotation in transformed:
+                entry = self.samples.setdefault(
+                    (result_source, tag_id), {'t': [], 'q': []})
+                entry['t'].append(translation)
+                entry['q'].append(np.asarray(rotation))
+
+            remaining = self.frames_left_by_source.get(source, 0) - 1
+            self.frames_left_by_source[source] = remaining
+            if remaining > 0 and remaining % 25 == 0:
+                self.get_logger().info(
+                    f'collecting {source}... {remaining} frames left')
+            if all(value <= 0 for value in
+                   self.frames_left_by_source.values()):
+                self.finish_capture(stamp)
+            return
+
+        pose_array = PoseArray()
+        pose_array.header.stamp = stamp
+        pose_array.header.frame_id = result_frame
+        for result_source, tag_id, translation, rotation in transformed:
+            child = f'{self.prefix_by_source[result_source]}{tag_id}'
+            self.tf_broadcaster.sendTransform(
+                self.make_transform(
+                    stamp, result_frame, child, translation, rotation))
+            pose_array.poses.append(
+                self.make_pose(translation, rotation))
+        self.pose_pubs[source].publish(pose_array)
+
+    # ---------------- 독립 입력 콜백 ----------------
+
+    def pnp_detections_callback(self, det_msg: AprilTagDetectionArray):
+        """Depth와 무관하게 detections + CameraInfo로 PnP를 계산한다."""
         if self.trigger_mode and not self.collecting:
             return
         if self.fx is None:
-            self.get_logger().warn('camera_info not received yet.', throttle_duration_sec=5.0)
+            self.get_logger().warn(
+                'camera_info not received yet.',
+                throttle_duration_sec=5.0)
+            return
+        if not det_msg.detections:
+            return
+
+        source_frame = det_msg.header.frame_id
+        if not source_frame:
+            self.get_logger().warn(
+                'detections header has an empty frame_id.',
+                throttle_duration_sec=5.0)
+            return
+
+        results = []
+        for det in det_msg.detections:
+            if self.apply_distortion_correction:
+                pnp_pose = self.compute_direct_pnp_pose(det)
+            else:
+                pnp_pose = self.lookup_pnp_pose(
+                    det.id, source_frame, det_msg.header.stamp)
+            if pnp_pose is not None:
+                results.append((det.id, pnp_pose[0], pnp_pose[1]))
+
+        self.process_results(
+            'pnp', results, source_frame, det_msg.header.stamp)
+
+    def depth_detections_callback(
+            self, det_msg: AprilTagDetectionArray, depth_msg: Image):
+        """동기화된 detections + aligned depth로 depth 포즈만 계산한다."""
+        if self.trigger_mode and not self.collecting:
+            return
+        if self.fx is None:
+            self.get_logger().warn(
+                'camera_info not received yet.',
+                throttle_duration_sec=5.0)
             return
         if not det_msg.detections:
             return
@@ -690,63 +812,18 @@ class DepthTagTFNode(Node):
         depth = self.decode_depth(depth_msg)
         if depth is None:
             return
-        h, w = depth.shape
-        source_frame = depth_msg.header.frame_id
+        height, width = depth.shape
 
-        results = []  # (source, tag_id, t(xyz), q(x, y, z, w))
+        results = []
         for det in det_msg.detections:
-            depth_pose = self.compute_depth_pose(det, depth, w, h)
+            depth_pose = self.compute_depth_pose(
+                det, depth, width, height)
             if depth_pose is not None:
-                results.append(('depth', det.id, depth_pose[0], depth_pose[1]))
+                results.append((det.id, depth_pose[0], depth_pose[1]))
 
-            if self.pnp_enable:
-                if (self.apply_distortion_correction and
-                        self.distortion_supported):
-                    pnp_pose = self.compute_distortion_corrected_pnp_pose(det)
-                else:
-                    pnp_pose = self.lookup_pnp_pose(
-                        det.id, depth_msg.header.frame_id,
-                        depth_msg.header.stamp)
-                if pnp_pose is not None:
-                    results.append(('pnp', det.id, pnp_pose[0], pnp_pose[1]))
-
-        if not results:
-            return
-
-        results, result_frame = self.transform_results_to_output_frame(
-            results, source_frame, depth_msg.header.stamp)
-        if results is None:
-            return
-        self.last_frame_id = result_frame
-
-        # 트리거 모드: 이번 프레임 결과를 누적, 목표 프레임 수 도달 시 평균 1회 출력
-        if self.trigger_mode:
-            for source, tag_id, t, q in results:
-                entry = self.samples.setdefault((source, tag_id), {'t': [], 'q': []})
-                entry['t'].append(t)
-                entry['q'].append(np.asarray(q))
-            self.frames_left -= 1
-            if self.frames_left > 0 and self.frames_left % 25 == 0:
-                self.get_logger().info(f'collecting... {self.frames_left} frames left')
-            if self.frames_left <= 0:
-                self.finish_capture(depth_msg.header.stamp)
-            return
-
-        # 실시간 모드: 매 프레임 TF + PoseArray 퍼블리시
-        pose_arrays = {}
-        for source, tag_id, t, q in results:
-            child = f'{self.prefix_by_source[source]}{tag_id}'
-            self.tf_broadcaster.sendTransform(
-                self.make_transform(
-                    depth_msg.header.stamp, result_frame, child, t, q))
-            if source not in pose_arrays:
-                pa = PoseArray()
-                pa.header.stamp = depth_msg.header.stamp
-                pa.header.frame_id = result_frame
-                pose_arrays[source] = pa
-            pose_arrays[source].poses.append(self.make_pose(t, q))
-        for source, pa in pose_arrays.items():
-            self.pose_pubs[source].publish(pa)
+        self.process_results(
+            'depth', results, depth_msg.header.frame_id,
+            depth_msg.header.stamp)
 
 
 def main(args=None):

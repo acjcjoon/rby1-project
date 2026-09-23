@@ -6,7 +6,6 @@ import math
 from geometry_msgs.msg import TransformStamped
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from tf2_ros import StaticTransformBroadcaster
 
 
@@ -86,43 +85,44 @@ class CameraMountTFPublisher(Node):
     def __init__(self):
         super().__init__('camera_mount_tf_publisher')
 
-        self.declare_parameter('parent_frame', 'ee_left')
+        self.declare_parameter('mount_parent_frame', 'ee_left')
         self.declare_parameter('camera_center_frame', 'camera_center')
-        self.declare_parameter('camera_frame', 'camera_link')
-        self.declare_parameter('translation_xyz', [0.0, 0.0, 0.0])
-        # Preferred, intuitive format. It is left unset so old YAML files that
-        # only contain rotation_xyzw continue to work.
+        self.declare_parameter('camera_link_frame', 'camera_link')
         self.declare_parameter(
-            'rotation_rpy_deg', Parameter.Type.DOUBLE_ARRAY)
-        self.declare_parameter('rotation_xyzw', [0.0, 0.0, 0.0, 1.0])
+            'parent_to_camera_center_translation', [0.0, 0.0, 0.0])
         self.declare_parameter(
-            'camera_center_to_link_xyz', [0.0, 0.0, 0.0])
+            'parent_to_camera_center_rotation', [0.0, 0.0, 0.0])
         self.declare_parameter(
-            'camera_center_rotation_rpy_deg', [0.0, 0.0, 0.0])
+            'camera_center_to_camera_link_offset_in_link_axes',
+            [0.0, 0.0, 0.0])
+        self.declare_parameter(
+            'camera_center_to_camera_link_rotation', [0.0, 0.0, 0.0])
 
-        parent_frame = str(self.get_parameter('parent_frame').value).strip()
+        parent_frame = str(
+            self.get_parameter('mount_parent_frame').value).strip()
         center_frame = str(
             self.get_parameter('camera_center_frame').value).strip()
-        camera_frame = str(self.get_parameter('camera_frame').value).strip()
-        translation = finite_values(
-            self.get_parameter('translation_xyz').value, 3, 'translation_xyz')
-        center_to_link = finite_values(
-            self.get_parameter('camera_center_to_link_xyz').value, 3,
-            'camera_center_to_link_xyz')
-        center_delta_rpy = finite_values(
-            self.get_parameter('camera_center_rotation_rpy_deg').value, 3,
-            'camera_center_rotation_rpy_deg')
-        rpy_parameter = self.get_parameter('rotation_rpy_deg')
-        if rpy_parameter.type_ != Parameter.Type.NOT_SET:
-            rotation_rpy_deg = finite_values(
-                rpy_parameter.value, 3, 'rotation_rpy_deg')
-            rotation = rpy_degrees_to_quaternion(rotation_rpy_deg)
-            rotation_source = f'RPY degrees={rotation_rpy_deg}'
-        else:
-            rotation = finite_values(
-                self.get_parameter('rotation_xyzw').value, 4,
-                'rotation_xyzw')
-            rotation_source = 'legacy quaternion'
+        camera_frame = str(
+            self.get_parameter('camera_link_frame').value).strip()
+        parent_to_center_translation = finite_values(
+            self.get_parameter(
+                'parent_to_camera_center_translation').value,
+            3,
+            'parent_to_camera_center_translation')
+        parent_to_center_rpy = finite_values(
+            self.get_parameter('parent_to_camera_center_rotation').value,
+            3,
+            'parent_to_camera_center_rotation')
+        center_to_link_offset = finite_values(
+            self.get_parameter(
+                'camera_center_to_camera_link_offset_in_link_axes').value,
+            3,
+            'camera_center_to_camera_link_offset_in_link_axes')
+        center_to_link_rpy = finite_values(
+            self.get_parameter(
+                'camera_center_to_camera_link_rotation').value,
+            3,
+            'camera_center_to_camera_link_rotation')
 
         frames = (parent_frame, center_frame, camera_frame)
         if not all(frames):
@@ -130,33 +130,39 @@ class CameraMountTFPublisher(Node):
         if len(set(frames)) != len(frames):
             raise ValueError('TF frame names must be different')
 
-        rotation = normalize_quaternion(rotation, 'rotation_xyzw')
-        center_delta = normalize_quaternion(
-            rpy_degrees_to_quaternion(center_delta_rpy),
-            'camera_center_rotation_rpy_deg')
+        parent_to_center_rotation = normalize_quaternion(
+            rpy_degrees_to_quaternion(parent_to_center_rpy),
+            'parent_to_camera_center_rotation')
+        center_to_link_rotation = normalize_quaternion(
+            rpy_degrees_to_quaternion(center_to_link_rpy),
+            'camera_center_to_camera_link_rotation')
 
-        # translation/rotation directly describe ee -> camera_center. Apply
-        # the offset and additional rotation only on camera_center ->
-        # camera_link. Rotating the offset makes camera_link orbit around the
-        # configured physical center for rotations about any local axis.
-        link_translation = rotate_vector(center_delta, center_to_link)
+        # The center-to-link offset is expressed in the rotated camera_link
+        # axes. Convert it to camera_center axes before filling the TF
+        # translation field. This keeps camera_center as the physical pivot.
+        center_to_link_translation = rotate_vector(
+            center_to_link_rotation,
+            center_to_link_offset,
+        )
 
         stamp = self.get_clock().now().to_msg()
         center_transform = make_transform(
             stamp, parent_frame, center_frame,
-            translation, rotation)
+            parent_to_center_translation, parent_to_center_rotation)
         link_transform = make_transform(
             stamp, center_frame, camera_frame,
-            link_translation, center_delta)
+            center_to_link_translation, center_to_link_rotation)
 
         self.broadcaster = StaticTransformBroadcaster(self)
         self.broadcaster.sendTransform([center_transform, link_transform])
         self.get_logger().info(
             f'Camera mount TF ready: {parent_frame} -> {center_frame} -> '
-            f'{camera_frame}; center_translation={translation}; '
-            f'center_rotation={rotation}; source={rotation_source}; '
-            f'center_to_link={center_to_link}; '
-            f'center_rotation_rpy_deg={center_delta_rpy}')
+            f'{camera_frame}; '
+            f'parent_to_center_translation={parent_to_center_translation}; '
+            f'parent_to_center_rotation={parent_to_center_rpy} deg; '
+            f'center_to_link_offset_in_link_axes={center_to_link_offset}; '
+            f'center_to_link_translation={center_to_link_translation}; '
+            f'center_to_link_rotation={center_to_link_rpy} deg')
 
 
 def main(args=None):

@@ -83,6 +83,7 @@ class CameraLinearAbsoluteStep:
     linear_velocity: float
     angular_velocity: float
     acceleration_scaling: float
+    camera_source: str = 'd405'
     detection_timeout_sec: float = 3.0
     max_age_sec: Optional[float] = None
     minimum_confidence: Optional[float] = None
@@ -101,8 +102,11 @@ class CameraLinearAbsoluteStep:
     def __post_init__(self) -> None:
         group = str(self.group).strip()
         object_id = str(self.object_id).strip()
+        camera_source = str(self.camera_source).strip()
         if not object_id:
             raise ValueError('object_id must not be empty')
+        if not camera_source:
+            raise ValueError('camera_source must not be empty')
 
         minimum_time = _finite_number(
             self.minimum_time,
@@ -216,6 +220,7 @@ class CameraLinearAbsoluteStep:
 
         object.__setattr__(self, 'group', group)
         object.__setattr__(self, 'object_id', object_id)
+        object.__setattr__(self, 'camera_source', camera_source)
         object.__setattr__(self, 'minimum_time', minimum_time)
         object.__setattr__(self, 'linear_velocity', linear_velocity)
         object.__setattr__(self, 'angular_velocity', angular_velocity)
@@ -292,6 +297,35 @@ class CameraLinearAbsolutePrintStep(CameraLinearAbsoluteStep):
 
 
 @dataclass(frozen=True)
+class CameraFrameLinearAbsoluteStep(CameraLinearAbsoluteStep):
+    """Move an arm so a mounted camera frame reaches a tag-relative pose."""
+
+    controlled_frame: str = ''
+    preserve_end_effector_orientation: bool = True
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        controlled_frame = str(self.controlled_frame).strip()
+        if not controlled_frame:
+            raise ValueError('controlled_frame must not be empty')
+        if not isinstance(self.preserve_end_effector_orientation, bool):
+            raise ValueError(
+                'preserve_end_effector_orientation must be a boolean'
+            )
+        object.__setattr__(self, 'controlled_frame', controlled_frame)
+
+    @property
+    def object_to_controlled_frame_position(self) -> tuple[float, ...]:
+        return self.object_to_end_effector_position
+
+    @property
+    def object_to_controlled_frame_orientation_xyzw(
+        self,
+    ) -> tuple[float, ...]:
+        return self.object_to_end_effector_orientation_xyzw
+
+
+@dataclass(frozen=True)
 class MoveToStep:
     """Body-relative odometry target executed by ``rby1_navigation``."""
 
@@ -316,6 +350,117 @@ class MoveToStep:
 
 
 @dataclass(frozen=True)
+class CameraMoveToTagStep:
+    """Deferred camera observation followed by relative base navigation."""
+
+    camera_source: str
+    object_id: str
+    desired_tag_x: float
+    desired_tag_y: float
+    relative_yaw: float = 0.0
+    detection_timeout_sec: float = 3.0
+    navigation_timeout_sec: float = 30.0
+    max_translation_m: float = 0.8
+    max_yaw_rad: float = 0.5
+    max_age_sec: Optional[float] = None
+    minimum_confidence: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        camera_source = str(self.camera_source).strip()
+        object_id = str(self.object_id).strip()
+        if not camera_source:
+            raise ValueError('camera_source must not be empty')
+        if not object_id:
+            raise ValueError('object_id must not be empty')
+
+        desired_tag_x = _finite_number(
+            self.desired_tag_x,
+            'desired_tag_x',
+        )
+        desired_tag_y = _finite_number(
+            self.desired_tag_y,
+            'desired_tag_y',
+        )
+        relative_yaw = _finite_number(self.relative_yaw, 'relative_yaw')
+        detection_timeout_sec = _finite_number(
+            self.detection_timeout_sec,
+            'detection_timeout_sec',
+            positive=True,
+        )
+        navigation_timeout_sec = _finite_number(
+            self.navigation_timeout_sec,
+            'navigation_timeout_sec',
+            positive=True,
+        )
+        max_translation_m = _finite_number(
+            self.max_translation_m,
+            'max_translation_m',
+            positive=True,
+        )
+        max_yaw_rad = _finite_number(
+            self.max_yaw_rad,
+            'max_yaw_rad',
+            positive=True,
+        )
+        if abs(relative_yaw) > max_yaw_rad:
+            raise ValueError(
+                'relative_yaw must not exceed max_yaw_rad'
+            )
+        max_age_sec = (
+            None
+            if self.max_age_sec is None
+            else _finite_number(
+                self.max_age_sec,
+                'max_age_sec',
+                positive=True,
+            )
+        )
+        minimum_confidence = (
+            None
+            if self.minimum_confidence is None
+            else _finite_number(
+                self.minimum_confidence,
+                'minimum_confidence',
+            )
+        )
+        if (
+            minimum_confidence is not None
+            and not 0.0 <= minimum_confidence <= 1.0
+        ):
+            raise ValueError(
+                'minimum_confidence must be in the range [0, 1]'
+            )
+
+        object.__setattr__(self, 'camera_source', camera_source)
+        object.__setattr__(self, 'object_id', object_id)
+        object.__setattr__(self, 'desired_tag_x', desired_tag_x)
+        object.__setattr__(self, 'desired_tag_y', desired_tag_y)
+        object.__setattr__(self, 'relative_yaw', relative_yaw)
+        object.__setattr__(
+            self,
+            'detection_timeout_sec',
+            detection_timeout_sec,
+        )
+        object.__setattr__(
+            self,
+            'navigation_timeout_sec',
+            navigation_timeout_sec,
+        )
+        object.__setattr__(
+            self,
+            'max_translation_m',
+            max_translation_m,
+        )
+        object.__setattr__(self, 'max_yaw_rad', max_yaw_rad)
+        object.__setattr__(self, 'max_age_sec', max_age_sec)
+        object.__setattr__(
+            self,
+            'minimum_confidence',
+            minimum_confidence,
+        )
+
+
+@dataclass(frozen=True)
 class RewindStep:
     """Repeat the complete Task, either forever or for a fixed total count."""
 
@@ -334,8 +479,10 @@ class RewindStep:
 
 DynamicTaskStep = Union[
     TaskCommand,
+    CameraFrameLinearAbsoluteStep,
     CameraLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
+    CameraMoveToTagStep,
     MoveToStep,
     RewindStep,
 ]
@@ -361,6 +508,7 @@ class DynamicTaskDefinition:
                 (
                     TaskCommand,
                     CameraLinearAbsoluteStep,
+                    CameraMoveToTagStep,
                     MoveToStep,
                     RewindStep,
                 ),
@@ -382,7 +530,12 @@ class DynamicTaskDefinition:
         if not any(
             isinstance(
                 command,
-                (CameraLinearAbsoluteStep, MoveToStep, RewindStep),
+                (
+                    CameraLinearAbsoluteStep,
+                    CameraMoveToTagStep,
+                    MoveToStep,
+                    RewindStep,
+                ),
             )
             for command in commands
         ):
@@ -420,6 +573,43 @@ class Task(_CanonicalTask):
         ))
         return self
 
+    def move_base_to_detected_tag(
+        self,
+        camera_source: str,
+        object_id: str,
+        *,
+        desired_tag_x: float,
+        desired_tag_y: float,
+        relative_yaw: float = 0.0,
+        detection_timeout_sec: float = 3.0,
+        navigation_timeout_sec: float = 30.0,
+        max_translation_m: float = 0.8,
+        max_yaw_rad: float = 0.5,
+        max_age_sec: Optional[float] = None,
+        minimum_confidence: Optional[float] = None,
+    ) -> 'Task':
+        """Defer a tag observation used to calculate a relative base goal.
+
+        ``desired_tag_x`` and ``desired_tag_y`` describe where the tag should
+        appear in the base frame after navigation. Execution and SE(2) goal
+        calculation are implemented separately by PlannerTaskRunner.
+        """
+
+        self.task_list.append(CameraMoveToTagStep(
+            camera_source=camera_source,
+            object_id=object_id,
+            desired_tag_x=desired_tag_x,
+            desired_tag_y=desired_tag_y,
+            relative_yaw=relative_yaw,
+            detection_timeout_sec=detection_timeout_sec,
+            navigation_timeout_sec=navigation_timeout_sec,
+            max_translation_m=max_translation_m,
+            max_yaw_rad=max_yaw_rad,
+            max_age_sec=max_age_sec,
+            minimum_confidence=minimum_confidence,
+        ))
+        return self
+
     def rewind(self, repeat_count: Optional[int] = None) -> 'Task':
         """Repeat this Task from its first step.
 
@@ -440,6 +630,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
+        camera_source: str = 'd405',
         detection_timeout_sec: float = 3.0,
         max_age_sec: Optional[float] = None,
         minimum_confidence: Optional[float] = None,
@@ -481,6 +672,7 @@ class Task(_CanonicalTask):
             arm,
             object_id,
             tcp_motion,
+            camera_source=camera_source,
             detection_timeout_sec=detection_timeout_sec,
             max_age_sec=max_age_sec,
             minimum_confidence=minimum_confidence,
@@ -502,6 +694,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
+        camera_source: str = 'd405',
         detection_timeout_sec: float = 3.0,
         max_age_sec: Optional[float] = None,
         minimum_confidence: Optional[float] = None,
@@ -531,6 +724,7 @@ class Task(_CanonicalTask):
             arm,
             object_id,
             tcp_motion,
+            camera_source=camera_source,
             detection_timeout_sec=detection_timeout_sec,
             max_age_sec=max_age_sec,
             minimum_confidence=minimum_confidence,
@@ -546,6 +740,64 @@ class Task(_CanonicalTask):
             ),
         )
 
+    def camera_frame_linear_absolute(
+        self,
+        arm: str,
+        object_id: str,
+        tcp_motion: Sequence[object],
+        *,
+        camera_source: str = 'd405',
+        controlled_frame: str,
+        detection_timeout_sec: float = 3.0,
+        max_age_sec: Optional[float] = None,
+        minimum_confidence: Optional[float] = None,
+        yaw_only: bool = True,
+        preserve_end_effector_orientation: bool = True,
+        log_target_and_actual: bool = False,
+        object_to_controlled_frame_position: Sequence[object] = (
+            0.0,
+            0.0,
+            0.0,
+        ),
+        object_to_controlled_frame_orientation_xyzw: Sequence[object] = (
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+    ) -> 'Task':
+        """Move an EE so its mounted camera frame reaches the tag goal.
+
+        With ``preserve_end_effector_orientation``, only the controlled
+        camera-frame position is targeted and the current EE orientation is
+        retained. The EE-to-camera mount transform is read from TF at runtime.
+        """
+
+        return self._append_camera_linear_absolute(
+            CameraFrameLinearAbsoluteStep,
+            arm,
+            object_id,
+            tcp_motion,
+            camera_source=camera_source,
+            detection_timeout_sec=detection_timeout_sec,
+            max_age_sec=max_age_sec,
+            minimum_confidence=minimum_confidence,
+            reuse_previous_observation=False,
+            yaw_only=yaw_only,
+            yaw_symmetry_deg=None,
+            log_target_and_actual=log_target_and_actual,
+            object_to_end_effector_position=(
+                object_to_controlled_frame_position
+            ),
+            object_to_end_effector_orientation_xyzw=(
+                object_to_controlled_frame_orientation_xyzw
+            ),
+            controlled_frame=controlled_frame,
+            preserve_end_effector_orientation=(
+                preserve_end_effector_orientation
+            ),
+        )
+
     def _append_camera_linear_absolute(
         self,
         step_type: type[CameraLinearAbsoluteStep],
@@ -553,6 +805,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
+        camera_source: str,
         detection_timeout_sec: float,
         max_age_sec: Optional[float],
         minimum_confidence: Optional[float],
@@ -562,10 +815,20 @@ class Task(_CanonicalTask):
         log_target_and_actual: bool,
         object_to_end_effector_position: Sequence[object],
         object_to_end_effector_orientation_xyzw: Sequence[object],
+        controlled_frame: Optional[str] = None,
+        preserve_end_effector_orientation: bool = True,
     ) -> 'Task':
         probe = _CanonicalTask('_camera_command_validation')
         probe.linear_absolute(arm, (0.0,) * 6, tcp_motion)
         motion = probe.task_list[0]
+        step_options: dict[str, object] = {}
+        if controlled_frame is not None:
+            step_options.update({
+                'controlled_frame': controlled_frame,
+                'preserve_end_effector_orientation': (
+                    preserve_end_effector_orientation
+                ),
+            })
         self.task_list.append(step_type(
             group=str(motion.group),
             object_id=object_id,
@@ -573,6 +836,7 @@ class Task(_CanonicalTask):
             linear_velocity=float(motion.linear_velocity),
             angular_velocity=float(motion.angular_velocity),
             acceleration_scaling=float(motion.acceleration_scaling),
+            camera_source=camera_source,
             detection_timeout_sec=detection_timeout_sec,
             max_age_sec=max_age_sec,
             minimum_confidence=minimum_confidence,
@@ -586,6 +850,7 @@ class Task(_CanonicalTask):
             object_to_end_effector_orientation_xyzw=tuple(
                 object_to_end_effector_orientation_xyzw
             ),
+            **step_options,
         ))
         return self
 
@@ -610,6 +875,7 @@ class Task(_CanonicalTask):
                 (
                     TaskCommand,
                     CameraLinearAbsoluteStep,
+                    CameraMoveToTagStep,
                     MoveToStep,
                     RewindStep,
                 ),
@@ -625,7 +891,12 @@ class Task(_CanonicalTask):
         if any(
             isinstance(
                 command,
-                (CameraLinearAbsoluteStep, MoveToStep, RewindStep),
+                (
+                    CameraLinearAbsoluteStep,
+                    CameraMoveToTagStep,
+                    MoveToStep,
+                    RewindStep,
+                ),
             )
             for command in commands
         ):
@@ -693,8 +964,10 @@ def get_object_position(
 __all__ = [
     'BODY_JOINT_GROUPS',
     'CARTESIAN_ARMS',
+    'CameraFrameLinearAbsoluteStep',
     'CameraLinearAbsolutePrintStep',
     'CameraLinearAbsoluteStep',
+    'CameraMoveToTagStep',
     'JOINT_GROUP_DOF',
     'CommandKind',
     'DynamicTaskDefinition',

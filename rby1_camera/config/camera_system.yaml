@@ -1,0 +1,129 @@
+# rby1_camera 통합 설정 파일
+#
+# TF 표기 규칙
+# ───────────
+# A_to_B에서 A는 parent frame, B는 child frame이다.
+#
+# translation:
+#   A 좌표축으로 표현한 B 원점의 위치 [m]
+#
+# rotation:
+#   A에서 바라본 B 좌표축의 방향 [roll(X), pitch(Y), yaw(Z)] [degree]
+#
+# 즉, B 좌표의 점 p_B는 다음 식으로 A 좌표로 변환된다.
+#   p_A = R_A_B * p_B + t_A_B
+
+
+# 태그 한 변의 실제 길이 [m]. 카메라별로 독립 설정한다.
+# 각 값은 해당 카메라의 apriltag_node와 depth_tag_tf_node가 공유한다.
+"/*":
+  ros__parameters:
+    size: 0.024  # D405
+
+"/d435/*":
+  ros__parameters:
+    size: 0.024  # D435
+
+
+# ── D405 장착 TF: ee_left -> d405_camera_center -> d405_link ──
+camera_mount_tf_publisher:
+  ros__parameters:
+    mount_parent_frame: "ee_left"
+    camera_center_frame: "d405_camera_center"
+    camera_link_frame: "d405_link"
+
+    # T_ee_left_d405_camera_center
+    parent_to_camera_center_translation: [0.077391, -0.0035, 0.019559]
+    parent_to_camera_center_rotation: [0.0, 111.0, 0.0]
+
+    # T_d405_camera_center_d405_link
+    # offset은 회전된 d405_link 축으로 표현한
+    # d405_camera_center -> d405_link 원점 벡터이다.
+    # 실제 TF translation은 R_center_link * offset으로 계산한다.
+    camera_center_to_camera_link_offset_in_link_axes: [0.0, 0.009, 0.0]
+    camera_center_to_camera_link_rotation: [90.0, 0.0, 0.0]
+
+
+# ── D405 AprilTag 검출 ────────────────────────────────────────
+apriltag_node:
+  ros__parameters:
+    family: "36h11"
+    publish_tf: true
+    image_transport: "raw"
+
+
+# ── D405 Depth/PnP 태그 TF ───────────────────────────────────
+depth_tag_tf_node:
+  ros__parameters:
+    # 기존 플래너가 사용하는 출력 이름을 유지한다.
+    #   ee_left -> tag_depth_<id>
+    #   ee_left -> tag_pnp_<id>
+    tag_output_parent_frame: "ee_left"
+
+    depth_pose_enable: false
+    apply_distortion_correction: true
+    trigger_mode: false
+    samples_per_trigger: 100
+    outlier_trim_ratio: 0.2
+
+    depth_tag_child_frame_prefix: "tag_depth_"
+    depth_window_radius: 1
+    depth_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
+
+    pnp_enable: true
+    pnp_tag_child_frame_prefix: "tag_pnp_"
+    pnp_raw_tag_frame_format: "tag36h11:{id}"
+    pnp_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
+
+
+# ── D435 장착 TF: link_head_2 -> d435_camera_center -> d435_link ─────
+/d435/camera_mount_tf_publisher:
+  ros__parameters:
+    mount_parent_frame: "link_head_2"
+    camera_center_frame: "d435_camera_center"
+    camera_link_frame: "d435_link"
+
+    # T_link_head_2_d435_camera_center
+    # TODO: 현재는 link_head_2 원점과 일치하는 초기값이다.
+    # 실제 사용 전에 측정한 D435 장착 위치/각도로 바꿔야 한다.
+    parent_to_camera_center_translation: [0.0464, 0.0, 0.066]
+    parent_to_camera_center_rotation: [0.0, -2.0, 0.0]
+
+    # T_d435_camera_center_d435_link
+    # D435 중심과 d435_link 사이의 CAD 오프셋이 있으면 여기에 입력한다.
+    camera_center_to_camera_link_offset_in_link_axes: [0.02185, 0.0175, 0.0]
+    camera_center_to_camera_link_rotation: [0.0, 0.0, 0.0]
+
+
+# ── D435 AprilTag 검출 ────────────────────────────────────────
+/d435/apriltag_node:
+  ros__parameters:
+    family: "36h11"
+    # D405가 이미 tag36h11:<id>를 발행하므로 raw TF 중복을 막는다.
+    # D435의 최종 TF는 아래 노드가 d435_tag_* 이름으로 발행한다.
+    publish_tf: false
+    image_transport: "raw"
+
+
+# ── D435 Depth/PnP 태그 TF ───────────────────────────────────
+/d435/depth_tag_tf_node:
+  ros__parameters:
+    # D405와 child frame 이름이 겹치지 않도록 d435_ 접두사를 붙인다.
+    #   base -> d435_tag_depth_<id>
+    #   base -> d435_tag_pnp_<id>
+    tag_output_parent_frame: "base"
+
+    depth_pose_enable: false
+    apply_distortion_correction: true
+    trigger_mode: false
+    samples_per_trigger: 100
+    outlier_trim_ratio: 0.2
+
+    depth_tag_child_frame_prefix: "d435_tag_depth_"
+    depth_window_radius: 1
+    depth_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
+
+    pnp_enable: true
+    pnp_tag_child_frame_prefix: "d435_tag_pnp_"
+    pnp_raw_tag_frame_format: "d435_tag36h11:{id}"
+    pnp_tag_frame_rotation_correction: [180.0, 180.0, 180.0]

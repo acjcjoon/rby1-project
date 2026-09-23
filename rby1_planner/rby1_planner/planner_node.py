@@ -28,7 +28,19 @@ class PlannerNode(Node):
         super().__init__('rby1_planner', namespace=namespace)
         self.control = ControlClient(self)
 
-        self.declare_parameter('object_pose_topic', '/detections')
+        self.declare_parameter('d405_object_pose_topic', '/detections')
+        self.declare_parameter(
+            'd405_processed_tag_tf_prefix',
+            'tag_pnp_',
+        )
+        self.declare_parameter(
+            'd435_object_pose_topic',
+            '/d435/detections',
+        )
+        self.declare_parameter(
+            'd435_processed_tag_tf_prefix',
+            'd435_tag_pnp_',
+        )
         self.declare_parameter('object_pose_target_frame', 'base')
         self.declare_parameter('object_pose_max_age_sec', 0.5)
         self.declare_parameter('object_pose_min_confidence', 0.5)
@@ -46,30 +58,58 @@ class PlannerNode(Node):
             '/rby1/navigation/state',
         )
 
-        self.camera = CameraClient(
-            self,
-            object_pose_topic=str(
-                self.get_parameter('object_pose_topic').value
-            ),
-            target_frame=str(
+        shared_camera_options = {
+            'target_frame': str(
                 self.get_parameter('object_pose_target_frame').value
             ),
-            max_age_sec=float(
+            'max_age_sec': float(
                 self.get_parameter('object_pose_max_age_sec').value
             ),
-            minimum_confidence=float(
+            'minimum_confidence': float(
                 self.get_parameter('object_pose_min_confidence').value
             ),
-            future_tolerance_sec=float(
+            'future_tolerance_sec': float(
                 self.get_parameter(
                     'object_pose_future_tolerance_sec'
                 ).value
             ),
-            tf_timeout_sec=float(
+            'tf_timeout_sec': float(
                 self.get_parameter('object_pose_tf_timeout_sec').value
             ),
+        }
+        d405_camera = CameraClient(
+            self,
+            object_pose_topic=str(
+                self.get_parameter('d405_object_pose_topic').value
+            ),
+            processed_tag_tf_prefix=str(
+                self.get_parameter(
+                    'd405_processed_tag_tf_prefix'
+                ).value
+            ),
             tf_buffer=tf_buffer,
+            **shared_camera_options,
         )
+        d435_camera = CameraClient(
+            self,
+            object_pose_topic=str(
+                self.get_parameter('d435_object_pose_topic').value
+            ),
+            processed_tag_tf_prefix=str(
+                self.get_parameter(
+                    'd435_processed_tag_tf_prefix'
+                ).value
+            ),
+            tf_buffer=d405_camera.tf_buffer,
+            **shared_camera_options,
+        )
+        self.cameras = {
+            'd405': d405_camera,
+            'd435': d435_camera,
+        }
+        # Keep the current runner contract until camera-source selection is
+        # implemented. Existing Tasks therefore continue to consume D405.
+        self.camera = self.cameras['d405']
         self.navigation_client = NavigationClient(
             self,
             command_topic=str(
@@ -83,6 +123,7 @@ class PlannerNode(Node):
             self,
             self.control,
             camera=self.camera,
+            cameras=self.cameras,
             navigation=self.navigation_client,
             on_status=self._task_status,
             camera_average_enabled=bool(

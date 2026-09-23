@@ -11,8 +11,14 @@
     navigation_command_topic: /rby1/navigation/command
     navigation_state_topic: /rby1/navigation/state
 
-    # AprilTag identity/freshness input; processed pose itself comes from TF.
-    object_pose_topic: /detections
+    # Camera-specific AprilTag identity/freshness inputs. Processed poses come
+    # from the corresponding TF prefix, not from the detection message.
+    d405_object_pose_topic: /detections
+    d405_processed_tag_tf_prefix: tag_pnp_
+    d435_object_pose_topic: /d435/detections
+    d435_processed_tag_tf_prefix: d435_tag_pnp_
+
+    # Observation validity settings shared by both cameras.
     object_pose_target_frame: base
     object_pose_max_age_sec: 0.5
     object_pose_min_confidence: 0.5

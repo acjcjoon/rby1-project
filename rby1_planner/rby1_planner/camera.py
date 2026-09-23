@@ -22,6 +22,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from .observation import (
     CartesianTarget,
     ObjectObservation,
+    PoseTuple,
     observation_to_cartesian_target,
     transform_observation,
 )
@@ -34,9 +35,8 @@ OBJECT_POSE_TARGET_FRAME = 'base'
 OBJECT_POSE_QOS_DEPTH = 5
 TF_QOS_DEPTH = 5
 
-# Physical-camera pose source. To compare Depth and PnP, leave exactly one of
-# the following two assignments uncommented, then rebuild/restart planner.
-# PROCESSED_TAG_TF_PREFIX = 'tag_depth_'
+# Default physical-camera pose source. Individual CameraClient instances may
+# override this so multiple cameras can coexist in one planner process.
 PROCESSED_TAG_TF_PREFIX = 'tag_pnp_'
 
 
@@ -112,14 +112,18 @@ class CameraClient:
         minimum_confidence: float = 0.0,
         future_tolerance_sec: float = 0.05,
         tf_timeout_sec: float = 0.0,
+        processed_tag_tf_prefix: str = PROCESSED_TAG_TF_PREFIX,
         tf_buffer: Optional[Buffer] = None,
     ) -> None:
         topic = str(object_pose_topic).strip()
         target = str(target_frame).strip()
+        tag_tf_prefix = str(processed_tag_tf_prefix).strip()
         if not topic:
             raise ValueError('object_pose_topic must not be empty')
         if not target:
             raise ValueError('target_frame must not be empty')
+        if not tag_tf_prefix:
+            raise ValueError('processed_tag_tf_prefix must not be empty')
         self.max_age_sec = _duration_seconds(
             max_age_sec,
             'max_age_sec',
@@ -151,6 +155,7 @@ class CameraClient:
         self._clock = node.get_clock()
         self.object_pose_topic = topic
         self.target_frame = target
+        self.processed_tag_tf_prefix = tag_tf_prefix
         self._lock = threading.RLock()
         self._tag_detections: Dict[str, Deque[_TagDetection]] = {}
 
@@ -193,6 +198,12 @@ class CameraClient:
             self._apriltag_callback,
             qos,
         )
+
+    @property
+    def tf_buffer(self) -> Buffer:
+        """Return the TF buffer so sibling camera clients can share it."""
+
+        return self._tf_buffer
 
     def capture_marker(self) -> int:
         """Return a ROS timestamp for selecting a later streamed detection."""
@@ -375,6 +386,42 @@ class CameraClient:
         with self._lock:
             return self._last_unavailable.get(str(object_id).strip(), '')
 
+    def lookup_frame_pose(
+        self,
+        target_frame: str,
+        source_frame: str,
+    ) -> PoseTuple:
+        """Return the latest target-from-source TF pose."""
+
+        target = str(target_frame).strip()
+        source = str(source_frame).strip()
+        if not target or not source:
+            raise ValueError('TF frame names must not be empty')
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                target,
+                source,
+                Time(clock_type=self._clock.clock_type),
+                timeout=Duration(seconds=self.tf_timeout_sec),
+            )
+        except TransformException as exc:
+            raise ObservationUnavailable(
+                f'cannot transform {source!r} to {target!r}: {exc}'
+            ) from exc
+        return (
+            (
+                transform.transform.translation.x,
+                transform.transform.translation.y,
+                transform.transform.translation.z,
+            ),
+            (
+                transform.transform.rotation.x,
+                transform.transform.rotation.y,
+                transform.transform.rotation.z,
+                transform.transform.rotation.w,
+            ),
+        )
+
     def _apriltag_callback(self, message: AprilTagDetectionArray) -> None:
         """Cache tag identities; their poses are deliberately read from TF."""
 
@@ -411,13 +458,13 @@ class CameraClient:
                     raise ValueError('detection.hamming must be nonnegative')
 
                 object_id = f'tag_{tag_id}'
-                # The camera publishes both tag_depth_<id> and tag_pnp_<id>.
-                # Select the one planner should consume by changing only
-                # PROCESSED_TAG_TF_PREFIX near the top of this file. Do not
-                # fall back to apriltag_ros's raw tag36h11:<id> TF: a fallback
+                # Each camera client selects one configured processed TF
+                # namespace. Do not fall back to apriltag_ros's raw TF: that
                 # could make a test appear successful while using the wrong
                 # camera output.
-                tag_frames = (f'{PROCESSED_TAG_TF_PREFIX}{tag_id}',)
+                tag_frames = (
+                    f'{self.processed_tag_tf_prefix}{tag_id}',
+                )
                 sample = _TagDetection(
                     object_id=object_id,
                     source_frame=source_frame,

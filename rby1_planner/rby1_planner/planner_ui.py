@@ -8,8 +8,10 @@ from .qt_compat import QLabel, QWidget
 from .scenario_ui import ScenarioPanel
 
 from .task_commands import (
+    CameraFrameLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
     CameraLinearAbsoluteStep,
+    CameraMoveToTagStep,
     CommandKind,
     MoveToStep,
     RewindStep,
@@ -133,17 +135,42 @@ class PlannerScenarioPanel(ScenarioPanel):
                     f'timeout={command.timeout_sec:.1f} s'
                 )
                 continue
-            if isinstance(command, CameraLinearAbsoluteStep):
-                step_name = (
-                    'camera_linear_absolute_print'
-                    if isinstance(command, CameraLinearAbsolutePrintStep)
-                    else 'camera_linear_absolute'
+            if isinstance(command, CameraMoveToTagStep):
+                lines.append(
+                    f'{index}. camera_move_to_tag: '
+                    f'source={command.camera_source}; '
+                    f'object={command.object_id}; '
+                    f'desired_tag_in_base=('
+                    f'{command.desired_tag_x:.3f}, '
+                    f'{command.desired_tag_y:.3f}) m; '
+                    f'yaw={command.relative_yaw:.3f} rad; '
+                    f'nav_timeout={command.navigation_timeout_sec:.1f} s'
                 )
+                continue
+            if isinstance(command, CameraLinearAbsoluteStep):
+                if isinstance(command, CameraFrameLinearAbsoluteStep):
+                    step_name = 'camera_frame_linear_absolute'
+                    offset_name = 'object_to_controlled_xyz'
+                    offset = command.object_to_controlled_frame_position
+                    frame_detail = (
+                        f'; controlled_frame={command.controlled_frame}; '
+                        f'preserve_ee_orientation='
+                        f'{command.preserve_end_effector_orientation}'
+                    )
+                else:
+                    step_name = (
+                        'camera_linear_absolute_print'
+                        if isinstance(command, CameraLinearAbsolutePrintStep)
+                        else 'camera_linear_absolute'
+                    )
+                    offset_name = 'object_to_ee_xyz'
+                    offset = command.object_to_end_effector_position
+                    frame_detail = ''
                 detail = (
+                    f'source={command.camera_source}; '
                     f'{command.group} <- {command.object_id}; '
                     f'timeout={command.detection_timeout_sec:.3f}s; '
-                    f'object_to_ee_xyz='
-                    f'{list(command.object_to_end_effector_position)}'
+                    f'{offset_name}={list(offset)}{frame_detail}'
                 )
                 lines.append(
                     f'{index}. {step_name}: {detail}'
