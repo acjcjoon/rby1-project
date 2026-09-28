@@ -9,7 +9,8 @@ try:
         QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
         QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
         QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-        QListWidget, QSizePolicy, QSpacerItem, QTabWidget, QVBoxLayout, QWidget,
+        QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
+        QVBoxLayout, QWidget,
     )
     QT_BINDING = 'PySide6'
 except ImportError:
@@ -20,7 +21,8 @@ except ImportError:
             QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
             QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
             QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-            QListWidget, QSizePolicy, QSpacerItem, QTabWidget, QVBoxLayout, QWidget,
+            QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
+            QVBoxLayout, QWidget,
         )
         QT_BINDING = 'PyQt5'
     except ImportError as exc:
@@ -48,6 +50,10 @@ def alignment(name: str):
 
 def focus_policy(name: str):
     return enum_value(Qt, 'FocusPolicy', name)
+
+
+def orientation(name: str):
+    return enum_value(Qt, 'Orientation', name)
 
 
 def app_exec(app: QApplication) -> int:

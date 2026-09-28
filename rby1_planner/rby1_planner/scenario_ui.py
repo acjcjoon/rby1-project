@@ -274,6 +274,11 @@ class ScenarioPanel(QWidget):
                 CommandKind.GRIPPER_CLOSE,
                 CommandKind.GRIPPER_SET,
             ):
+                speed = (
+                    f"{float(command.velocity_limit):.3f} ratio/s"
+                    if command.velocity_limit is not None
+                    else "default"
+                )
                 target = (
                     f"; ratio={float(command.values[0]):.3f}"
                     if command.kind is CommandKind.GRIPPER_SET
@@ -281,10 +286,18 @@ class ScenarioPanel(QWidget):
                 )
                 detail = (
                     f"{command.group}{target}; "
+                    f"speed={speed}; "
                     f"settle={float(command.seconds or 0.0):.3f} s"
                 )
             elif command.kind is CommandKind.GRIPPER_OPEN:
-                detail = f"{command.group}; wait for open target"
+                speed = (
+                    f"{float(command.velocity_limit):.3f} ratio/s"
+                    if command.velocity_limit is not None
+                    else "default"
+                )
+                detail = (
+                    f"{command.group}; speed={speed}; wait for open target"
+                )
             elif command.kind is CommandKind.DELAY:
                 detail = f"{float(command.seconds or 0.0):.3f} s"
             elif command.joint_targets:

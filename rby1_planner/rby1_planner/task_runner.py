@@ -235,6 +235,17 @@ class PlannerTaskRunner:
             if self._command_id is not None:
                 command_state = self.backend.poll_task_command(self._command_id)
                 if command_state.status is TaskCommandStatus.PENDING:
+                    timeout_remaining = command_state.timeout_remaining_sec
+                    if timeout_remaining is not None:
+                        backend_deadline = (
+                            now
+                            + timeout_remaining
+                            + self.MOTION_TIMEOUT_MARGIN_SEC
+                        )
+                        self._command_deadline = max(
+                            self._command_deadline,
+                            backend_deadline,
+                        )
                     if now > self._command_deadline:
                         raise RuntimeError(
                             'motion command timed out'
@@ -420,9 +431,6 @@ class PlannerTaskRunner:
         state: TaskBackendState,
         now: float,
     ) -> None:
-        if self.navigation is None:
-            raise RuntimeError('navigation client is unavailable')
-
         if self._pending_camera_navigation_goal is None:
             if state.stream_enabled is not False:
                 self._request_stream_transition(False, now)
@@ -442,10 +450,54 @@ class PlannerTaskRunner:
             sine = math.sin(yaw)
             desired_x = command.desired_tag_x
             desired_y = command.desired_tag_y
+            if command.desired_tag_frame != 'base':
+                lookup = getattr(camera, 'lookup_frame_pose', None)
+                if not callable(lookup):
+                    raise RuntimeError('camera must provide lookup_frame_pose()')
+                frame_position, frame_orientation = lookup(
+                    'base',
+                    command.desired_tag_frame,
+                )
+                desired_offset = rotate_vector(
+                    (desired_x, desired_y, 0.0),
+                    frame_orientation,
+                )
+                desired_x = frame_position[0] + desired_offset[0]
+                desired_y = frame_position[1] + desired_offset[1]
             rotated_desired_x = cosine * desired_x - sine * desired_y
             rotated_desired_y = sine * desired_x + cosine * desired_y
-            move_x = observation.position[0] - rotated_desired_x
-            move_y = observation.position[1] - rotated_desired_y
+            error_x = observation.position[0] - rotated_desired_x
+            error_y = observation.position[1] - rotated_desired_y
+            if not all(math.isfinite(value) for value in (error_x, error_y)):
+                raise RuntimeError('camera-derived base alignment must be finite')
+
+            # Keep the allowed residual in the step-start base axes, not in
+            # camera/EE axes. Project onto the rectangle to minimize travel.
+            residual_x = min(0.0, max(-command.threshold_x_minus, error_x))
+            residual_y = min(command.threshold_y_plus, max(0.0, error_y))
+            move_x = error_x - residual_x
+            move_y = error_y - residual_y
+            # Treat floating-point roundoff at a boundary as zero motion.
+            if math.isclose(move_x, 0.0, abs_tol=1e-9):
+                move_x = 0.0
+            if math.isclose(move_y, 0.0, abs_tol=1e-9):
+                move_y = 0.0
+            self.on_status(
+                f'Camera base alignment [{command.camera_source}] '
+                f'{command.object_id!r} relative to '
+                f'{command.desired_tag_frame!r}: '
+                f'error_base=({error_x:.3f}, {error_y:.3f}) m, '
+                f'allowed_x=[{-command.threshold_x_minus:.3f}, 0.000] m, '
+                f'allowed_y=[0.000, {command.threshold_y_plus:.3f}] m'
+            )
+            if move_x == 0.0 and move_y == 0.0 and yaw == 0.0:
+                self.on_status(
+                    'Camera base alignment within thresholds; '
+                    'skipping base navigation'
+                )
+                self._complete_step()
+                return
+
             translation = math.hypot(move_x, move_y)
             if translation > command.max_translation_m:
                 raise RuntimeError(
@@ -465,10 +517,16 @@ class PlannerTaskRunner:
                 f'Camera base goal [{command.camera_source}] '
                 f'{command.object_id!r}: tag=('
                 f'{observation.position[0]:.3f}, '
-                f'{observation.position[1]:.3f}) m, move=('
-                f'{move_x:.3f}, {move_y:.3f}, {yaw:.3f})'
+                f'{observation.position[1]:.3f}) m, desired_base=('
+                f'{desired_x:.3f}, {desired_y:.3f}) m from '
+                f'{command.desired_tag_frame!r}, move=('
+                f'{move_x:.3f}, {move_y:.3f}, {yaw:.3f}), '
+                f'planned_residual_base=({residual_x:.3f}, '
+                f'{residual_y:.3f}) m'
             )
 
+        if self.navigation is None:
+            raise RuntimeError('navigation client is unavailable')
         if state.stream_enabled is not True:
             self._request_stream_transition(True, now)
             return
@@ -1129,6 +1187,23 @@ class PlannerTaskRunner:
                     translation_distance / float(command.linear_velocity),
                     rotation_distance / float(command.angular_velocity),
                 )
+        elif command.kind in (
+            CommandKind.GRIPPER_OPEN,
+            CommandKind.GRIPPER_CLOSE,
+            CommandKind.GRIPPER_SET,
+        ):
+            gripper_expected = 0.0
+            if command.velocity_limit is not None:
+                # Gripper feedback may be unavailable or blocked by an
+                # object, so conservatively budget for a complete normalized
+                # stroke.
+                gripper_expected = 1.0 / float(command.velocity_limit)
+            if command.kind in (
+                CommandKind.GRIPPER_CLOSE,
+                CommandKind.GRIPPER_SET,
+            ):
+                gripper_expected += float(command.seconds or 0.0)
+            expected = max(expected, gripper_expected)
 
         state_aware_timeout = (
             expected * self.MOTION_TIMEOUT_SCALE

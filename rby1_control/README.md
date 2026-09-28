@@ -39,3 +39,16 @@ thread so a slow RPC cannot block the ROS executor.
 The package deliberately has no `control_ui`, debug launch, frontend node, or
 Qt dependency. The operator UI and all task-planning behavior live in
 `rby1_planner`.
+
+## Gripper speed trajectories
+
+Task and manual gripper commands may supply a maximum normalized speed in
+close-ratio units per second. For example, `0.5` means at most half of the
+calibrated stroke per second. `GripperController` samples an acceleration-
+limited trapezoidal profile (triangular for short moves); acceleration remains
+a shared backend setting.
+
+The defaults in `config/default.yaml` are `0.5 ratio/s`, `1.0 ratio/s` maximum,
+`1.0 ratio/s^2` acceleration, and a 20 Hz trajectory update rate. Close/set
+settling starts after the position reference reaches its endpoint. Open waits
+for measured feedback to reach the requested target.

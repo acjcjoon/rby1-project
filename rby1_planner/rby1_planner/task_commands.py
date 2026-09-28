@@ -357,6 +357,7 @@ class CameraMoveToTagStep:
     object_id: str
     desired_tag_x: float
     desired_tag_y: float
+    desired_tag_frame: str = 'base'
     relative_yaw: float = 0.0
     detection_timeout_sec: float = 3.0
     navigation_timeout_sec: float = 30.0
@@ -364,14 +365,25 @@ class CameraMoveToTagStep:
     max_yaw_rad: float = 0.5
     max_age_sec: Optional[float] = None
     minimum_confidence: Optional[float] = None
+    threshold_x_minus: float = 0.0
+    threshold_y_plus: float = 0.0
 
     def __post_init__(self) -> None:
         camera_source = str(self.camera_source).strip()
         object_id = str(self.object_id).strip()
+        desired_tag_frame = str(self.desired_tag_frame).strip()
         if not camera_source:
             raise ValueError('camera_source must not be empty')
         if not object_id:
             raise ValueError('object_id must not be empty')
+        if not desired_tag_frame:
+            raise ValueError('desired_tag_frame must not be empty')
+
+        for name in ('threshold_x_minus', 'threshold_y_plus'):
+            value = _finite_number(getattr(self, name), name)
+            if value < 0.0:
+                raise ValueError(f'{name} must be nonnegative')
+            object.__setattr__(self, name, value)
 
         desired_tag_x = _finite_number(
             self.desired_tag_x,
@@ -433,6 +445,7 @@ class CameraMoveToTagStep:
 
         object.__setattr__(self, 'camera_source', camera_source)
         object.__setattr__(self, 'object_id', object_id)
+        object.__setattr__(self, 'desired_tag_frame', desired_tag_frame)
         object.__setattr__(self, 'desired_tag_x', desired_tag_x)
         object.__setattr__(self, 'desired_tag_y', desired_tag_y)
         object.__setattr__(self, 'relative_yaw', relative_yaw)
@@ -580,6 +593,9 @@ class Task(_CanonicalTask):
         *,
         desired_tag_x: float,
         desired_tag_y: float,
+        desired_tag_frame: str = 'base',
+        threshold_x_minus: float = 0.0,
+        threshold_y_plus: float = 0.0,
         relative_yaw: float = 0.0,
         detection_timeout_sec: float = 3.0,
         navigation_timeout_sec: float = 30.0,
@@ -591,8 +607,17 @@ class Task(_CanonicalTask):
         """Defer a tag observation used to calculate a relative base goal.
 
         ``desired_tag_x`` and ``desired_tag_y`` describe where the tag should
-        appear in the base frame after navigation. Execution and SE(2) goal
-        calculation are implemented separately by PlannerTaskRunner.
+        appear in ``desired_tag_frame`` after navigation. That point is
+        transformed to the base frame at execution time before the SE(2) goal
+        is calculated by PlannerTaskRunner.
+
+        Thresholds are nonnegative metres in the base axes at step start,
+        independent of the axes of ``desired_tag_frame``. The permitted
+        tag-minus-goal error is X in [-threshold_x_minus, 0] and Y in
+        [0, threshold_y_plus]. Only the excess beyond this rectangle is
+        corrected. With zero translation and yaw the step skips navigation.
+        The reference frame must remain fixed relative to base during the
+        move; Z is ignored. Zero thresholds request exact XY alignment.
         """
 
         self.task_list.append(CameraMoveToTagStep(
@@ -600,6 +625,9 @@ class Task(_CanonicalTask):
             object_id=object_id,
             desired_tag_x=desired_tag_x,
             desired_tag_y=desired_tag_y,
+            desired_tag_frame=desired_tag_frame,
+            threshold_x_minus=threshold_x_minus,
+            threshold_y_plus=threshold_y_plus,
             relative_yaw=relative_yaw,
             detection_timeout_sec=detection_timeout_sec,
             navigation_timeout_sec=navigation_timeout_sec,

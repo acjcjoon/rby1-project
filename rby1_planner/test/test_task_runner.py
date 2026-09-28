@@ -359,6 +359,68 @@ def test_runner_forwards_common_gripper_commands_to_backend():
     assert not runner.active
 
 
+def test_runner_budgets_for_a_full_stroke_at_slow_gripper_speed():
+    node = FakeNode()
+    backend = FakeBackend()
+    runner = PlannerTaskRunner(node, backend, clock=lambda: backend.now)
+
+    runner.start(Task('slow-gripper').open_gripper('left', 0.05).build())
+
+    # Full stroke estimate: 1 / 0.05 = 20 s. The common motion timeout
+    # policy applies a 3x scale and a 5 s margin.
+    assert runner._command_deadline - backend.now == pytest.approx(65.0)
+
+
+def test_runner_fallback_timeout_includes_gripper_settle_duration():
+    node = FakeNode()
+    backend = FakeBackend()
+    runner = PlannerTaskRunner(node, backend, clock=lambda: backend.now)
+
+    runner.start(
+        Task('slow-close')
+        .close_gripper('left', 0.05, settle_time_sec=2.0)
+        .build()
+    )
+
+    # Full stroke (20 s) plus settle (2 s), under the common 3x + 5 s
+    # fallback policy.
+    assert runner._command_deadline - backend.now == pytest.approx(71.0)
+
+
+def test_pending_backend_timeout_hint_extends_runner_deadline():
+    node = FakeNode()
+    backend = FakeBackend()
+    runner = PlannerTaskRunner(node, backend, clock=lambda: backend.now)
+
+    runner.start(Task('gripper').close_gripper('left').build())
+    initial_deadline = runner._command_deadline
+    backend.command_states['command-0'] = TaskCommandState(
+        TaskCommandStatus.PENDING,
+        'tracking profile',
+        timeout_remaining_sec=20.0,
+    )
+
+    backend.now = initial_deadline + 0.1
+    runner.tick()
+
+    assert runner.active
+    first_backend_deadline = backend.now + 20.0 + 5.0
+    assert runner._command_deadline == pytest.approx(first_backend_deadline)
+
+    # The backend can move its deadline later when post-profile settling
+    # begins. A later poll must extend the planner deadline as well.
+    backend.now += 10.0
+    backend.command_states['command-0'] = TaskCommandState(
+        TaskCommandStatus.PENDING,
+        'settling',
+        timeout_remaining_sec=30.0,
+    )
+    runner.tick()
+
+    assert runner.active
+    assert runner._command_deadline == pytest.approx(backend.now + 30.0 + 5.0)
+
+
 def test_stop_while_waiting_for_base_stream_requests_stream_off():
     node = FakeNode()
     backend = FakeBackend()

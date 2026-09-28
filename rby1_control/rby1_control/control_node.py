@@ -210,6 +210,23 @@ class RBY1ControlNode(Node):
         self.declare_parameter('gripper_state_timeout_sec', 1.0)
         self.declare_parameter('gripper_command_timeout_sec', 5.0)
         self.declare_parameter('gripper_goal_tolerance', 0.05)
+        self.declare_parameter(
+            'gripper_default_speed_ratio_per_sec',
+            0.5,
+        )
+        self.declare_parameter(
+            'gripper_max_speed_ratio_per_sec',
+            1.0,
+        )
+        self.declare_parameter(
+            'gripper_acceleration_ratio_per_sec2',
+            1.0,
+        )
+        self.declare_parameter(
+            'gripper_tracking_timeout_margin_sec',
+            5.0,
+        )
+        self.declare_parameter('gripper_trajectory_rate_hz', 20.0)
         self.declare_parameter('gripper_home_service', 'gripper/home')
         self.declare_parameter(
             'gripper_torque_service',
@@ -494,6 +511,37 @@ class RBY1ControlNode(Node):
             acceleration_scaling if acceleration_scaling <= 1.0 else 0.2
         )
 
+        self.gripper_default_speed_ratio_per_sec = self._positive_float(
+            self.get_parameter(
+                'gripper_default_speed_ratio_per_sec'
+            ).value,
+            fallback=0.5,
+        )
+        self.gripper_max_speed_ratio_per_sec = self._positive_float(
+            self.get_parameter(
+                'gripper_max_speed_ratio_per_sec'
+            ).value,
+            fallback=1.0,
+        )
+        if (
+            self.gripper_default_speed_ratio_per_sec
+            > self.gripper_max_speed_ratio_per_sec
+        ):
+            raise ValueError(
+                'gripper_default_speed_ratio_per_sec cannot exceed '
+                'gripper_max_speed_ratio_per_sec'
+            )
+        self.gripper_acceleration_ratio_per_sec2 = self._positive_float(
+            self.get_parameter(
+                'gripper_acceleration_ratio_per_sec2'
+            ).value,
+            fallback=1.0,
+        )
+        self.gripper_trajectory_rate_hz = self._positive_float(
+            self.get_parameter('gripper_trajectory_rate_hz').value,
+            fallback=20.0,
+        )
+
         self.gripper_controller = GripperController(
             open_ratio=float(
                 self.get_parameter('gripper_open_ratio').value
@@ -512,6 +560,19 @@ class RBY1ControlNode(Node):
             goal_tolerance=self._positive_float(
                 self.get_parameter('gripper_goal_tolerance').value,
                 fallback=0.05,
+            ),
+            default_speed_ratio_per_sec=(
+                self.gripper_default_speed_ratio_per_sec
+            ),
+            max_speed_ratio_per_sec=self.gripper_max_speed_ratio_per_sec,
+            acceleration_ratio_per_sec2=(
+                self.gripper_acceleration_ratio_per_sec2
+            ),
+            tracking_timeout_margin_sec=self._positive_float(
+                self.get_parameter(
+                    'gripper_tracking_timeout_margin_sec'
+                ).value,
+                fallback=5.0,
             ),
         )
         self._gripper_controller = self.gripper_controller
@@ -601,6 +662,7 @@ class RBY1ControlNode(Node):
         self._active_gripper_task_id: Optional[str] = None
         self._active_gripper_task_kind: Optional[CommandKind] = None
         self._active_gripper_feedback_marker: Optional[int] = None
+        self._active_gripper_settle_duration_sec: Optional[float] = None
         self._active_gripper_settle_deadline: Optional[float] = None
         self._runtime_safety_stop_latched = False
 
@@ -792,7 +854,7 @@ class RBY1ControlNode(Node):
             self._enforce_runtime_motion_safety,
         )
         self.gripper_status_timer = self.create_timer(
-            0.1,
+            1.0 / self.gripper_trajectory_rate_hz,
             self._check_gripper_command,
         )
         self.transport = ControlTransport(self)
@@ -986,13 +1048,47 @@ class RBY1ControlNode(Node):
                 )
             return
 
+        command_target = self._gripper_controller.take_command_target()
+        if command_target is not None:
+            self._publish_gripper_target(command_target)
+
         if (
             self._active_gripper_task_id is None
             or self._active_gripper_task_kind
             not in (CommandKind.GRIPPER_CLOSE, CommandKind.GRIPPER_SET)
-            or self._active_gripper_settle_deadline is None
-            or time.monotonic() < self._active_gripper_settle_deadline
         ):
+            return
+
+        gripper_status = self._gripper_controller.status()
+        if gripper_status.profile_active:
+            return
+
+        now = time.monotonic()
+        if self._active_gripper_settle_deadline is None:
+            settle_duration = self._active_gripper_settle_duration_sec
+            if settle_duration is None:
+                self._finish_active_gripper_task(
+                    TaskCommandStatus.FAILED,
+                    'gripper settle duration is unavailable',
+                )
+                return
+            # Require feedback received after the final trajectory reference,
+            # not merely any sample that arrived while the gripper was moving.
+            self._active_gripper_feedback_marker = (
+                gripper_status.feedback_sequence
+            )
+            try:
+                self._gripper_controller.begin_settle(settle_duration)
+            except GripperCommandError as exc:
+                self._finish_active_gripper_task(
+                    TaskCommandStatus.FAILED,
+                    str(exc),
+                )
+                return
+            self._active_gripper_settle_deadline = now + settle_duration
+            return
+
+        if now < self._active_gripper_settle_deadline:
             return
 
         marker = self._active_gripper_feedback_marker
@@ -2215,20 +2311,27 @@ class RBY1ControlNode(Node):
                 target = self._gripper_controller.command(
                     'open',
                     str(command.group),
+                    speed=command.velocity_limit,
                 )
             elif command.kind is CommandKind.GRIPPER_CLOSE:
                 target = self._gripper_controller.command(
                     'close',
                     str(command.group),
+                    speed=command.velocity_limit,
                 )
             elif command.kind is CommandKind.GRIPPER_SET:
                 target = self._gripper_controller.command_ratio(
                     float(command.values[0]),
                     str(command.group),
+                    speed=command.velocity_limit,
                 )
             else:  # Guarded by start_task_command(), retained defensively.
                 raise ValueError('unsupported gripper Task command')
-            self._publish_gripper_target(target)
+            initial_reference = (
+                self._gripper_controller.take_command_target()
+            )
+            if initial_reference is not None:
+                self._publish_gripper_target(initial_reference)
         except Exception as exc:
             self._task_commands[command_id] = TaskCommandState(
                 TaskCommandStatus.FAILED,
@@ -2259,8 +2362,8 @@ class RBY1ControlNode(Node):
         self._active_gripper_feedback_marker = (
             status_before.feedback_sequence
         )
-        self._active_gripper_settle_deadline = (
-            time.monotonic() + float(command.seconds)
+        self._active_gripper_settle_duration_sec = (
+            float(command.seconds)
             if command.kind in (
                 CommandKind.GRIPPER_CLOSE,
                 CommandKind.GRIPPER_SET,
@@ -2271,15 +2374,29 @@ class RBY1ControlNode(Node):
 
     def poll_task_command(self, command_id: str) -> TaskCommandState:
         try:
-            return self._task_commands[command_id]
+            state = self._task_commands[command_id]
         except KeyError as exc:
             raise KeyError(f'unknown Task command: {command_id}') from exc
+
+        if (
+            command_id == self._active_gripper_task_id
+            and state.status is TaskCommandStatus.PENDING
+        ):
+            deadline = self._gripper_controller.status().command_deadline
+            if deadline is not None:
+                return TaskCommandState(
+                    state.status,
+                    state.message,
+                    max(float(deadline) - time.monotonic(), 0.0),
+                )
+        return state
 
     def cancel_task_command(self, command_id: str) -> None:
         if command_id == self._active_gripper_task_id:
             hold_target = self._gripper_controller.cancel_and_hold()
-            if hold_target is not None:
-                self._publish_gripper_target(hold_target)
+            pending_hold = self._gripper_controller.take_command_target()
+            if pending_hold is not None:
+                self._publish_gripper_target(pending_hold)
             self._set_task_command_result(
                 command_id,
                 TaskCommandStatus.CANCELED,
@@ -2307,9 +2424,10 @@ class RBY1ControlNode(Node):
     ) -> None:
         command_id = self._active_gripper_task_id
         if status is TaskCommandStatus.FAILED:
-            hold_target = self._gripper_controller.cancel_and_hold()
-            if hold_target is not None:
-                self._publish_gripper_target(hold_target)
+            self._gripper_controller.cancel_and_hold()
+            pending_hold = self._gripper_controller.take_command_target()
+            if pending_hold is not None:
+                self._publish_gripper_target(pending_hold)
         self._set_task_command_result(command_id, status, message)
         if command_id is not None:
             level = (
@@ -2324,6 +2442,7 @@ class RBY1ControlNode(Node):
         self._active_gripper_task_id = None
         self._active_gripper_task_kind = None
         self._active_gripper_feedback_marker = None
+        self._active_gripper_settle_duration_sec = None
         self._active_gripper_settle_deadline = None
 
     def _set_task_command_result(
@@ -2564,12 +2683,51 @@ class RBY1ControlNode(Node):
                 'Active motion cancel was not accepted.',
             )
 
+    def _cancel_gripper_motion(self) -> None:
+        """Stop an active gripper trajectory and finish its Task, if any."""
+
+        status = self._gripper_controller.status()
+        command_id = self._active_gripper_task_id
+        gripper_active = status.motion_active or status.profile_active
+        gripper_command_active = gripper_active or command_id is not None
+        hold_target = None
+
+        if gripper_command_active:
+            hold_target = self._gripper_controller.cancel_and_hold()
+            pending_hold = self._gripper_controller.take_command_target()
+            if pending_hold is not None:
+                self._publish_gripper_target(pending_hold)
+
+        if command_id is not None:
+            if hold_target is not None:
+                message = (
+                    'Canceled by common motion stop; holding current '
+                    'gripper position'
+                )
+            elif gripper_command_active:
+                message = (
+                    'Canceled by common motion stop; fresh hold position '
+                    'unavailable'
+                )
+            else:
+                message = 'Canceled by common motion stop'
+            self._set_task_command_result(
+                command_id,
+                TaskCommandStatus.CANCELED,
+                message,
+            )
+            self._clear_active_gripper_task()
+
     def cancel_motion(self) -> None:
         """Cancel robot control through the driver's Trigger service.
 
         The driver's cancel_control service is intentionally used here as
         the safety-oriented common cancel path for Joint/Cartesian control.
         """
+
+        # Gripper commands use a topic rather than the driver's motion action.
+        # Stop their local trajectory before any service availability return.
+        self._cancel_gripper_motion()
 
         if self.cancel_control_client is None:
             return
@@ -2642,20 +2800,29 @@ class RBY1ControlNode(Node):
         self,
         action: str,
         side: str = 'both',
+        *,
+        speed: Optional[float] = None,
     ) -> Tuple[float, float]:
-        """Send a validated gripper preset to the hardware driver."""
+        """Start a speed-limited gripper preset trajectory."""
 
         if self._active_gripper_task_id is not None:
             raise RuntimeError(
                 'manual gripper commands are disabled while a gripper Task '
                 'command is active'
             )
-        target = self._gripper_controller.command(action, side)
-        self._publish_gripper_target(target)
+        target = self._gripper_controller.command(
+            action,
+            side,
+            speed=speed,
+        )
+        initial_reference = self._gripper_controller.take_command_target()
+        if initial_reference is not None:
+            self._publish_gripper_target(initial_reference)
         self._push_event(
             'info',
             f'Gripper {str(action).lower()} requested for '
-            f'{str(side).lower()}: target={list(target)}.',
+            f'{str(side).lower()}: target={list(target)}, '
+            f'speed={speed if speed is not None else "default"} ratio/s.',
         )
         return target
 
@@ -3485,6 +3652,16 @@ class RBY1ControlNode(Node):
             gripper_target=gripper.target,
             gripper_motion_active=gripper.motion_active,
             gripper_error=gripper.error,
+            gripper_default_speed_ratio_per_sec=(
+                self.gripper_default_speed_ratio_per_sec
+            ),
+            gripper_max_speed_ratio_per_sec=(
+                self.gripper_max_speed_ratio_per_sec
+            ),
+            gripper_acceleration_ratio_per_sec2=(
+                self.gripper_acceleration_ratio_per_sec2
+            ),
+            gripper_trajectory_rate_hz=self.gripper_trajectory_rate_hz,
             gripper_power_voltages=gripper_power_voltages,
             gripper_power_state_fresh=gripper_power_fresh,
             gripper_power_12v=gripper_power_12v,

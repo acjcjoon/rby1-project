@@ -140,9 +140,12 @@ class PlannerScenarioPanel(ScenarioPanel):
                     f'{index}. camera_move_to_tag: '
                     f'source={command.camera_source}; '
                     f'object={command.object_id}; '
-                    f'desired_tag_in_base=('
+                    f'desired_tag_in_{command.desired_tag_frame}=('
                     f'{command.desired_tag_x:.3f}, '
                     f'{command.desired_tag_y:.3f}) m; '
+                    f'allowed_error_in_base: '
+                    f'x=[{-command.threshold_x_minus:.3f}, 0.000] m, '
+                    f'y=[0.000, {command.threshold_y_plus:.3f}] m; '
                     f'yaw={command.relative_yaw:.3f} rad; '
                     f'nav_timeout={command.navigation_timeout_sec:.1f} s'
                 )
@@ -180,6 +183,11 @@ class PlannerScenarioPanel(ScenarioPanel):
                 CommandKind.GRIPPER_CLOSE,
                 CommandKind.GRIPPER_SET,
             ):
+                speed = (
+                    f'{float(command.velocity_limit):.3f} ratio/s'
+                    if command.velocity_limit is not None
+                    else 'default'
+                )
                 target = (
                     f'; ratio={float(command.values[0]):.3f}'
                     if command.kind is CommandKind.GRIPPER_SET
@@ -187,10 +195,18 @@ class PlannerScenarioPanel(ScenarioPanel):
                 )
                 detail = (
                     f'{command.group}{target}; '
+                    f'speed={speed}; '
                     f'settle={float(command.seconds or 0.0):.3f} s'
                 )
             elif command.kind is CommandKind.GRIPPER_OPEN:
-                detail = f'{command.group}; wait for open target'
+                speed = (
+                    f'{float(command.velocity_limit):.3f} ratio/s'
+                    if command.velocity_limit is not None
+                    else 'default'
+                )
+                detail = (
+                    f'{command.group}; speed={speed}; wait for open target'
+                )
             elif command.kind is CommandKind.DELAY:
                 detail = f'{float(command.seconds or 0.0):.3f} s'
             elif command.joint_targets:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict
+from typing import Dict, Optional
 
 from std_msgs.msg import String
 
@@ -192,11 +192,19 @@ class ControlTransport:
             self.command_gripper(
                 'open',
                 str(arguments.get('side', 'both')),
+                speed=self._optional_positive_finite_argument(
+                    arguments,
+                    'speed',
+                ),
             )
         elif operation == 'close_gripper':
             self.command_gripper(
                 'close',
                 str(arguments.get('side', 'both')),
+                speed=self._optional_positive_finite_argument(
+                    arguments,
+                    'speed',
+                ),
             )
         elif operation == 'request_cartesian_snapshot':
             if not self.request_cartesian_snapshot(str(arguments.get('arm', ''))):
@@ -286,6 +294,21 @@ class ControlTransport:
             raise ValueError(f'{name} must be a finite number') from exc
         if not math.isfinite(value):
             raise ValueError(f'{name} must be a finite number')
+        return value
+
+    @classmethod
+    def _optional_positive_finite_argument(
+        cls,
+        arguments: dict,
+        name: str,
+    ) -> Optional[float]:
+        if name not in arguments:
+            return None
+        if isinstance(arguments[name], bool):
+            raise ValueError(f'{name} must be a positive finite number')
+        value = cls._finite_argument(arguments, name)
+        if value <= 0.0:
+            raise ValueError(f'{name} must be a positive finite number')
         return value
 
     def _publish_response(

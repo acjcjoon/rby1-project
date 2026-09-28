@@ -346,15 +346,29 @@ class ControlClient:
 
         self._send('home_gripper')
 
-    def open_gripper(self, side: str = 'both') -> None:
+    def open_gripper(
+        self,
+        side: str = 'both',
+        speed: Optional[float] = None,
+    ) -> None:
         """Request an open preset for one or both grippers."""
 
-        self._send('open_gripper', {'side': str(side)})
+        arguments: Dict[str, object] = {'side': str(side)}
+        if speed is not None:
+            arguments['speed'] = float(speed)
+        self._send('open_gripper', arguments)
 
-    def close_gripper(self, side: str = 'both') -> None:
+    def close_gripper(
+        self,
+        side: str = 'both',
+        speed: Optional[float] = None,
+    ) -> None:
         """Request a close preset for one or both grippers."""
 
-        self._send('close_gripper', {'side': str(side)})
+        arguments: Dict[str, object] = {'side': str(side)}
+        if speed is not None:
+            arguments['speed'] = float(speed)
+        self._send('close_gripper', arguments)
 
     def jog_joint(self, group: str, joint_index: int, delta_deg: float) -> None:
         self._send(

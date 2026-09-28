@@ -34,6 +34,14 @@
     gripper_state_timeout_sec: 1.0
     gripper_command_timeout_sec: 5.0
     gripper_goal_tolerance: 0.05
+    # Commanded gripper speed is normalized close-ratio change per second.
+    # Acceleration is shared so Task/UI callers only choose a speed. Start
+    # physical commissioning at 20 Hz and raise it only after verification.
+    gripper_default_speed_ratio_per_sec: 1.5
+    gripper_max_speed_ratio_per_sec: 2.0
+    gripper_acceleration_ratio_per_sec2: 4.0
+    gripper_trajectory_rate_hz: 100.0
+    gripper_tracking_timeout_margin_sec: 5.0
     gripper_home_service: gripper/home
     gripper_torque_service: gripper/torque_enable
 

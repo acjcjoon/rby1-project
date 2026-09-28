@@ -161,6 +161,16 @@ def backend_snapshot_to_dict(snapshot: BackendSnapshot) -> dict:
         ),
         "gripper_motion_active": snapshot.gripper_motion_active,
         "gripper_error": snapshot.gripper_error,
+        "gripper_default_speed_ratio_per_sec": (
+            snapshot.gripper_default_speed_ratio_per_sec
+        ),
+        "gripper_max_speed_ratio_per_sec": (
+            snapshot.gripper_max_speed_ratio_per_sec
+        ),
+        "gripper_acceleration_ratio_per_sec2": (
+            snapshot.gripper_acceleration_ratio_per_sec2
+        ),
+        "gripper_trajectory_rate_hz": snapshot.gripper_trajectory_rate_hz,
         "gripper_power_voltages": (
             list(snapshot.gripper_power_voltages)
             if snapshot.gripper_power_voltages is not None
@@ -215,6 +225,18 @@ def backend_snapshot_from_dict(payload: Mapping[str, Any]) -> BackendSnapshot:
             str(payload["gripper_error"])
             if payload.get("gripper_error") is not None
             else None
+        ),
+        gripper_default_speed_ratio_per_sec=_optional_float(
+            payload.get("gripper_default_speed_ratio_per_sec")
+        ),
+        gripper_max_speed_ratio_per_sec=_optional_float(
+            payload.get("gripper_max_speed_ratio_per_sec")
+        ),
+        gripper_acceleration_ratio_per_sec2=_optional_float(
+            payload.get("gripper_acceleration_ratio_per_sec2")
+        ),
+        gripper_trajectory_rate_hz=_optional_float(
+            payload.get("gripper_trajectory_rate_hz")
         ),
         gripper_power_voltages=_optional_float_pair(
             payload.get("gripper_power_voltages"),
@@ -279,16 +301,20 @@ def task_backend_state_from_dict(payload: Mapping[str, Any]) -> TaskBackendState
 
 
 def task_command_state_to_dict(state: TaskCommandState) -> dict:
-    return {
+    payload = {
         "status": state.status.value,
         "message": state.message,
     }
+    if state.timeout_remaining_sec is not None:
+        payload["timeout_remaining_sec"] = state.timeout_remaining_sec
+    return payload
 
 
 def task_command_state_from_dict(payload: Mapping[str, Any]) -> TaskCommandState:
     return TaskCommandState(
         status=TaskCommandStatus(str(payload.get("status", "pending"))),
         message=str(payload.get("message", "")),
+        timeout_remaining_sec=payload.get("timeout_remaining_sec"),
     )
 
 

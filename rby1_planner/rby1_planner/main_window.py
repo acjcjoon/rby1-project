@@ -15,6 +15,7 @@ UI event logging is written to the terminal rather than an on-screen log panel.
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Set
 
 from .scenario_ui import ScenarioPanel
@@ -36,6 +37,7 @@ from .qt_compat import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollBar,
     QTabWidget,
     QTimer,
     QVBoxLayout,
@@ -44,11 +46,14 @@ from .qt_compat import (
     enum_value,
     event_type,
     focus_policy,
+    orientation,
     qt_key,
 )
 
 
 class MainWindow(QMainWindow):
+
+    GRIPPER_SPEED_SCROLL_SCALE = 100
 
     CONTROL_STATE_NAMES = {
         0: "NONE",
@@ -103,6 +108,7 @@ class MainWindow(QMainWindow):
             for key in self.CARTESIAN_ARMS
         }
         self._latest_motion_state = {}
+        self._gripper_speed_config = None
 
         # Press-and-hold Cartesian direction control.
         # Only one Cartesian hold command is active at a time because the
@@ -751,9 +757,39 @@ class MainWindow(QMainWindow):
 
         command_group = QGroupBox("Open / Close")
         command_layout = QGridLayout(command_group)
-        command_layout.addWidget(QLabel("Side"), 0, 0)
-        command_layout.addWidget(QLabel("Open"), 0, 1)
-        command_layout.addWidget(QLabel("Close"), 0, 2)
+        self.gripper_speed = QDoubleSpinBox()
+        self.gripper_speed.setObjectName("gripperSpeed")
+        self.gripper_speed.setDecimals(2)
+        self.gripper_speed.setRange(0.01, 2.0)
+        self.gripper_speed.setSingleStep(0.05)
+        self.gripper_speed.setValue(1.5)
+        self.gripper_speed.setSuffix(" ratio/s")
+        self.gripper_speed_bar = QScrollBar(orientation("Horizontal"))
+        self.gripper_speed_bar.setObjectName("gripperSpeedBar")
+        self.gripper_speed_bar.setRange(1, 200)
+        self.gripper_speed_bar.setSingleStep(5)
+        self.gripper_speed_bar.setPageStep(10)
+        self.gripper_speed_bar.setValue(150)
+        self.gripper_speed_bar.setToolTip(
+            "Drag the thumb or use the arrow buttons to adjust speed"
+        )
+        self.gripper_speed_bar.valueChanged.connect(
+            self._set_gripper_speed_from_bar
+        )
+        self.gripper_speed.valueChanged.connect(
+            self._set_gripper_speed_bar_from_spin
+        )
+        speed_control = QWidget()
+        speed_layout = QHBoxLayout(speed_control)
+        speed_layout.setContentsMargins(0, 0, 0, 0)
+        speed_layout.setSpacing(6)
+        speed_layout.addWidget(self.gripper_speed_bar, 1)
+        speed_layout.addWidget(self.gripper_speed)
+        command_layout.addWidget(QLabel("Speed"), 0, 0)
+        command_layout.addWidget(speed_control, 0, 1, 1, 2)
+        command_layout.addWidget(QLabel("Side"), 1, 0)
+        command_layout.addWidget(QLabel("Open"), 1, 1)
+        command_layout.addWidget(QLabel("Close"), 1, 2)
         self.gripper_command_buttons = []
         for row, (side, label) in enumerate(
             (
@@ -761,18 +797,24 @@ class MainWindow(QMainWindow):
                 ("right", "Right"),
                 ("left", "Left"),
             ),
-            start=1,
+            start=2,
         ):
             open_button = QPushButton("OPEN")
             close_button = QPushButton("CLOSE")
             open_button.clicked.connect(
                 lambda _checked=False, selected=side: (
-                    self.backend.open_gripper(selected)
+                    self.backend.open_gripper(
+                        selected,
+                        self.gripper_speed.value(),
+                    )
                 )
             )
             close_button.clicked.connect(
                 lambda _checked=False, selected=side: (
-                    self.backend.close_gripper(selected)
+                    self.backend.close_gripper(
+                        selected,
+                        self.gripper_speed.value(),
+                    )
                 )
             )
             open_button.setEnabled(False)
@@ -783,6 +825,8 @@ class MainWindow(QMainWindow):
             command_layout.addWidget(QLabel(label), row, 0)
             command_layout.addWidget(open_button, row, 1)
             command_layout.addWidget(close_button, row, 2)
+
+        self._update_gripper_speed_tooltip(1.5, 2.0, 4.0, 50.0)
 
         note = QLabel(
             "Gripper power is fixed at 12 V. HOME is enabled only after "
@@ -2087,8 +2131,77 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # Backend state rendering
     # ==================================================================
+    def _set_gripper_speed_from_bar(self, value: int) -> None:
+        self.gripper_speed.setValue(
+            float(value) / self.GRIPPER_SPEED_SCROLL_SCALE
+        )
+
+    def _set_gripper_speed_bar_from_spin(self, value: float) -> None:
+        self.gripper_speed_bar.setValue(round(
+            float(value) * self.GRIPPER_SPEED_SCROLL_SCALE
+        ))
+
+    def _update_gripper_speed_tooltip(
+        self,
+        default_speed: float,
+        maximum_speed: float,
+        acceleration: float,
+        rate_hz: float,
+    ) -> None:
+        text = (
+            f"Backend YAML: default={default_speed:g} ratio/s, "
+            f"max={maximum_speed:g} ratio/s, "
+            f"acceleration={acceleration:g} ratio/s², "
+            f"update={rate_hz:g} Hz"
+        )
+        self.gripper_speed.setToolTip(text)
+        self.gripper_speed_bar.setToolTip(text)
+
+    def _sync_gripper_speed_config(self, snapshot) -> None:
+        values = (
+            snapshot.gripper_default_speed_ratio_per_sec,
+            snapshot.gripper_max_speed_ratio_per_sec,
+            snapshot.gripper_acceleration_ratio_per_sec2,
+            snapshot.gripper_trajectory_rate_hz,
+        )
+        if any(value is None for value in values):
+            return
+        config = tuple(float(value) for value in values)
+        if (
+            not all(math.isfinite(value) and value > 0.0 for value in config)
+            or config[0] > config[1]
+            or config == self._gripper_speed_config
+        ):
+            return
+
+        default_speed, maximum_speed, acceleration, rate_hz = config
+        maximum_units = max(
+            1,
+            round(maximum_speed * self.GRIPPER_SPEED_SCROLL_SCALE),
+        )
+        default_units = min(
+            maximum_units,
+            max(
+                1,
+                round(default_speed * self.GRIPPER_SPEED_SCROLL_SCALE),
+            ),
+        )
+        self.gripper_speed.setMaximum(maximum_speed)
+        self.gripper_speed_bar.setRange(1, maximum_units)
+        self.gripper_speed_bar.setValue(default_units)
+        self.gripper_speed.setValue(default_speed)
+        self._update_gripper_speed_tooltip(
+            default_speed,
+            maximum_speed,
+            acceleration,
+            rate_hz,
+        )
+        self._gripper_speed_config = config
+
     def refresh_backend_status(self) -> None:
         snapshot = self.backend.snapshot()
+
+        self._sync_gripper_speed_config(snapshot)
 
         self.backend_value.setText(
             self.backend_name
@@ -2473,6 +2586,28 @@ class MainWindow(QMainWindow):
                 border: 1px solid #4b5563;
                 border-radius: 4px;
                 padding: 3px;
+            }
+
+            QScrollBar#gripperSpeedBar:horizontal {
+                background: #171a1f;
+                border: 1px solid #4b5563;
+                border-radius: 5px;
+                height: 18px;
+            }
+
+            QScrollBar#gripperSpeedBar::handle:horizontal {
+                background: #657184;
+                border-radius: 4px;
+                min-width: 24px;
+            }
+
+            QScrollBar#gripperSpeedBar::handle:horizontal:hover {
+                background: #7f8da3;
+            }
+
+            QScrollBar#gripperSpeedBar::add-page:horizontal,
+            QScrollBar#gripperSpeedBar::sub-page:horizontal {
+                background: transparent;
             }
 
             QListWidget::item:selected {

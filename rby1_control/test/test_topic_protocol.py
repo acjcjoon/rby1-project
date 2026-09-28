@@ -5,6 +5,8 @@ import pytest
 from rby1_control.backend_contract import (
     BackendSnapshot,
     TaskBackendState,
+    TaskCommandState,
+    TaskCommandStatus,
     VelocityCommand,
 )
 from rby1_control.command_model import CommandKind, TaskCommand
@@ -16,6 +18,8 @@ from rby1_control.topic_protocol import (
     encode_message,
     task_backend_state_from_dict,
     task_backend_state_to_dict,
+    task_command_state_from_dict,
+    task_command_state_to_dict,
     task_command_from_dict,
     task_command_to_dict,
 )
@@ -101,6 +105,68 @@ def test_task_command_wire_round_trip(command):
     assert task_command_from_dict(task_command_to_dict(command)) == command
 
 
+@pytest.mark.parametrize(
+    ("kind", "values", "seconds"),
+    [
+        (CommandKind.GRIPPER_OPEN, (), None),
+        (CommandKind.GRIPPER_CLOSE, (), 1.0),
+        (CommandKind.GRIPPER_SET, (0.6,), 1.0),
+    ],
+)
+def test_gripper_velocity_limit_wire_round_trip(kind, values, seconds):
+    command = TaskCommand(
+        kind=kind,
+        group="left",
+        values=values,
+        velocity_limit=0.25,
+        seconds=seconds,
+    )
+
+    payload = task_command_to_dict(command)
+
+    assert payload["velocity_limit"] == pytest.approx(0.25)
+    assert task_command_from_dict(payload) == command
+
+
+@pytest.mark.parametrize(
+    "velocity_limit",
+    [0.0, -0.1, float("nan"), float("inf"), float("-inf"), True],
+)
+def test_gripper_rejects_non_positive_or_non_finite_velocity_limit(
+    velocity_limit,
+):
+    with pytest.raises(ValueError, match="velocity_limit"):
+        TaskCommand(
+            kind=CommandKind.GRIPPER_OPEN,
+            group="left",
+            velocity_limit=velocity_limit,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("minimum_time", 1.0),
+        ("acceleration_limit", 1.0),
+        ("linear_velocity", 1.0),
+        ("angular_velocity", 1.0),
+        ("acceleration_scaling", 1.0),
+    ],
+)
+def test_gripper_velocity_limit_does_not_allow_other_motion_fields(
+    field,
+    value,
+):
+    arguments = {
+        "kind": CommandKind.GRIPPER_OPEN,
+        "group": "left",
+        "velocity_limit": 0.25,
+        field: value,
+    }
+    with pytest.raises(ValueError, match="incompatible motion fields"):
+        TaskCommand(**arguments)
+
+
 def test_backend_snapshot_wire_round_trip():
     snapshot = BackendSnapshot(
         namespace="/rby1",
@@ -123,6 +189,10 @@ def test_backend_snapshot_wire_round_trip():
         gripper_target=(0.0, 1.0),
         gripper_motion_active=True,
         gripper_error=None,
+        gripper_default_speed_ratio_per_sec=1.5,
+        gripper_max_speed_ratio_per_sec=2.0,
+        gripper_acceleration_ratio_per_sec2=4.0,
+        gripper_trajectory_rate_hz=50.0,
         gripper_power_voltages=(12.0, 12.0),
         gripper_power_state_fresh=True,
         gripper_power_12v=True,
@@ -137,6 +207,10 @@ def test_backend_snapshot_accepts_state_without_gripper_fields():
     assert snapshot.gripper_positions is None
     assert snapshot.gripper_target is None
     assert snapshot.gripper_motion_active is False
+    assert snapshot.gripper_default_speed_ratio_per_sec is None
+    assert snapshot.gripper_max_speed_ratio_per_sec is None
+    assert snapshot.gripper_acceleration_ratio_per_sec2 is None
+    assert snapshot.gripper_trajectory_rate_hz is None
     assert snapshot.gripper_power_voltages is None
     assert snapshot.gripper_power_state_fresh is False
     assert snapshot.gripper_power_12v is False
@@ -160,3 +234,34 @@ def test_task_backend_state_wire_round_trip():
         driver_safety_updated_at=None,
     )
     assert task_backend_state_from_dict(task_backend_state_to_dict(state)) == state
+
+
+def test_task_command_state_timeout_hint_round_trips_and_is_optional():
+    state = TaskCommandState(
+        TaskCommandStatus.PENDING,
+        "moving",
+        timeout_remaining_sec=12.5,
+    )
+    assert (
+        task_command_state_from_dict(task_command_state_to_dict(state))
+        == state
+    )
+
+    legacy = task_command_state_from_dict({
+        "status": "pending",
+        "message": "legacy backend",
+    })
+    assert legacy.timeout_remaining_sec is None
+    assert "timeout_remaining_sec" not in task_command_state_to_dict(legacy)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.1, float("nan"), float("inf"), float("-inf"), True, "bad"],
+)
+def test_task_command_state_rejects_invalid_timeout_hint(value):
+    with pytest.raises(ValueError, match="timeout_remaining_sec"):
+        task_command_state_from_dict({
+            "status": "pending",
+            "timeout_remaining_sec": value,
+        })

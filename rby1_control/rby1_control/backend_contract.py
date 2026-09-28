@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 
@@ -43,6 +44,10 @@ class BackendSnapshot:
     gripper_target: Optional[Tuple[float, float]] = None
     gripper_motion_active: bool = False
     gripper_error: Optional[str] = None
+    gripper_default_speed_ratio_per_sec: Optional[float] = None
+    gripper_max_speed_ratio_per_sec: Optional[float] = None
+    gripper_acceleration_ratio_per_sec2: Optional[float] = None
+    gripper_trajectory_rate_hz: Optional[float] = None
     gripper_power_voltages: Optional[Tuple[float, float]] = None
     gripper_power_state_fresh: bool = False
     gripper_power_12v: bool = False
@@ -59,6 +64,27 @@ class TaskCommandStatus(str, Enum):
 class TaskCommandState:
     status: TaskCommandStatus
     message: str = ""
+    timeout_remaining_sec: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        value = self.timeout_remaining_sec
+        if value is None:
+            return
+        if isinstance(value, bool):
+            raise ValueError(
+                "timeout_remaining_sec must be a nonnegative finite number"
+            )
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "timeout_remaining_sec must be a nonnegative finite number"
+            ) from exc
+        if not math.isfinite(normalized) or normalized < 0.0:
+            raise ValueError(
+                "timeout_remaining_sec must be a nonnegative finite number"
+            )
+        object.__setattr__(self, "timeout_remaining_sec", normalized)
 
 
 @dataclass(frozen=True)

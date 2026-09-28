@@ -160,9 +160,14 @@ class TaskCommand:
             else:
                 _number(self.seconds, "gripper settle time", positive=True)
 
+            if self.velocity_limit is not None:
+                _number(
+                    self.velocity_limit,
+                    "gripper velocity_limit",
+                    positive=True,
+                )
             if self.joint_targets or any(value is not None for value in (
                 self.minimum_time,
-                self.velocity_limit,
                 self.acceleration_limit,
                 self.linear_velocity,
                 self.angular_velocity,
@@ -368,21 +373,34 @@ class Task:
     def whole_body_joint_absolute(
         self,
         *,
-        torso: Sequence[object],
-        right_arm: Sequence[object],
-        left_arm: Sequence[object],
+        torso: Optional[Sequence[object]] = None,
+        right_arm: Optional[Sequence[object]] = None,
+        left_arm: Optional[Sequence[object]] = None,
         joint_motion: Sequence[object],
     ) -> "Task":
-        """Move torso and both arms together in one synchronized command."""
+        """Move the specified body joint groups in one command.
 
-        return self.joint_absolute_multi(
-            {
-                "torso": torso,
-                "right_arm": right_arm,
-                "left_arm": left_arm,
-            },
-            joint_motion,
-        )
+        Omitted or None groups receive no new target. At least one group is
+        required; multiple groups move together in one synchronized command.
+        """
+
+        targets = {
+            group: positions
+            for group, positions in (
+                ("torso", torso),
+                ("right_arm", right_arm),
+                ("left_arm", left_arm),
+            )
+            if positions is not None
+        }
+        if not targets:
+            raise ValueError(
+                "at least one of torso, right_arm, or left_arm must be provided"
+            )
+        if len(targets) == 1:
+            group, positions = next(iter(targets.items()))
+            return self.joint_absolute(group, positions, joint_motion)
+        return self.joint_absolute_multi(targets, joint_motion)
 
     def _joint(
         self,
@@ -476,18 +494,28 @@ class Task:
         return self
 
     # gripper commands
-    def open_gripper(self, side: str = "both") -> "Task":
+    def open_gripper(
+        self,
+        side: str = "both",
+        speed: Optional[float] = None,
+    ) -> "Task":
         """Open the selected gripper and wait for its position target."""
 
         self.task_list.append(TaskCommand(
             kind=CommandKind.GRIPPER_OPEN,
             group=str(side).strip().lower(),
+            velocity_limit=(
+                None
+                if speed is None
+                else _number(speed, "gripper speed", positive=True)
+            ),
         ))
         return self
 
     def close_gripper(
         self,
         side: str = "both",
+        speed: Optional[float] = None,
         *,
         settle_time_sec: float = DEFAULT_GRIPPER_SETTLE_TIME_SEC,
     ) -> "Task":
@@ -496,6 +524,11 @@ class Task:
         self.task_list.append(TaskCommand(
             kind=CommandKind.GRIPPER_CLOSE,
             group=str(side).strip().lower(),
+            velocity_limit=(
+                None
+                if speed is None
+                else _number(speed, "gripper speed", positive=True)
+            ),
             seconds=_number(
                 settle_time_sec,
                 "gripper settle time",
@@ -508,6 +541,7 @@ class Task:
         self,
         side: str,
         ratio: float,
+        speed: Optional[float] = None,
         *,
         settle_time_sec: float = DEFAULT_GRIPPER_SETTLE_TIME_SEC,
     ) -> "Task":
@@ -517,6 +551,11 @@ class Task:
             kind=CommandKind.GRIPPER_SET,
             group=str(side).strip().lower(),
             values=(_number(ratio, "gripper ratio"),),
+            velocity_limit=(
+                None
+                if speed is None
+                else _number(speed, "gripper speed", positive=True)
+            ),
             seconds=_number(
                 settle_time_sec,
                 "gripper settle time",

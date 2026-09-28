@@ -156,9 +156,15 @@ class TaskCommand:
             else:
                 _number(self.seconds, "gripper settle time", positive=True)
 
+            if self.velocity_limit is not None:
+                _number(
+                    self.velocity_limit,
+                    "velocity_limit",
+                    positive=True,
+                )
+
             if self.joint_targets or any(value is not None for value in (
                 self.minimum_time,
-                self.velocity_limit,
                 self.acceleration_limit,
                 self.linear_velocity,
                 self.angular_velocity,
@@ -268,5 +274,3 @@ class TaskCommand:
         # TaskRunner refines this using the actual travel distance and the
         # command's velocity limits.
         return max(10.0, float(self.minimum_time or 0.0) * 3.0 + 5.0)
-
-
