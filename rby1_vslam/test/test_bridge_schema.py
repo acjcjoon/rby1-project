@@ -110,11 +110,6 @@ class TFMessage:
     transforms: list = field(default_factory=list)
 
 
-@dataclass
-class ClockMessage:
-    clock: Stamp = field(default_factory=Stamp)
-
-
 def assign_fields(message, values):
     for key, value in values.items():
         current = getattr(message, key)
@@ -148,7 +143,6 @@ def bridge(monkeypatch):
     for package, attributes in {
         'nav_msgs': {'Odometry': object},
         'geometry_msgs': {'TransformStamped': TransformStamped},
-        'rosgraph_msgs': {'Clock': ClockMessage},
         'sensor_msgs': {'CameraInfo': CameraInfo, 'Image': Image, 'Imu': Imu},
         'std_msgs': {'String': object},
         'tf2_msgs': {'TFMessage': TFMessage},
@@ -253,15 +247,15 @@ def test_tf_filter_follows_camera_root_and_excludes_mount_robot_and_cycles(bridg
         'd435_infra1_frame', 'd435_infra1_optical_frame']
 
 
-def fake_receiver(bridge, now_ns, forward_clock=False):
+def fake_receiver(bridge, now_ns):
     published = []
     node = SimpleNamespace(
-        cfg=dict(bridge.DEFAULTS, forward_clock=forward_clock),
+        cfg=dict(bridge.DEFAULTS),
         _synchronizer=SimpleNamespace(slop_ns=5_000_000),
-        _forwarded_clock_ns=None, _lab_input_session='', _lab_first_image_stamp=None,
+        _lab_input_session='', _lab_first_image_stamp=None,
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=now_ns)),
         _publishers={name: SimpleNamespace(publish=published.append)
-                     for name in ('left', 'right', 'left_info', 'right_info', 'clock')},
+                     for name in ('left', 'right', 'left_info', 'right_info')},
     )
     return node, published
 
@@ -275,16 +269,6 @@ def test_lab_rejects_stale_acquisition_time_before_any_image_is_published(bridge
     assert published == []
 
 
-def test_lab_forwarded_clock_is_used_before_ros_clock_callback(bridge):
-    outbound = bridge._stereo_packet(*stereo_messages())
-    packet = Packet(outbound.kind, outbound.payload, outbound.blob, 'test-session')
-    node, published = fake_receiver(bridge, now_ns=0, forward_clock=True)
-    clock_packet = Packet('clock', {'clock': {'sec': 123, 'nanosec': 140000000}}, session_id='test-session')
-    bridge.BridgeNode._publish_received(node, clock_packet)
-    bridge.BridgeNode._publish_received(node, packet)
-    assert len(published) == 5
-    assert node._lab_input_session == 'test-session'
-    assert node._lab_first_image_stamp == 123_123456789
 
 
 def tracking_receiver(bridge, require_localized=False):

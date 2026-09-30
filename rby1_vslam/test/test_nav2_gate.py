@@ -108,7 +108,7 @@ def test_replayed_samples_do_not_refresh_watchdog(source):
         assert gate.slam[3] == 10.0
 
 
-def test_monotonic_watchdog_stops_when_simulation_clock_pauses():
+def test_monotonic_watchdog_stops_when_ros_clock_stalls():
     gate = armed()
     gate.update_command((0.1, 0, 0), 10.01)
     assert gate.tick(10.51, 1000.0) == (0.0, 0.0, 0.0)

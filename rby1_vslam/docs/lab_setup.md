@@ -1,6 +1,6 @@
 # LAB PC: Ubuntu 24.04 + RTX 5080 + driver 580 + Isaac ROS 4.5
 
-2026-09-23에 release-4.5 공식 문서와 launch/API 소스를 확인했다. 권장 구성은 **기존 Humble 시뮬레이션 컨테이너 + 별도의 Isaac ROS CLI Jazzy 컨테이너**이다. 호스트 드라이버 580은 유지하며 cuVSLAM/CUDA 사용자 라이브러리는 새 컨테이너가 제공한다. 호스트에 Jazzy까지 따로 설치할 필요는 없다.
+2026-09-23에 release-4.5 공식 문서와 launch/API 소스를 확인했다. 권장 구성은 **Jetson의 ROS 2 Humble 실물 스택 + LAB PC의 Isaac ROS CLI Jazzy 컨테이너**이다. 호스트 드라이버 580은 유지하며 cuVSLAM/CUDA 사용자 라이브러리는 컨테이너가 제공한다. LAB 호스트에 Jazzy까지 따로 설치할 필요는 없다.
 
 아래 명령은 LAB Linux에서 실행한다. 현재 패키지를 작성한 Windows 환경에서는 설치·GPU 실행을 하지 않았다.
 
@@ -34,7 +34,7 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 ```
 
-설정 반영을 위한 `sudo systemctl restart docker`는 실행 중인 기존 시뮬레이션 컨테이너에 영향을 줄 수 있으므로 시뮬레이션을 종료한 시점에 수행한다. Docker 그룹 권한이 필요하면 `sudo usermod -aG docker "$USER"` 후 로그아웃/로그인한다.
+설정 반영을 위한 `sudo systemctl restart docker`는 실행 중인 컨테이너를 종료한 뒤 수행한다. Docker 그룹 권한이 필요하면 `sudo usermod -aG docker "$USER"` 후 로그아웃/로그인한다.
 
 ```bash
 docker run --rm --gpus all ubuntu:24.04 nvidia-smi

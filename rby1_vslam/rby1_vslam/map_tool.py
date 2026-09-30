@@ -213,8 +213,8 @@ def run(args, ros_args=None):
         print("Waiting for a fresh successful visual tracking frame...", flush=True)
         _spin_until(rclpy, node, lambda: tracking["ready"], args.timeout,
                     "No successful visual tracking frame; check stereo images, calibration and TF")
-        # rcutils /rosout stamps use system time, also when /clock is in use.
-        # The CLI must run on the LAB host/container, not a clock-skewed client.
+        # The CLI must use the LAB host's system clock so /rosout timestamps can
+        # be filtered against the request time.
         completion.since_ns = time.time_ns()
         if args.command == "save":
             Path(args.path).mkdir(exist_ok=True)

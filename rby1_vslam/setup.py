@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='RBY1 project',
     maintainer_email='maintainer@example.com',
-    description='Humble UPC / Jazzy LAB visual SLAM bridge and Nav2 integration',
+    description='RBY1 Jetson/LAB TCP visual SLAM bridge and Nav2 integration',
     license='Apache-2.0',
     entry_points={'console_scripts': [
         'bridge_node = rby1_vslam.bridge_node:main',
@@ -26,5 +26,6 @@ setup(
         'localization_tf = rby1_vslam.localization_tf:main',
         'nav2_gate = rby1_vslam.nav2_gate:main',
         'map_tool = rby1_vslam.map_tool:main',
+        'waypoint_ui = rby1_vslam.waypoint_ui:main',
     ]},
 )

@@ -24,9 +24,9 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_color', default_value='false'),
         DeclareLaunchArgument('enable_depth', default_value='false'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('forward_clock', default_value='false'),
+        DeclareLaunchArgument('tracking_timeout_sec', default_value='0.5'),
         DeclareLaunchArgument('base_frame', default_value='base'),
+        DeclareLaunchArgument('publish_odom_tf', default_value='false'),
         DeclareLaunchArgument('publish_mount_tf', default_value='true',
                               description='Disable if existing camera mount publisher is running.'),
         DeclareLaunchArgument('mount_x', default_value='0.0464'),
@@ -49,19 +49,20 @@ def generate_launch_description():
         parameters=[str(share / 'config/bridge.yaml'), {
             'role': 'upc', 'lab_host': value('lab_host', str), 'port': value('port', int),
             'enable_imu': value('enable_imu', bool),
-            'use_sim_time': value('use_sim_time', bool),
-            'forward_clock': value('forward_clock', bool),
+            'use_sim_time': False,
+            'tracking_timeout_sec': value('tracking_timeout_sec', float),
         }],
     )
     adapter = Node(
         package='rby1_vslam', executable='pose_adapter', name='pose_adapter',
         namespace='/rby1/vslam', output='screen', parameters=[{
-            'use_sim_time': value('use_sim_time', bool),
+            'use_sim_time': False,
             'base_frame': value('base_frame', str), 'camera_frame': 'd435_link',
             'input_odom_topic': '/rby1/vslam/camera_odometry',
             'input_slam_odom_topic': '/rby1/vslam/camera_slam_odometry',
             'output_odom_topic': '/rby1/vslam/odom',
             'output_slam_odom_topic': '/rby1/vslam/slam_odom',
+            'publish_odom_tf': value('publish_odom_tf', bool),
         }],
     )
     # Same provisional mount as rby1_camera/config/camera_system.yaml. No import

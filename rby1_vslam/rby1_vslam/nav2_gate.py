@@ -285,9 +285,12 @@ class Nav2Gate(Node):
             success, _ = self.core.enable(now, ros_now)
             if success:
                 self.arm_on_ready = False  # startup opt-in is consumed exactly once
-        out = Twist()
-        out.linear.x, out.linear.y, out.angular.z = velocity
-        self.velocity_pub.publish(out)
+        # A disabled gate relinquishes cmd_raw after its one-shot stop. Keeping
+        # a 20 Hz zero stream here would overwrite manual rby1_control commands.
+        if self.core.enabled:
+            out = Twist()
+            out.linear.x, out.linear.y, out.angular.z = velocity
+            self.velocity_pub.publish(out)
         if now - self.last_status_at >= 0.2:
             self.report(now, ros_now)
             self.last_status_at = now

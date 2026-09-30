@@ -3,6 +3,7 @@ import copy
 import math
 import time
 
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.clock import Clock, ClockType
@@ -10,7 +11,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
-from tf2_ros import Buffer, TransformException, TransformListener
+from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
 from .geometry import compose, offset_covariance
 
@@ -32,6 +33,7 @@ class PoseAdapter(Node):
             'input_slam_odom_topic': '/rby1/vslam/camera_slam_odometry',
             'output_odom_topic': '/rby1/vslam/odom',
             'output_slam_odom_topic': '/rby1/vslam/slam_odom',
+            'publish_odom_tf': False,
             'max_input_age_sec': 0.5, 'tf_wait_sec': 0.15,
         }
         for name, value in defaults.items():
@@ -44,6 +46,8 @@ class PoseAdapter(Node):
                 raise ValueError(key + ' must be positive and finite')
         self.buffer = Buffer(cache_time=Duration(seconds=10.))
         self.listener = TransformListener(self.buffer, self)
+        self.odom_broadcaster = (TransformBroadcaster(self)
+                                 if self.p['publish_odom_tf'] else None)
         self.pending = {}
         self.last_warning = 0.
         self.publishers_by_kind = {}
@@ -85,6 +89,15 @@ class PoseAdapter(Node):
                 # This topic is pose-only; mark the unused twist highly uncertain.
                 out.twist.covariance = [1e6 if i % 7 == 0 else 0. for i in range(36)]
                 self.publishers_by_kind[kind].publish(out)
+                if kind == 'odom' and self.odom_broadcaster is not None:
+                    odom_tf = TransformStamped()
+                    odom_tf.header = copy.deepcopy(out.header)
+                    odom_tf.child_frame_id = out.child_frame_id
+                    odom_tf.transform.translation.x = out.pose.pose.position.x
+                    odom_tf.transform.translation.y = out.pose.pose.position.y
+                    odom_tf.transform.translation.z = out.pose.pose.position.z
+                    odom_tf.transform.rotation = copy.deepcopy(out.pose.pose.orientation)
+                    self.odom_broadcaster.sendTransform(odom_tf)
                 self.pending.pop(kind, None)
             except TransformException as exc:
                 self.warn(f'Waiting for acquisition-time camera/base TF: {exc}')

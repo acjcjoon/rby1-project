@@ -251,28 +251,3 @@ LiDAR가 costmap을 다시 채운 것을 확인하고 re-enable 후 새 목표�
 image raw data는 binary로 보내고 메타데이터만 JSON으로 보낸다. 일반 ROS 메시지는 명시적인 schema로 복원하며 pickle/CDR 배포판 호환성에 기대지 않는다. stereo는 쌍 단위로 처리하고 누적 지연을 제한한다. 재연결 시 새 session과 calibration/static TF를 전달한다. TCP 재전송/혼잡으로 원본 timestamp가 오래되면 주행용 입력으로 사용하지 않는다.
 
 유선 1 Gbps에서 먼저 확인한다. 기본 영상만 약 18.4 MB/s이며 UPC USB/CPU와 네트워크 부하도 관찰한다. `config/isaac_vslam.yaml`의 IMU noise는 NVIDIA 예제값이므로 정밀 성능 비교 전에 실제 IMU 보정을 진행한다.
-
-## 기존 Humble 시뮬레이션/rosbag 재생
-
-실기 UPC 대신 **Humble 시뮬레이션 컨테이너**에서 `upc.launch.py`를 실행할 수 있다. 단, 시뮬레이션 센서가 아래와 같은 interface를 제공해야 한다:
-
-- `/d435/d435/infra{1,2}/image_rect_raw`: 보정된 mono8 stereo와 같은 stamp의 CameraInfo
-- 실제 stereo baseline/optical orientation TF와 `base↔d435_link` 관절 TF
-- VIO일 경우 같은 clock의 IMU; 없으면 양쪽 launch `enable_imu:=false`
-- `/clock`의 단일 원천, Nav2용 wheel odom과 `/scan`
-
-```bash
-# Humble 시뮬레이션 컨테이너
-ros2 launch rby1_vslam upc.launch.py lab_host:=192.168.30.50 \
-  start_camera:=false publish_mount_tf:=false \
-  use_sim_time:=true forward_clock:=true enable_imu:=false
-
-# LAB Jazzy
-ros2 launch rby1_vslam mapping.launch.py \
-  use_sim_time:=true forward_clock:=true enable_imu:=false
-
-# Humble, Nav2도 실험할 때
-ros2 launch rby1_vslam navigation.launch.py use_sim_time:=true
-```
-
-시뮬레이션과 실기의 토픽이 자동으로 같아지는 것은 아니다. 이 패키지는 기존 시뮬레이터를 수정하지 않았으므로 센서 출력/TF를 위 interface로 맞춘 후 재사용한다. bag을 기록할 공간이 부족한 UPC 대신 LAB workspace에서 이미지/IMU/CameraInfo/TF와 추정 결과를 기록할 수 있다.

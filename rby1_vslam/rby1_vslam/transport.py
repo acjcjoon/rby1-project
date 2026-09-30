@@ -11,7 +11,7 @@ import uuid
 from .wire import Packet, ProtocolError, encode_packet, read_packet
 
 
-UPC_KINDS = frozenset({'stereo', 'imu', 'static_tf', 'clock'})
+UPC_KINDS = frozenset({'stereo', 'imu', 'static_tf'})
 LAB_KINDS = frozenset({'tracking_odom', 'slam_odom', 'tracking_status'})
 
 
@@ -98,8 +98,6 @@ class BoundedMailbox:
             # Calibration precedes the first frame after every reconnect.
             if 'static_tf' in self._latest:
                 result.append(self._latest.pop('static_tf')[0])
-            if 'clock' in self._latest:
-                result.append(self._latest.pop('clock')[0])
             for _ in range(min(max_imu, len(self._imu))):
                 result.append(self._imu.popleft())
             for kind, (packet, queued_at) in self._latest.items():

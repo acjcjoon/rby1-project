@@ -17,7 +17,7 @@ HEADER = struct.Struct('!4sBBHII')
 MAX_METADATA_BYTES = 256 * 1024
 MAX_BLOB_BYTES = 16 * 1024 * 1024
 KINDS = frozenset({
-    'hello', 'ping', 'stereo', 'imu', 'static_tf', 'clock',
+    'hello', 'ping', 'stereo', 'imu', 'static_tf',
     'tracking_odom', 'slam_odom', 'tracking_status',
 })
 

@@ -20,7 +20,6 @@ def _launch(context):
         raise ValueError('localization requires map_path:=/absolute/path inside the LAB environment')
     if mode == 'localization' and not Path(map_path).is_dir():
         raise ValueError(f'LAB map directory does not exist: {map_path}')
-    use_sim_time = get('use_sim_time').lower() == 'true'
     use_imu = get('enable_imu').lower() == 'true'
     bridge = Node(
         package='rby1_vslam', executable='bridge_node', name='lab_bridge',
@@ -30,8 +29,8 @@ def _launch(context):
             'tracking_odom_topic': '/rby1/vslam/camera_odometry',
             'slam_odom_topic': '/rby1/vslam/camera_slam_odometry',
             'require_localized': mode == 'localization',
-            'use_sim_time': use_sim_time, 'enable_imu': use_imu,
-            'forward_clock': get('forward_clock').lower() == 'true',
+            'use_sim_time': False,
+            'enable_imu': use_imu,
         }],
     )
     slam = ComposableNode(
@@ -39,7 +38,7 @@ def _launch(context):
         plugin='nvidia::isaac_ros::visual_slam::VisualSlamNode', name='visual_slam',
         namespace='',
         parameters=[get('vslam_params_file'), {
-            'use_sim_time': use_sim_time, 'tracking_mode': 1 if use_imu else 0,
+            'use_sim_time': False, 'tracking_mode': 1 if use_imu else 0,
             'enable_localization_n_mapping': mode != 'odometry',
             'load_map_folder_path': map_path if mode == 'localization' else '',
             'localize_on_startup': False,
@@ -69,8 +68,6 @@ def generate_launch_description():
         DeclareLaunchArgument('bind_host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='7447'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('forward_clock', default_value='false'),
         DeclareLaunchArgument('vslam_params_file', default_value=str(share / 'config/isaac_vslam.yaml')),
         OpaqueFunction(function=_launch),
     ])

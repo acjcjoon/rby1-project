@@ -13,7 +13,6 @@ from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.set_message import set_message_fields
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
-from rosgraph_msgs.msg import Clock as ClockMessage
 from sensor_msgs.msg import CameraInfo, Image, Imu
 from std_msgs.msg import String
 from tf2_msgs.msg import TFMessage
@@ -27,7 +26,7 @@ DEFAULTS = {
     'socket_timeout_sec': 2.0, 'reconnect_delay_sec': 1.0, 'max_imu_queue': 512,
     'stereo_slop_ms': 5.0, 'stereo_queue_size': 8, 'stereo_max_age_sec': 0.5,
     'max_image_age_sec': 0.5, 'max_future_image_sec': 0.05,
-    'enable_imu': True, 'forward_clock': False,
+    'enable_imu': True,
     'camera_root_frame': 'd435_link', 'camera_frame_prefix': 'd435_',
     'left_image_topic': '/d435/d435/infra1/image_rect_raw',
     'right_image_topic': '/d435/d435/infra2/image_rect_raw',
@@ -103,6 +102,8 @@ def _validate_image(image, info):
         raise ProtocolError('camera calibration dimensions disagree with image')
     if not image.header.frame_id or not info.header.frame_id:
         raise ProtocolError('camera image/calibration frame is empty')
+    if image.header.frame_id != info.header.frame_id:
+        raise ProtocolError('camera image/calibration frames disagree')
     if _stamp_ns(image.header.stamp) != _stamp_ns(info.header.stamp):
         raise ProtocolError('camera info stamp must match image stamp')
     if not 0 <= image.header.stamp.nanosec < 1_000_000_000:
@@ -168,7 +169,6 @@ class BridgeNode(Node):
         self._last_stereo_stamp = None
         self._lab_input_session = ''
         self._lab_first_image_stamp = None
-        self._forwarded_clock_ns = None
         self._static_candidates = {}
         self._bridge_subscriptions = []
         self._bridge_publishers = {}
@@ -209,10 +209,6 @@ class BridgeNode(Node):
                     QoSProfile(depth=200, reliability=ReliabilityPolicy.BEST_EFFORT)))
             self._bridge_subscriptions.append(self.create_subscription(
                 TFMessage, '/tf_static', self._on_static_tf, static_qos))
-            if self.cfg['forward_clock']:
-                self._bridge_subscriptions.append(self.create_subscription(
-                    ClockMessage, '/clock', lambda msg: self.link.send(Packet('clock', _to_dict(msg))),
-                    sensor_qos))
             for kind, param in (('tracking_odom', 'upc_tracking_odom_topic'),
                                 ('slam_odom', 'upc_slam_odom_topic')):
                 self._bridge_publishers[kind] = self.create_publisher(Odometry, self.cfg[param], 5)
@@ -224,8 +220,6 @@ class BridgeNode(Node):
             ):
                 self._bridge_publishers[name] = self.create_publisher(msg_type, self.cfg[param], 5)
             self._bridge_publishers['static_tf'] = self.create_publisher(TFMessage, '/tf_static', static_qos)
-            if self.cfg['forward_clock']:
-                self._bridge_publishers['clock'] = self.create_publisher(ClockMessage, '/clock', 5)
             for kind, param in (('tracking_odom', 'tracking_odom_topic'),
                                 ('slam_odom', 'slam_odom_topic')):
                 self._bridge_subscriptions.append(self.create_subscription(
@@ -241,7 +235,7 @@ class BridgeNode(Node):
                 VisualSlamStatus, self.cfg['tracking_status_topic'], self._on_tracking_status, sensor_qos))
             self._bridge_subscriptions.append(self.create_subscription(
                 DiagnosticArray, self.cfg['diagnostics_topic'], self._on_diagnostics, 10))
-        # Never wait on ROS time to process the first forwarded /clock packet.
+        # Connection and safety bookkeeping must not depend on ROS wall time.
         self._timer = self.create_timer(
             0.01, self._tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self._last_status_at = 0.0
@@ -346,15 +340,13 @@ class BridgeNode(Node):
         self.link.send(Packet(kind, _to_dict(message)))
 
     def _publish_received(self, packet):
+        publishers = getattr(self, '_bridge_publishers', None)
+        if publishers is None:
+            publishers = getattr(self, '_publishers', None)
         if packet.kind == 'stereo':
             messages = _decode_stereo(packet, self._synchronizer.slop_ns)
-            # Use acquisition time as well as local queue time: TCP may have
-            # buffered stale bytes before they reached this process. When /clock
-            # is bridged, its subscriber callback has not necessarily run yet.
-            now_ns = (self._forwarded_clock_ns if self.cfg['forward_clock']
-                      else self.get_clock().now().nanoseconds)
-            if now_ns is None or now_ns <= 0:
-                raise ProtocolError('camera timestamp gate is waiting for a valid /clock')
+            # TCP may have buffered stale bytes before they reached this process.
+            now_ns = self.get_clock().now().nanoseconds
             for message in messages[:2]:
                 stamp_ns = _stamp_ns(message.header.stamp)
                 age = (now_ns - stamp_ns) / 1_000_000_000
@@ -366,7 +358,7 @@ class BridgeNode(Node):
             # Publish calibration first. Neither camera's timestamp is modified.
             for name, message in zip(('left_info', 'right_info', 'left', 'right'),
                                      (messages[2], messages[3], messages[0], messages[1])):
-                self._bridge_publishers[name].publish(message)
+                publishers[name].publish(message)
         elif packet.kind == 'static_tf':
             if set(packet.payload) != {'transforms'} or not isinstance(packet.payload['transforms'], list):
                 raise ProtocolError('invalid static TF fields')
@@ -378,7 +370,7 @@ class BridgeNode(Node):
             transforms = self._camera_transforms(message.transforms)
             if len(transforms) != len(message.transforms):
                 raise ProtocolError('TF outside camera subtree')
-            self._bridge_publishers['static_tf'].publish(message)
+            publishers['static_tf'].publish(message)
         elif packet.kind == 'tracking_status':
             fields = {'vo_state', 'localized', 'require_localized', 'localization_age_sec'}
             if set(packet.payload) not in (fields, fields | {'stamp'}):
@@ -402,18 +394,12 @@ class BridgeNode(Node):
             self._localization_received_at = (None if localization_age is None
                                               else self._tracking_received_at - localization_age)
         else:
-            msg_type = {'imu': Imu, 'clock': ClockMessage,
-                        'tracking_odom': Odometry, 'slam_odom': Odometry}[packet.kind]
-            if packet.kind == 'clock' and not self.cfg['forward_clock']:
-                raise ProtocolError('clock forwarding is disabled')
+            msg_type = {'imu': Imu, 'tracking_odom': Odometry,
+                        'slam_odom': Odometry}[packet.kind]
             if packet.kind == 'imu' and not self.cfg['enable_imu']:
                 raise ProtocolError('IMU forwarding is disabled')
             message = _from_dict(msg_type, packet.payload)
-            if packet.kind == 'clock':
-                if not 0 <= message.clock.nanosec < 1_000_000_000:
-                    raise ProtocolError('invalid forwarded clock timestamp')
-                self._forwarded_clock_ns = _stamp_ns(message.clock)
-            self._bridge_publishers[packet.kind].publish(message)
+            publishers[packet.kind].publish(message)
 
     def _tick(self):
         state = self.link.state()
@@ -429,7 +415,6 @@ class BridgeNode(Node):
                 self._requires_localization = self.cfg['require_localized']
             self._lab_input_session = ''
             self._lab_first_image_stamp = None
-            self._forwarded_clock_ns = None
             self._session = state['session_id']
             self._previous_state = (state['connected'], state['session_id'])
             self.get_logger().info('TCP bridge: ' + state['reason'])
