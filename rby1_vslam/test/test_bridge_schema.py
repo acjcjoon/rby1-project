@@ -188,6 +188,25 @@ def test_stereo_roundtrip_preserves_pixels_padding_stamps_and_calibration(bridge
     assert decoded[0].header.stamp.nanosec != decoded[1].header.stamp.nanosec
 
 
+def test_known_realsense_infra2_camera_info_frame_bug_is_corrected(bridge):
+    left, right, left_info, right_info = stereo_messages()
+    right_info.header.frame_id = 'd435_infra1_optical_frame'
+
+    packet = bridge._stereo_packet(left, right, left_info, right_info)
+    decoded = bridge._decode_stereo(packet, slop_ns=5_000_000)
+
+    assert right_info.header.frame_id == 'd435_infra1_optical_frame'
+    assert packet.payload['right_info']['header']['frame_id'] == 'd435_infra2_optical_frame'
+    assert decoded[3].header.frame_id == decoded[1].header.frame_id
+
+
+def test_unrelated_infra2_camera_info_frame_is_still_rejected(bridge):
+    left, right, left_info, right_info = stereo_messages()
+    right_info.header.frame_id = 'unrelated_camera'
+    with pytest.raises(ProtocolError, match='camera image/calibration frames disagree'):
+        bridge._stereo_packet(left, right, left_info, right_info)
+
+
 @pytest.mark.parametrize('mutation', [
     lambda value: value.pop('k'),
     lambda value: value['header'].update(unexpected=True),

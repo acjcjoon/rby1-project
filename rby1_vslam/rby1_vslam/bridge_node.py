@@ -112,7 +112,30 @@ def _validate_image(image, info):
         raise ProtocolError('camera is not calibrated')
 
 
+def _correct_realsense_infra2_info_frame(image, info):
+    """Correct the known RealSense ROS right-IR CameraInfo frame bug.
+
+    Some D4xx wrapper versions publish the infra2 CameraInfo on the correct
+    topic with the correct calibration and timestamp, but label it with the
+    infra1 optical frame (realsense-ros issue #3172). Keep rejecting every
+    other frame mismatch and do not mutate the driver's original message.
+    """
+    right_suffix = 'infra2_optical_frame'
+    left_suffix = 'infra1_optical_frame'
+    image_frame = image.header.frame_id
+    info_frame = info.header.frame_id
+    if not image_frame.endswith(right_suffix):
+        return info
+    prefix = image_frame[:-len(right_suffix)]
+    if info_frame != prefix + left_suffix:
+        return info
+    corrected = _from_dict(CameraInfo, _to_dict(info))
+    corrected.header.frame_id = image_frame
+    return corrected
+
+
 def _stereo_packet(left, right, left_info, right_info):
+    right_info = _correct_realsense_infra2_info_frame(right, right_info)
     _validate_image(left, left_info)
     _validate_image(right, right_info)
     payload = {'left_info': _to_dict(left_info), 'right_info': _to_dict(right_info)}
