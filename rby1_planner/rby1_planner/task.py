@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from .task_commands import RunnableTaskDefinition, Task, list_sum
+from .task_commands import (
+    RunnableTaskDefinition,
+    Task,
+    _load_move_locations,
+    _load_tag_approach_offset,
+    _move_location,
+    list_sum,
+)
 
 
 # Task 작성 단위: 초, 미터, 도
@@ -66,6 +73,11 @@ def _configured_tag_approach_contact_move(object_id: str, approach_offset: Seque
     contact = tuple(float(value) for value in contact_offset)
     if len(approach) != 3 or len(contact) != 3:
         raise ValueError('approach/contact offsets must contain 3 numbers')
+    tag_offset = _load_tag_approach_offset(object_id)
+    approach = tuple(value + offset for value, offset in zip(approach, tag_offset))
+    contact = tuple(value + offset for value, offset in zip(contact, tag_offset))
+    # 접근·접촉은 동일한 중앙을 기준으로 한다. XY는 태그 yaw로 변환하며
+    # yaw_only=True에 따라 Z는 base 수직 방향으로 더한다.
     task = Task(f'move_{object_id}_approach_contact')
     task.delay(2000)
     task.camera_linear_absolute(
@@ -88,6 +100,24 @@ def _configured_tag_approach_contact_move(object_id: str, approach_offset: Seque
         object_to_end_effector_orientation_xyzw=_OBJECT_TO_LEFT_EE_ORIENTATION_XYZW,
     )
     return task.build()
+
+
+
+
+def turn_and_move(start_point: str, end_point: str) -> RunnableTaskDefinition:
+    locations = _load_move_locations()
+    start_x, start_y, start_side = _move_location(locations, start_point)
+    end_x, end_y, side = _move_location(locations, end_point)
+    task = Task('turn_and_move')
+    if start_side != side:
+        if side == 'left':
+            task.extend(object_gripping_initial_pose_torso_left())
+        else:
+            task.extend(object_gripping_initial_pose_torso_right())
+    task.move_to(end_x - start_x, end_y - start_y, 0.0, timeout_sec=15.0)
+    task.delay(1000)
+    return task.build()
+
 
 def turn_left_and_move_left()-> RunnableTaskDefinition:
     task = Task('turn_left_and_move_left')
@@ -164,95 +194,31 @@ def align_base_and_pick_up_object(
     task.extend(object_gripping_initial_pose_temp())
     return task.build()
 
-# def object_handover_demo6() -> RunnableTaskDefinition:
-    
-#     task = Task('object_handover_demo6')
-
-#     ready_left_arm = [-33.643824, 63.218668, -44.626985, -106.563932, -17.501234, 44.556740, -84.095907]
-#     # ready_left_tcp = [0.374034, 0.243053, 0.921057, 0.008670, 0.007028, -89.997544] # 허리 정면    
-#     ready_left_tcp_RS = [0.241868, -0.376696, 0.919114, -0.516431, 0.357345, -179.997283] # 허리 우측 회전 
-#     ready_left_tcp_LS = [-0.2756, 0.4152, 0.9163, -0.34, -0.50, 0.00] # 허리 좌측 회전 
-
-#     ready_joint_motion = [3.0, 2.0, 2.0]
-#     tcp_motion = [2.0, 2.0, 2.0, 1.0]
-#     pickup_motion = [3.0, 1.0, 1.0, 1.0]
-
-#     pickup_distance = 0.075
-#     tag4_contact_offset = [0.0, 0.0, 0.05]
-#     tag4_approach_offset = list_sum(tag4_contact_offset, [0.0, 0.0, pickup_distance])
-
-#     tag0_contact_offset = [0.0, 0.0, 0.065]
-#     tag0_approach_offset = list_sum(tag0_contact_offset, [0.0, 0.0, pickup_distance])
-
-#     tag2_contact_offset = [0.0, 0.0, 0.065]
-#     tag2_approach_offset = list_sum(tag2_contact_offset, [0.0, 0.0, pickup_distance]) 
-
-#     # 준비
-#     task.extend(object_gripping_initial_pose_torso_right())
-
-#     # 오른쪽에서 tag_4 기준 파지
-#     task.open_gripper('left')
-#     task.extend(_configured_tag_approach_contact_move('tag_4', tag4_approach_offset, tag4_contact_offset, pickup_motion))
-#     task.close_gripper('left')
-#     task.linear_relative('left_arm', (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
-    
-#     # 왼쪽 이동 준비 및 이동
-#     task.extend(object_gripping_initial_pose_torso_left())
-#     task.move_to(0.0, 0.75, 0.0, timeout_sec=15.0)
-#     task.delay(1000)
-
-#     # 왼쪽에서 tag_0 기준 배치
-#     task.extend(_configured_tag_approach_contact_move('tag_0', tag0_approach_offset, tag0_contact_offset, pickup_motion))
-#     task.open_gripper('left')
-#     task.linear_relative('left_arm', (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
-
-#     # 제자리
-#     task.joint_absolute('left_arm', ready_left_arm, ready_joint_motion)
-    
-#     # 왼쪽에서 tag_4 기준 파지
-#     task.linear_absolute('left_arm', list_sum(ready_left_tcp_LS, [0.0, 0.0, 0.00, 0.0, 0.0, 0.0]), tcp_motion)
-#     task.linear_absolute('left_arm', list_sum(ready_left_tcp_LS, [0.0, 0.0, -0.05, 0.0, 0.0, 0.0]), tcp_motion)
-#     task.open_gripper('left')
-#     task.extend(_configured_tag_approach_contact_move('tag_4', tag4_approach_offset, tag4_contact_offset, pickup_motion))
-#     task.close_gripper('left')
-#     task.linear_relative('left_arm', (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
-
-#     # 오른쪽 이동 준비 및 이동
-#     task.extend(torso_rotation_right())
-#     task.move_to(0.0, -0.75, 0.0, timeout_sec=15.0)
-#     task.delay(1000)
-
-#     # 오른쪽에서 tag_2 기준 배치
-#     task.linear_absolute('left_arm', list_sum(ready_left_tcp_RS, [0.0, 0.0, 0.00, 0.0, 0.0, 0.0]), tcp_motion)
-#     task.linear_absolute('left_arm', list_sum(ready_left_tcp_RS, [0.0, 0.0, -0.05, 0.0, 0.0, 0.0]), tcp_motion)
-#     task.extend(_configured_tag_approach_contact_move('tag_2', tag2_approach_offset, tag2_contact_offset, pickup_motion))
-#     task.open_gripper('left')
-#     task.linear_relative('left_arm', (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
-
-#     # 제자리
-#     task.joint_absolute('left_arm', ready_left_arm, ready_joint_motion)
-
-#     # Stop/EMO/failure가 발생할 때까지 demo6 전체를 무한 반복
-#     task.rewind(10)
-
-#     return task.build()
-
 def object_handover_demo_final() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final')
 
     task.extend(object_gripping_initial_pose_torso_right())
 
     task.extend(align_base_and_pick_up_object('tag_4'))
+    task.extend(turn_and_move('A', 'C'))
+    task.extend(align_base_and_put_down_object('tag_3'))
 
-    task.extend(turn_left_and_move_left(A,B))
-
+    task.extend(turn_and_move('C', 'B'))
+    task.extend(align_base_and_pick_up_object('tag_5'))
+    task.extend(turn_and_move('B', 'D'))
     task.extend(align_base_and_put_down_object('tag_0'))
 
+    task.extend(turn_and_move('D', 'C'))
     task.extend(align_base_and_pick_up_object('tag_4'))
-
-    task.extend(turn_right_and_move_right())
-
+    task.extend(turn_and_move('C', 'A'))
     task.extend(align_base_and_put_down_object('tag_2'))
+
+    task.extend(turn_and_move('A', 'D'))
+    task.extend(align_base_and_pick_up_object('tag_5'))
+    task.extend(turn_and_move('D', 'B'))
+    task.extend(align_base_and_put_down_object('tag_1'))
+
+    task.extend(turn_and_move('B', 'A'))
 
     return task.build()
 
@@ -269,11 +235,11 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
 
 __all__ = [
     'Task', 'build_tasks',
+    'turn_and_move',
     'object_gripping_initial_pose',
     'ready_pose',
     'object_gripping_initial_pose_torso_right',
     'object_gripping_initial_pose_torso_left',
-    'object_handover_demo8',
     'object_handover_demo_final'
     
 ]

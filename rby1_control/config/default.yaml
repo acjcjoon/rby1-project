@@ -85,6 +85,13 @@
     left_cartesian_target_link: ee_left
 
     cartesian_state_period_sec: 0.25
+    # Joint-space policy used by both JS hard-limit validation and the CS
+    # runtime guard. Relative paths resolve inside this package's config dir.
+    joint_limits_file: joint_limits_rby1m_v1_3.yaml
+    # CS only: inset both physical bounds by this many degrees.
+    cartesian_joint_limit_margin_deg: 5.0
+    # CS only: stop if the active arm's JointState is older than this value.
+    cartesian_joint_state_timeout_sec: 0.1
     joint_jog_minimum_time_sec: 1.0
     cartesian_jog_minimum_time_sec: 1.0
 

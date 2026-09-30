@@ -505,8 +505,8 @@ def test_camera_yaw_symmetry_rejects_unsafe_configuration():
         Task('invalid').camera_linear_absolute(
             **{**base, 'yaw_symmetry_deg': 200.0},
         )
-    with pytest.raises(ValueError, match='zero X/Y'):
-        Task('invalid').camera_linear_absolute(
-            **base,
-            object_to_end_effector_position=(0.01, 0.0, 0.1),
-        )
+    step = Task('offset-with-symmetry').camera_linear_absolute(
+        **base,
+        object_to_end_effector_position=(0.01, 0.0, 0.1),
+    ).build().commands[0]
+    assert step.object_to_end_effector_position == (0.01, 0.0, 0.1)

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "input_revision": -1,
+  "scheduler": {"status": "starting", "paused": true},
+  "robot": {"status": "unknown"},
+  "current_task_id": "",
+  "batches": [],
+  "plates": [],
+  "queue": [],
+  "devices": [],
+  "events": []
+}

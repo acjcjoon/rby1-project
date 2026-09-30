@@ -1,0 +1,599 @@
+{
+  "schema_version": 1,
+  "revision": 2,
+  "updated_at": "2026-09-29T09:00:00+09:00",
+  "batches": [
+    {
+      "batch_id": "B001",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          1.18
+        ],
+        "display": "1:1.18"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B001-A",
+          "barcode": "RB7K-104821-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B001-B",
+          "barcode": "RB4M-728315-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B001-C",
+          "barcode": "RB9Q-361704-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B001-D",
+          "barcode": "RB2X-945172-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B002",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          1.43
+        ],
+        "display": "1:1.43"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B002-A",
+          "barcode": "RB6H-218459-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B002-B",
+          "barcode": "RB3P-570826-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B002-C",
+          "barcode": "RB8N-632147-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B002-D",
+          "barcode": "RB5V-890413-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B003",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          1.67
+        ],
+        "display": "1:1.67"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B003-A",
+          "barcode": "RB1C-486205-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B003-B",
+          "barcode": "RB0D-753961-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B003-C",
+          "barcode": "RB7F-319648-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B003-D",
+          "barcode": "RB4R-825074-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B004",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          1.92
+        ],
+        "display": "1:1.92"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B004-A",
+          "barcode": "RB9L-247531-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B004-B",
+          "barcode": "RB2S-680419-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B004-C",
+          "barcode": "RB6W-914372-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B004-D",
+          "barcode": "RB3J-157806-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B005",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          2.16
+        ],
+        "display": "1:2.16"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B005-A",
+          "barcode": "RB8A-592743-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B005-B",
+          "barcode": "RB5E-836120-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B005-C",
+          "barcode": "RB1T-270965-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B005-D",
+          "barcode": "RB7Y-461328-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B006",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          2.41
+        ],
+        "display": "1:2.41"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B006-A",
+          "barcode": "RB4B-705219-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B006-B",
+          "barcode": "RB9G-143687-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B006-C",
+          "barcode": "RB2N-658034-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B006-D",
+          "barcode": "RB6U-982451-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B007",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          2.68
+        ],
+        "display": "1:2.68"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B007-A",
+          "barcode": "RB3C-814596-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B007-B",
+          "barcode": "RB8P-250173-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B007-C",
+          "barcode": "RB5Q-697842-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B007-D",
+          "barcode": "RB1Z-426305-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B008",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          2.93
+        ],
+        "display": "1:2.93"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B008-A",
+          "barcode": "RB7D-368914-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B008-B",
+          "barcode": "RB4H-721650-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B008-C",
+          "barcode": "RB9V-105283-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B008-D",
+          "barcode": "RB2K-549736-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B009",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          3.17
+        ],
+        "display": "1:3.17"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B009-A",
+          "barcode": "RB6E-937241-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B009-B",
+          "barcode": "RB3M-481075-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B009-C",
+          "barcode": "RB8R-624519-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B009-D",
+          "barcode": "RB5X-170862-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    },
+    {
+      "batch_id": "B010",
+      "molar_ratio": {
+        "components": [
+          "component_a",
+          "component_b"
+        ],
+        "values": [
+          1,
+          3.44
+        ],
+        "display": "1:3.44"
+      },
+      "status": "waiting",
+      "plates": {
+        "A": {
+          "plate_id": "B010-A",
+          "barcode": "RB1F-256708-A",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "B": {
+          "plate_id": "B010-B",
+          "barcode": "RB7N-693154-B",
+          "location": "PREP",
+          "current_task": "",
+          "task_status": "blocked",
+          "completed_tasks": []
+        },
+        "C": {
+          "plate_id": "B010-C",
+          "barcode": "RB4T-830426-C",
+          "location": "INBOX",
+          "current_task": "T01",
+          "task_status": "pending",
+          "completed_tasks": []
+        },
+        "D": {
+          "plate_id": "B010-D",
+          "barcode": "RB9Y-312975-D",
+          "location": "STORE",
+          "current_task": "T05",
+          "task_status": "pending",
+          "completed_tasks": []
+        }
+      }
+    }
+  ],
+  "work_queue": [
+    {
+      "task_id": "B001.T01",
+      "batch_id": "B001",
+      "status": "pending"
+    },
+    {
+      "task_id": "B001.T05",
+      "batch_id": "B001",
+      "status": "pending"
+    },
+    {
+      "task_id": "B002.T01",
+      "batch_id": "B002",
+      "status": "pending"
+    },
+    {
+      "task_id": "B002.T05",
+      "batch_id": "B002",
+      "status": "pending"
+    },
+    {
+      "task_id": "B003.T01",
+      "batch_id": "B003",
+      "status": "pending"
+    },
+    {
+      "task_id": "B003.T05",
+      "batch_id": "B003",
+      "status": "pending"
+    },
+    {
+      "task_id": "B004.T01",
+      "batch_id": "B004",
+      "status": "pending"
+    },
+    {
+      "task_id": "B004.T05",
+      "batch_id": "B004",
+      "status": "pending"
+    },
+    {
+      "task_id": "B005.T01",
+      "batch_id": "B005",
+      "status": "pending"
+    },
+    {
+      "task_id": "B005.T05",
+      "batch_id": "B005",
+      "status": "pending"
+    },
+    {
+      "task_id": "B006.T01",
+      "batch_id": "B006",
+      "status": "pending"
+    },
+    {
+      "task_id": "B006.T05",
+      "batch_id": "B006",
+      "status": "pending"
+    },
+    {
+      "task_id": "B007.T01",
+      "batch_id": "B007",
+      "status": "pending"
+    },
+    {
+      "task_id": "B007.T05",
+      "batch_id": "B007",
+      "status": "pending"
+    },
+    {
+      "task_id": "B008.T01",
+      "batch_id": "B008",
+      "status": "pending"
+    },
+    {
+      "task_id": "B008.T05",
+      "batch_id": "B008",
+      "status": "pending"
+    },
+    {
+      "task_id": "B009.T01",
+      "batch_id": "B009",
+      "status": "pending"
+    },
+    {
+      "task_id": "B009.T05",
+      "batch_id": "B009",
+      "status": "pending"
+    },
+    {
+      "task_id": "B010.T01",
+      "batch_id": "B010",
+      "status": "pending"
+    },
+    {
+      "task_id": "B010.T05",
+      "batch_id": "B010",
+      "status": "pending"
+    }
+  ]
+}

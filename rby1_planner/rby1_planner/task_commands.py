@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Iterable,
@@ -16,6 +17,8 @@ from typing import (
     Union,
     cast,
 )
+
+import yaml
 
 from .control_commands import (
     BODY_JOINT_GROUPS,
@@ -196,16 +199,8 @@ class CameraLinearAbsoluteStep:
         offset_orientation = normalize_quaternion(
             self.object_to_end_effector_orientation_xyzw
         )
-        if (
-            yaw_symmetry_deg is not None
-            and (
-                abs(offset_position[0]) > 1.0e-12
-                or abs(offset_position[1]) > 1.0e-12
-            )
-        ):
-            raise ValueError(
-                'yaw symmetry currently requires zero X/Y object offset'
-            )
+        # Position stays anchored to the detected tag axes. Yaw symmetry only
+        # selects an equivalent EE orientation; it must not rotate that offset.
 
         # Reuse the canonical command validation for arm and motion limits.
         TaskCommand(
@@ -692,7 +687,9 @@ class Task(_CanonicalTask):
 
         ``yaw_symmetry_deg`` treats yaw values separated by that period as
         equivalent and lets the runner choose the one nearest the current EE
-        yaw. It currently requires ``yaw_only=True`` and a zero X/Y offset.
+        yaw. It requires ``yaw_only=True`` and affects EE orientation only:
+        the X/Y offset is always rotated by the detected object yaw, not by
+        the selected equivalent EE yaw.
         """
 
         return self._append_camera_linear_absolute(
@@ -988,6 +985,92 @@ def get_object_position(
         )
     return cast(CartesianTarget, result)
 
+def _load_task_settings() -> dict:
+    """소스 작업 공간 또는 설치된 패키지에서 공통 설정을 매번 읽는다."""
+    package_root = Path(__file__).resolve().parents[1]
+    if (package_root / 'package.xml').is_file():
+        # 소스/symlink 설치에서는 편집 중인 YAML을 그대로 사용한다.
+        settings_path = package_root / 'config' / 'settings.yaml'
+    else:
+        from ament_index_python.packages import get_package_share_directory
+
+        settings_path = (
+            Path(get_package_share_directory('rby1_planner'))
+            / 'config' / 'settings.yaml'
+        )
+    try:
+        with settings_path.open(encoding='utf-8') as stream:
+            settings = yaml.safe_load(stream)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f'Cannot load planner settings: {settings_path}: {exc}') from exc
+    if not isinstance(settings, dict):
+        raise ValueError('settings.yaml must contain a mapping')
+    return settings
+
+
+def _load_tag_approach_offset(object_id: str) -> tuple[float, float, float]:
+    """선택한 태그에서 지점 중앙까지의 접근·접촉 공용 보정(m)을 읽는다.
+
+    XY는 태그 축 기준으로 기록하고 기존 yaw_only=True 규칙에 따라
+    실행 시 태그 yaw로 base 축에 변환한다. Z는 base 수직 방향이며,
+    동일한 XYZ 보정을 접근·접촉 목표 양쪽에 적용한다.
+    """
+    if not isinstance(object_id, str) or not object_id.strip():
+        raise ValueError('object_id must be a nonempty string')
+    object_id = object_id.strip()
+    tags = _load_task_settings().get('tag')
+    if not isinstance(tags, dict) or not tags:
+        raise ValueError('settings.yaml tag must be a nonempty mapping')
+    if object_id not in tags:
+        raise ValueError(f'Unknown tag {object_id!r} in settings.yaml')
+    config = tags[object_id]
+    if not isinstance(config, dict):
+        raise ValueError(f'Tag {object_id!r} must contain an offset')
+    offset = config.get('offset')
+    if not isinstance(offset, list) or len(offset) != 3:
+        raise ValueError(f'Tag {object_id!r} offset must be [x, y, z] in metres')
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in offset
+    ):
+        raise ValueError(f'Tag {object_id!r} offset must contain finite numbers')
+    return float(offset[0]), float(offset[1]), float(offset[2])
+
+
+def _load_move_locations() -> dict:
+    """공통 설정에서 이동 지점 항목만 검증한다."""
+    settings = _load_task_settings()
+    locations = settings.get('locations')
+    if not isinstance(locations, dict) or not locations:
+        raise ValueError('settings.yaml locations must be a nonempty mapping')
+    return locations
+
+
+def _move_location(locations: dict, name: str) -> tuple[float, float, str]:
+    """이동에 사용할 지점의 좌표와 준비 자세를 검증한다."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError('location name must be a nonempty string')
+    if name not in locations:
+        raise ValueError(f'Unknown location {name!r} in settings.yaml')
+    location = locations[name]
+    if not isinstance(location, dict):
+        raise ValueError(f'Location {name!r} must contain position and side')
+    position = location.get('position')
+    if not isinstance(position, list) or len(position) != 2:
+        raise ValueError(f'Location {name!r} position must be [x, y] in metres')
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in position
+    ):
+        raise ValueError(f'Location {name!r} position must contain finite numbers')
+    side = location.get('side')
+    if side not in ('left', 'right'):
+        raise ValueError(f'Location {name!r} side must be left or right')
+    return float(position[0]), float(position[1]), side
 
 __all__ = [
     'BODY_JOINT_GROUPS',

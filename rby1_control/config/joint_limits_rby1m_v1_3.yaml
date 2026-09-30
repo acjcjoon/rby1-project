@@ -1,0 +1,34 @@
+# RB-Y1 M v1.3 physical joint position limits from model_v1_3.urdf.
+# Cartesian soft limits are derived at runtime by adding/subtracting the
+# configured margin in degrees. Joint-space target validation uses these hard
+# bounds unchanged.
+schema_version: 1
+model: rby1_m_v1_3
+unit: rad
+joint_limits:
+  torso:
+    - {name: torso_0, lower: -0.261799388, upper: 0.261799388}
+    - {name: torso_1, lower: -0.523598776, upper: 1.570796327}
+    - {name: torso_2, lower: -2.617993878, upper: 1.570796327}
+    - {name: torso_3, lower: -0.785398163, upper: 1.570796327}
+    - {name: torso_4, lower: -0.523598776, upper: 0.523598776}
+    - {name: torso_5, lower: -2.35619449, upper: 2.35619449}
+  right_arm:
+    - {name: right_arm_0, lower: -3.141592654, upper: 3.141592654}
+    - {name: right_arm_1, lower: -3.141592654, upper: 0.017453293}
+    - {name: right_arm_2, lower: -3.141592654, upper: 3.141592654}
+    - {name: right_arm_3, lower: -2.617993878, upper: 0.017453293}
+    - {name: right_arm_4, lower: -3.141592654, upper: 3.141592654}
+    - {name: right_arm_5, lower: -0.8726646260, upper: 0.8726646260}
+    - {name: right_arm_6, lower: -1.5707963268, upper: 1.5707963268}
+  left_arm:
+    - {name: left_arm_0, lower: -3.141592654, upper: 3.141592654}
+    - {name: left_arm_1, lower: -0.017453293, upper: 3.141592654}
+    - {name: left_arm_2, lower: -3.141592654, upper: 3.141592654}
+    - {name: left_arm_3, lower: -2.617993878, upper: 0.017453293}
+    - {name: left_arm_4, lower: -3.141592654, upper: 3.141592654}
+    - {name: left_arm_5, lower: -0.8726646260, upper: 0.8726646260}
+    - {name: left_arm_6, lower: -1.5707963268, upper: 1.5707963268}
+  head:
+    - {name: head_0, lower: -1.57, upper: 1.57}
+    - {name: head_1, lower: -1.57, upper: 1.57}

@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from collections import deque
 import math
+from pathlib import Path
 import threading
 import time
 from typing import Deque, Dict, List, Optional, Tuple
 
+from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -35,7 +37,11 @@ from .backend_contract import (
 )
 from .control_transport import ControlTransport
 from .gripper_controller import GripperCommandError, GripperController
-from .manipulator_controller import ManipulatorController
+from .joint_limit_policy import (
+    JointLimitPolicy,
+    JointLimitPolicyError,
+)
+from .manipulator_controller import JOINT_NAMES, ManipulatorController
 from .mobile_base_controller import MobileBaseController
 from .robot_session import RobotSession
 from .state_manager import StateManager
@@ -70,41 +76,6 @@ except ImportError:
     GetCartesianPose = None  # type: ignore[assignment]
     StateOnOff = None  # type: ignore[assignment]
     RBY1_MSGS_AVAILABLE = False
-
-# RB-Y1 M v1.3 joint position limits from model_v1_3.urdf.
-# Unit: rad
-JOINT_LIMITS_RAD = {
-    "torso": (
-        (-0.261799388, 0.261799388),
-        (-0.523598776, 1.570796327),
-        (-2.617993878, 1.570796327),
-        (-0.785398163, 1.570796327),
-        (-0.523598776, 0.523598776),
-        (-2.35619449, 2.35619449),
-    ),
-    "right_arm": (
-        (-3.141592654, 3.141592654),
-        (-3.141592654, 0.017453293),
-        (-3.141592654, 3.141592654),
-        (-2.617993878, 0.017453293),
-        (-3.141592654, 3.141592654),
-        (-0.8726646260, 0.8726646260),
-        (-1.5707963268, 1.5707963268),
-    ),
-    "left_arm": (
-        (-3.141592654, 3.141592654),
-        (-0.017453293, 3.141592654),
-        (-3.141592654, 3.141592654),
-        (-2.617993878, 0.017453293),
-        (-3.141592654, 3.141592654),
-        (-0.8726646260, 0.8726646260),
-        (-1.5707963268, 1.5707963268),
-    ),
-    "head": (
-        (-1.57, 1.57),
-        (-1.57, 1.57),
-    ),
-}
 
 JOINT_MAX_VELOCITY_RAD = {
     'torso': (2.09439510, 2.09439510, 2.09439510, math.pi, math.pi, math.pi),
@@ -272,6 +243,18 @@ class RBY1ControlNode(Node):
         self.declare_parameter(
             'cartesian_state_period_sec',
             0.25,
+        )
+        self.declare_parameter(
+            'joint_limits_file',
+            'joint_limits_rby1m_v1_3.yaml',
+        )
+        self.declare_parameter(
+            'cartesian_joint_limit_margin_deg',
+            5.0,
+        )
+        self.declare_parameter(
+            'cartesian_joint_state_timeout_sec',
+            0.1,
         )
         self.declare_parameter(
             'joint_jog_minimum_time_sec',
@@ -467,6 +450,56 @@ class RBY1ControlNode(Node):
             fallback=0.25,
         )
 
+        joint_limits_file = str(
+            self.get_parameter('joint_limits_file').value
+        ).strip()
+        if not joint_limits_file:
+            raise JointLimitPolicyError(
+                'joint_limits_file must not be empty'
+            )
+        joint_limits_path = Path(joint_limits_file)
+        if not joint_limits_path.is_absolute():
+            joint_limits_path = (
+                Path(get_package_share_directory('rby1_control'))
+                / 'config'
+                / joint_limits_path
+            )
+        self.joint_limits_path = joint_limits_path
+        self.joint_limit_policy = JointLimitPolicy.from_yaml(
+            joint_limits_path,
+            expected_joint_names=JOINT_NAMES,
+        )
+
+        try:
+            cartesian_margin = float(
+                self.get_parameter(
+                    'cartesian_joint_limit_margin_deg'
+                ).value
+            )
+        except (TypeError, ValueError) as exc:
+            raise JointLimitPolicyError(
+                'cartesian_joint_limit_margin_deg must be a finite '
+                'non-negative number'
+            ) from exc
+        if not math.isfinite(cartesian_margin) or cartesian_margin < 0.0:
+            raise JointLimitPolicyError(
+                'cartesian_joint_limit_margin_deg must be a finite '
+                'non-negative number'
+            )
+        self.cartesian_joint_limit_margin_deg = cartesian_margin
+        for arm in ('right_arm', 'left_arm'):
+            self.joint_limit_policy.limits_deg(
+                arm,
+                margin_deg=self.cartesian_joint_limit_margin_deg,
+            )
+
+        self.cartesian_joint_state_timeout_sec = self._positive_float(
+            self.get_parameter(
+                'cartesian_joint_state_timeout_sec'
+            ).value,
+            fallback=0.1,
+        )
+
         self.joint_jog_minimum_time_sec = self._positive_float(
             self.get_parameter(
                 'joint_jog_minimum_time_sec'
@@ -655,6 +688,8 @@ class RBY1ControlNode(Node):
         # Keep one manipulation command active at a time.
         self._motion_busy = False
         self._active_motion_kind: Optional[str] = None
+        self._active_motion_mode: Optional[str] = None
+        self._active_motion_groups: Tuple[str, ...] = ()
         self._active_goal_handle = None
         self._active_task_command_id: Optional[str] = None
         self._task_command_sequence = 0
@@ -665,6 +700,7 @@ class RBY1ControlNode(Node):
         self._active_gripper_settle_duration_sec: Optional[float] = None
         self._active_gripper_settle_deadline: Optional[float] = None
         self._runtime_safety_stop_latched = False
+        self._cartesian_safety_stop_latched = False
 
         # Action-level cancellation state for press-and-hold Cartesian jogging.
         self._cancel_motion_on_accept = False
@@ -1195,7 +1231,13 @@ class RBY1ControlNode(Node):
         msg: JointState,
     ) -> None:
         """Cache a joint group state in operator-friendly degrees."""
-        self.manipulator_controller.update_joint_state(group, msg)
+        updated = self.manipulator_controller.update_joint_state(group, msg)
+        if updated:
+            # Cartesian action feedback carries no joint positions. Monitor
+            # the driver's JointState side channel on every received sample.
+            self._enforce_active_cartesian_joint_safety(
+                group_filter=group,
+            )
 
     def _poll_cartesian_state(self) -> None:
         """Request current right/left end-effector poses asynchronously."""
@@ -1523,10 +1565,131 @@ class RBY1ControlNode(Node):
             return False
         return True
 
+    def _cartesian_joint_safety_reason(
+        self,
+        arm: str,
+        *,
+        now: Optional[float] = None,
+    ) -> Optional[str]:
+        """Return why one arm's JointState is unsafe for Cartesian motion."""
+
+        captured_at = time.monotonic() if now is None else float(now)
+        with self.manipulator_controller.lock:
+            values = self._joint_groups_deg.get(arm)
+            values_copy = list(values) if values is not None else None
+            updated_at = self._joint_updated_at.get(arm)
+            order_verified = self._joint_order_verified.get(arm, False)
+
+        if values_copy is None:
+            return f'{arm} JointState is unavailable'
+        if not order_verified:
+            return f'{arm} JointState is not name-ordered'
+        if not self._timestamp_is_fresh(
+            updated_at,
+            now=captured_at,
+            maximum_age=self.cartesian_joint_state_timeout_sec,
+        ):
+            return (
+                f'{arm} JointState is stale '
+                f'(timeout={self.cartesian_joint_state_timeout_sec:.3f} s)'
+            )
+
+        try:
+            violation = self.joint_limit_policy.first_violation(
+                arm,
+                values_copy,
+                margin_deg=self.cartesian_joint_limit_margin_deg,
+            )
+        except JointLimitPolicyError as exc:
+            return f'{arm} joint-limit check failed: {exc}'
+
+        if violation is None:
+            return None
+        return (
+            f'{violation.joint_name} measured '
+            f'{violation.value_deg:+.2f} deg outside the CS soft limit '
+            f'[{violation.lower_deg:+.2f}, '
+            f'{violation.upper_deg:+.2f}] deg '
+            f'(margin={self.cartesian_joint_limit_margin_deg:.2f} deg)'
+        )
+
+    def _cartesian_joint_preflight_ready(self, arm: str) -> bool:
+        """Reject a CS goal unless its arm starts with safe JointState."""
+
+        reason = self._cartesian_joint_safety_reason(arm)
+        if reason is None:
+            return True
+        self._push_event(
+            'error',
+            f'Cartesian motion rejected: {reason}.',
+        )
+        return False
+
+    def _enforce_active_cartesian_joint_safety(
+        self,
+        *,
+        group_filter: Optional[str] = None,
+    ) -> bool:
+        """Stop the active CS goal on a soft-limit or feedback violation."""
+
+        with self._lock:
+            if (
+                not self._motion_busy
+                or self._active_motion_mode != 'cartesian'
+                or self._cartesian_safety_stop_latched
+            ):
+                return False
+            active_groups = tuple(self._active_motion_groups)
+
+        if group_filter is not None and group_filter not in active_groups:
+            return False
+
+        for arm in active_groups:
+            reason = self._cartesian_joint_safety_reason(arm)
+            if reason is not None:
+                self._trigger_cartesian_joint_safety_stop(reason)
+                return True
+        return False
+
+    def _trigger_cartesian_joint_safety_stop(self, reason: str) -> None:
+        """Latch one CS failure and request both action and driver cancel."""
+
+        with self._lock:
+            if (
+                not self._motion_busy
+                or self._active_motion_mode != 'cartesian'
+                or self._cartesian_safety_stop_latched
+            ):
+                return
+            self._cartesian_safety_stop_latched = True
+            task_id = self._active_task_command_id
+
+        message = f'Cartesian joint safety stop: {reason}'
+        self._set_task_command_result(
+            task_id,
+            TaskCommandStatus.FAILED,
+            message,
+        )
+        self._push_event('error', f'{message}.')
+
+        # Action cancellation handles the normal path. The driver's global
+        # control cancel is a second, safety-oriented stop path. It deliberately
+        # bypasses cancel_motion() so a concurrent gripper trajectory is not
+        # canceled as a side effect of this CS-only guard.
+        self.cancel_active_motion()
+        self._request_driver_motion_cancel(
+            self._cartesian_safety_driver_cancel_done,
+        )
+
     def _enforce_runtime_motion_safety(self) -> None:
         """Stop UI-owned motion if live safety feedback is lost or unsafe."""
 
         if not self.services_enabled:
+            return
+
+        # JointState is checked immediately in its subscription callback. This
+        # timer independently catches a stopped or delayed feedback stream.
+        if self._enforce_active_cartesian_joint_safety():
             return
 
         command, command_stale = self._current_command()
@@ -1622,9 +1785,10 @@ class RBY1ControlNode(Node):
     ) -> bool:
         """Check requested joint targets against RB-Y1 M v1.3 limits."""
 
-        limits = JOINT_LIMITS_RAD.get(group)
-
-        if limits is None:
+        try:
+            configured_limits = self.joint_limit_policy.limits(group)
+            limits = self.joint_limit_policy.limits_rad(group)
+        except JointLimitPolicyError:
             self._push_event(
                 "error",
                 f"No joint limits defined for group: {group}.",
@@ -1666,7 +1830,7 @@ class RBY1ControlNode(Node):
                 lower_deg = math.degrees(lower_rad)
                 upper_deg = math.degrees(upper_rad)
 
-                joint_name = f"{group}_{index}"
+                joint_name = configured_limits[index].name
 
                 self._push_event(
                     "warning",
@@ -1787,6 +1951,8 @@ class RBY1ControlNode(Node):
             client=self.joint_action_client,
             goal=goal,
             label=f'Joint {group}',
+            motion_mode='joint',
+            motion_groups=(group,),
         )
 
     def jog_cartesian(
@@ -2016,6 +2182,8 @@ class RBY1ControlNode(Node):
             return
         if not self._cartesian_feedback_ready(arm):
             return
+        if not self._cartesian_joint_preflight_ready(arm):
+            return
 
         if (
             self.cartesian_action_client is None
@@ -2095,6 +2263,8 @@ class RBY1ControlNode(Node):
             client=self.cartesian_action_client,
             goal=goal,
             label=f'Cartesian {arm}',
+            motion_mode='cartesian',
+            motion_groups=(arm,),
         )
 
     # ==================================================================
@@ -2238,6 +2408,8 @@ class RBY1ControlNode(Node):
                 goal=goal,
                 label=f'Task Joint {label}',
                 task_id=command_id,
+                motion_mode='joint',
+                motion_groups=tuple(group_labels),
             )
         else:
             arm = str(command.group)
@@ -2247,6 +2419,16 @@ class RBY1ControlNode(Node):
                 raise RuntimeError(
                     f'fresh {arm} Cartesian state is required'
                 )
+            if not self._cartesian_joint_preflight_ready(arm):
+                message = (
+                    f'{arm} JointState violates the Cartesian '
+                    'preflight safety policy'
+                )
+                self._task_commands[command_id] = TaskCommandState(
+                    TaskCommandStatus.FAILED,
+                    message,
+                )
+                raise RuntimeError(message)
             if (
                 self.cartesian_action_client is None
                 or Rby1CartesianCommand is None
@@ -2290,6 +2472,8 @@ class RBY1ControlNode(Node):
                 goal=goal,
                 label=f'Task Cartesian {arm}',
                 task_id=command_id,
+                motion_mode='cartesian',
+                motion_groups=(arm,),
             )
 
         return command_id
@@ -2464,13 +2648,18 @@ class RBY1ControlNode(Node):
         goal,
         label: str,
         task_id: Optional[str] = None,
+        motion_mode: Optional[str] = None,
+        motion_groups: Tuple[str, ...] = (),
     ) -> None:
         self._motion_busy = True
         self._active_motion_kind = label
+        self._active_motion_mode = motion_mode
+        self._active_motion_groups = tuple(motion_groups)
         self._active_goal_handle = None
         self._active_task_command_id = task_id
         self._cancel_motion_on_accept = False
         self._active_cancel_requested = False
+        self._cartesian_safety_stop_latched = False
 
         future = client.send_goal_async(goal)
         self._pending_futures.append(future)
@@ -2502,10 +2691,13 @@ class RBY1ControlNode(Node):
         except Exception as exc:
             self._motion_busy = False
             self._active_motion_kind = None
+            self._active_motion_mode = None
+            self._active_motion_groups = ()
             self._active_goal_handle = None
             self._active_task_command_id = None
             self._cancel_motion_on_accept = False
             self._active_cancel_requested = False
+            self._cartesian_safety_stop_latched = False
             self._set_task_command_result(
                 task_id,
                 TaskCommandStatus.FAILED,
@@ -2521,10 +2713,13 @@ class RBY1ControlNode(Node):
         if goal_handle is None or not goal_handle.accepted:
             self._motion_busy = False
             self._active_motion_kind = None
+            self._active_motion_mode = None
+            self._active_motion_groups = ()
             self._active_goal_handle = None
             self._active_task_command_id = None
             self._cancel_motion_on_accept = False
             self._active_cancel_requested = False
+            self._cartesian_safety_stop_latched = False
             self._set_task_command_result(
                 task_id,
                 TaskCommandStatus.FAILED,
@@ -2546,7 +2741,10 @@ class RBY1ControlNode(Node):
 
         # The direction key may have been released while send_goal_async()
         # was still waiting for the server response.
-        if self._cancel_motion_on_accept:
+        if (
+            self._cancel_motion_on_accept
+            or self._cartesian_safety_stop_latched
+        ):
             self._request_active_goal_cancel(goal_handle)
 
         result_future = goal_handle.get_result_async()
@@ -2571,10 +2769,13 @@ class RBY1ControlNode(Node):
 
         self._motion_busy = False
         self._active_motion_kind = None
+        self._active_motion_mode = None
+        self._active_motion_groups = ()
         self._active_goal_handle = None
         self._active_task_command_id = None
         self._cancel_motion_on_accept = False
         self._active_cancel_requested = False
+        self._cartesian_safety_stop_latched = False
 
         try:
             wrapped_result = future.result()
@@ -2718,6 +2919,61 @@ class RBY1ControlNode(Node):
             )
             self._clear_active_gripper_task()
 
+    def _request_driver_motion_cancel(self, done_callback) -> bool:
+        """Request the driver's control cancel with a selected completion."""
+
+        if self.cancel_control_client is None:
+            return False
+
+        if not self.cancel_control_client.service_is_ready():
+            self._push_event(
+                'warning',
+                f'Cancel service not ready: '
+                f'{self.cancel_control_service}',
+            )
+            return False
+
+        request = Trigger.Request()
+        future = self.cancel_control_client.call_async(request)
+        self._pending_futures.append(future)
+        future.add_done_callback(done_callback)
+        self._push_event(
+            'warning',
+            'Motion cancel requested.',
+        )
+        return True
+
+    def _cartesian_safety_driver_cancel_done(self, future) -> None:
+        """Report a CS safety cancel without clearing unrelated state."""
+
+        self._discard_future(future)
+        try:
+            result = future.result()
+        except Exception as exc:
+            self._push_event(
+                'error',
+                f'Cartesian safety driver cancel failed: {exc}',
+            )
+            return
+
+        if result is not None and bool(result.success):
+            self._push_event(
+                'info',
+                f'Cartesian safety driver cancel succeeded: '
+                f'{result.message}',
+            )
+            return
+
+        message = (
+            getattr(result, 'message', 'No response')
+            if result is not None
+            else 'No response'
+        )
+        self._push_event(
+            'error',
+            f'Cartesian safety driver cancel failed: {message}',
+        )
+
     def cancel_motion(self) -> None:
         """Cancel robot control through the driver's Trigger service.
 
@@ -2728,30 +2984,8 @@ class RBY1ControlNode(Node):
         # Gripper commands use a topic rather than the driver's motion action.
         # Stop their local trajectory before any service availability return.
         self._cancel_gripper_motion()
-
-        if self.cancel_control_client is None:
-            return
-
-        if not self.cancel_control_client.service_is_ready():
-            self._push_event(
-                'warning',
-                f'Cancel service not ready: '
-                f'{self.cancel_control_service}',
-            )
-            return
-
-        request = Trigger.Request()
-        future = self.cancel_control_client.call_async(request)
-
-        self._pending_futures.append(future)
-
-        future.add_done_callback(
-            self._cancel_motion_done
-        )
-
-        self._push_event(
-            'warning',
-            'Motion cancel requested.',
+        self._request_driver_motion_cancel(
+            self._cancel_motion_done,
         )
 
     def _cancel_motion_done(self, future) -> None:
@@ -2770,6 +3004,8 @@ class RBY1ControlNode(Node):
             active_task_id = self._active_task_command_id
             self._motion_busy = False
             self._active_motion_kind = None
+            self._active_motion_mode = None
+            self._active_motion_groups = ()
             self._active_goal_handle = None
             self._active_task_command_id = None
             self._cancel_motion_on_accept = False

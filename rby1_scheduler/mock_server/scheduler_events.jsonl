@@ -1,0 +1,4 @@
+
+{"sequence":1,"timestamp":"2026-09-29T11:05:42.264735+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-09-29T11:16:15.260419+00:00","type":"task_promoted","task_id":"B002.T01","reason":"PyQt operator"}
+{"sequence":3,"timestamp":"2026-09-29T11:16:23.867340+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}

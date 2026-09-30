@@ -1,0 +1,35 @@
+schema_version: 1
+transfer:
+  default_min: 5
+  override: {}
+devices:
+  LH1: {job_capacity: 1, plate_capacity: 3}
+  LH2: {job_capacity: 1, plate_capacity: 2}
+  ZS: {job_capacity: 1, plate_capacity: 1}
+  MPR: {job_capacity: 1, plate_capacity: 1}
+  INC: {job_capacity: 5, plate_capacity: 5}
+  HOLD: {job_capacity: 0, plate_capacity: 3}
+initial_plates: {C: INBOX, D: STORE}
+workflow:
+  - {id: T01, kind: transfer, role: C, source: INBOX, destination: LH1, priority: P5, after: []}
+  - {id: S1, kind: process, roles: [C], produces: [A, B, C], device: LH1, duration_min: 120, after: [T01]}
+  - {id: T02, kind: transfer, role: A, source: LH1, destination: ZS, priority: P2, after: [S1]}
+  - {id: T03, kind: transfer, role: B, source: LH1, destination: MPR, priority: P2, after: [S1]}
+  - {id: T04, kind: transfer, role: C, source: LH1, destination: HOLD, priority: P2, after: [S1]}
+  - {id: S2, kind: process, roles: [A], produces: [A], device: ZS, duration_min: 360, after: [T02]}
+  - {id: S3, kind: process, roles: [B], produces: [B], device: MPR, duration_min: 360, after: [T03]}
+  - {id: T05, kind: transfer, role: D, source: STORE, destination: LH2, priority: P5, after: []}
+  - {id: S4, kind: process, roles: [D], produces: [D], device: LH2, duration_min: 120, after: [T05]}
+  - {id: T06, kind: transfer, role: D, source: LH2, destination: INC, priority: P5, after: [S4]}
+  - {id: S5, kind: process, roles: [D], produces: [D], device: INC, duration_min: 1440, after: [T06]}
+  - {id: T07, kind: transfer, role: D, source: INC, destination: LH2, priority: P1, after: [S5]}
+  - {id: T08, kind: transfer, role: C, source: HOLD, destination: LH2, priority: P5, after: [T04, T07]}
+  - {id: S6, kind: process, roles: [C, D], produces: [C, D], device: LH2, duration_min: 180, after: [T07, T08]}
+  - {id: T09, kind: transfer, role: D, source: LH2, destination: INC, priority: P5, after: [S6]}
+  - {id: T13, kind: transfer, role: C, source: LH2, destination: WASTE, priority: P4, after: [S6]}
+  - {id: S7, kind: process, roles: [D], produces: [D], device: INC, duration_min: 1440, after: [T09]}
+  - {id: T10, kind: transfer, role: D, source: INC, destination: MPR, priority: P5, after: [S7]}
+  - {id: S8, kind: process, roles: [D], produces: [D], device: MPR, duration_min: 180, after: [T10]}
+  - {id: T11, kind: transfer, role: A, source: ZS, destination: WASTE, priority: P4, after: [S2]}
+  - {id: T12, kind: transfer, role: B, source: MPR, destination: WASTE, priority: P4, after: [S3]}
+  - {id: T14, kind: transfer, role: D, source: MPR, destination: WASTE, priority: P4, after: [S8]}
