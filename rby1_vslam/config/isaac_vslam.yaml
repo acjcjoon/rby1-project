@@ -13,8 +13,8 @@
     camera_optical_frames: [d435_infra1_optical_frame, d435_infra2_optical_frame]
     map_frame: vslam_map
     odom_frame: vslam_odom
-    publish_map_to_odom_tf: false
-    publish_odom_to_base_tf: false
+    publish_map_to_odom_tf: true
+    publish_odom_to_base_tf: true
     override_publishing_stamp: false
     image_qos: SENSOR_DATA
     imu_qos: SENSOR_DATA

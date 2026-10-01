@@ -94,6 +94,26 @@ ros2 run tf2_ros tf2_echo base d435_link
 별도로 먼저 실행했다면 UPC launch에 `start_camera:=false`를 주어 중복을 막는다.
 mapping/localization/lab 중 하나만 LAB에서 실행한다.
 
+### LAB/UPC 빠른 실행 스크립트
+
+반복 실험에서는 scripts/run_vslam_lab.sh와 scripts/run_vslam_upc.sh를 사용한다.
+LAB 스크립트는 Isaac ROS Jazzy 컨테이너 내부에서 cuVSLAM과 RViz2를 함께 띄우며,
+RViz Fixed Frame을 vslam_map으로 시작한다. 기본값은 mapping, IMU 비활성,
+ROS_DOMAIN_ID=85이다.
+
+    # LAB PC의 Isaac ROS 컨테이너 내부
+    cd /workspaces/isaac_ros-dev/src/rby1_vslam
+    ./scripts/run_vslam_lab.sh
+
+UPC 스크립트는 Jetson Humble에서 실행하고 LAB PC의 실제 유선 IP를 전달한다.
+
+    cd "$HOME/rby1_ros2_ws/src/rby1-project/rby1_vslam"
+    ./scripts/run_vslam_upc.sh --lab-host 192.168.30.50
+
+UPC 스크립트는 upc.launch.py만 실행하므로 robot driver, control, Nav2와 operator UI는
+시작하지 않는다. 전체 실물 stack은 physical.launch.py를 사용하고, 수동 mapping용
+driver/control/UI 묶음은 scripts/run_vslam_mapping_upc.sh를 사용한다.
+
 ## 오늘 실물 실험 순서
 
 아래 순서는 Isaac Sim을 사용하지 않는다. Jetson은 ROS 2 Humble과 실물 RBY1/D435i만
@@ -274,6 +294,10 @@ cuVGL을 추가하며, 오늘의 pose-hint 절차와 Jetson에는 필요하지 �
 
 Nav2 목표 action은 `/rby1/vslam/nav2/navigate_to_pose`와 `/rby1/vslam/nav2/navigate_through_poses`이다. 게이트 활성화는 `/rby1/vslam/enable` (`std_srvs/SetBool`), 정지·goal 취소는 `/rby1/vslam/cancel` (`std_srvs/Trigger`)이다.
 
-기존 `/rby1/odom`, `odom → base` TF authority는 유지한다. Isaac 쪽 TF 자동 발행은 껐다. UPC의 navigation launch만 `vslam_map → odom` 보정 TF를 발행한다. 기존 AMCL/SLAM처럼 `odom`에 다른 parent TF를 발행하는 노드는 함께 실행하지 않는다.
+기존 `/rby1/odom`, `odom → base` TF authority는 유지한다. LAB의 Isaac cuVSLAM은
+LAB 로컬 RViz용 `vslam_map → vslam_odom → d435_link` TF를 발행하지만, 이 동적 TF는
+TCP로 UPC에 전달하지 않는다. UPC에서는 navigation launch만 `vslam_map → odom`
+보정 TF를 발행한다. 기존 AMCL/SLAM처럼 `odom`에 다른 parent TF를 발행하는 노드는
+함께 실행하지 않는다.
 
 640×480 mono8 스테레오 30 Hz의 영상 원본은 약 147 Mbps이다. 유선 1 Gbps부터 시작한다. TCP는 영상/보정/IMU 및 추정 결과용이고 로봇 전원이나 속도 명령을 네트워크 반대편에서 받아 실행하지 않는다. 신뢰할 수 있는 실험실 LAN/VPN에서만 포트를 노출한다. 자세한 큐/재연결 동작은 코드와 [실험 가이드](docs/experiment.md)를 참고한다.
