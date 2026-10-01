@@ -1,5 +1,31 @@
 # rby1_vslam
 
+## 웹 오퍼레이터
+
+`rby1_vslam`이 SLAM·위치 추정·Nav2를 맡고, `rby1_web`이 UPC의 웹 운영 화면을 맡는다.
+`physical.launch.py`의 기본 UI는 웹이며 노트북에서 `http://<UPC-IP>:8080`으로 접속한다.
+UPC 빌드 대상에 `rby1_web`도 포함한다. 기존 웨이포인트 YAML을 그대로 사용한다.
+
+```bash
+colcon build --symlink-install --packages-up-to rby1_web rby1_description
+ros2 launch rby1_vslam physical.launch.py lab_host:=192.168.30.50
+```
+
+웹에서 수동 주행, 현재 위치 저장/삭제/불러오기, 웨이포인트 이동/취소, 지도/경로/로봇 위치와
+TCP·추적·Nav2 상태를 확인한다. Qt/RViz는 `ui_backend:=qt`로 선택할 수 있는 검증용 fallback이다.
+
+**랩 PC/TCP 연결 없이 수동 베이스만 움직일 때는** 프로젝트 루트에서
+`bash run_mobile_base_web.sh`를 실행한다. 이 경로는 카메라·VSLAM·Nav2를 실행하지 않으며
+`lab_host`나 tracking 상태를 요구하지 않는다. 전체 VSLAM 웹 실행 스크립트는
+`bash run_vslam_web.sh lab_host:=<LAB-IP>`다. 두 스택을 동시에 실행하지 않는다.
+
+자세한 실행법과 merge 인터페이스는 [rby1_web 안내](../rby1_web/README.md)와
+[인터페이스 계약](../rby1_web/INTERFACES.md)에 있다.
+
+UPC/LAB 지연을 정량적으로 기록하려면 **[양쪽 시간 계측 가이드](docs/timing_capture.md)**를
+참고한다. 실행 로직을 바꾸지 않고 JSONL·rosbag 및 선택적 TCP pcap을 수집하여 오프라인
+CSV/그래프 분석에 사용한다.
+
 RBY1의 Jetson(Ubuntu 22.04 / ROS 2 Humble)에서 D435i를 읽고, LAB PC의 Ubuntu 24.04 / ROS 2 Jazzy / Isaac ROS 4.5로 TCP 전송해 VSLAM을 계산한다. 결과를 Jetson으로 돌려받아 로봇 베이스 위치로 변환하고, **Jetson의 Nav2**에서 경로를 계산한 뒤 기존 **`/rby1/cmd_raw` (`geometry_msgs/Twist`)**에 발행한다.
 
 이 패키지만 양쪽에 복사해 빌드한다. **Jetson에는 Isaac ROS를 설치하지 않는다.** LAB PC만 Isaac ROS를 실행한다. 실물 전체 절차와 명령은 **[Jetson 실물 실행 가이드](docs/jetson_physical.md)**에 정리되어 있다.

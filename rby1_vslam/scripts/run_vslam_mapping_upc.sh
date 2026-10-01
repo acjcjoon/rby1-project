@@ -6,7 +6,7 @@
 #   robot_state_publisher
 #   rby1_control
 #   rby1_vslam/upc.launch.py (D435i + TCP bridge + pose adapter)
-#   rby1_planner/planner_ui.launch.py (Base Jog / operator controls)
+#   rby1_web/operator_web.launch.py (browser operator)
 #
 # Intentionally DOES NOT start:
 #   rby1_navigation / Nav2
@@ -38,10 +38,10 @@ D435_SERIAL=""
 CAMERA_MODE="auto"
 ENABLE_IMU="false"
 START_UI="true"
+WEB_PORT=8080
 STARTUP_TIMEOUT_SEC=45
 
 CONTROL_CONFIG="${PROJECT_ROOT}/rby1_control/config/default.yaml"
-PLANNER_CONFIG="${PROJECT_ROOT}/rby1_planner/config/default.yaml"
 DRIVER_CONFIG="${DRIVER_REPO}/rby1_driver/config/driver_parameters.yaml"
 
 usage() {
@@ -60,12 +60,14 @@ Options:
   --d435-serial SERIAL         Pin D435i serial (digits only)
   --camera auto|start|reuse    auto: reuse existing IR camera if present
   --enable-imu true|false      Forward/use IMU in UPC bridge (default: false)
-  --no-ui                      Do not launch planner UI
+  --no-ui                      Do not launch the web operator
+  --web-port PORT              Web operator TCP port (default: 8080)
   --startup-timeout SEC        Readiness timeout per stage (default: 45)
   -h, --help
 
 This mapping launcher intentionally does NOT start rby1_navigation/Nav2.
-Use the Planner UI "Base" tab for slow manual mapping motion.
+Use http://<UPC-IP>:8080 for slow manual mapping motion.
+For driving without LAB/TCP, use the project run_mobile_base_web.sh instead.
 EOF
 }
 
@@ -85,6 +87,7 @@ while (($#)); do
     --camera) require_value "$@"; CAMERA_MODE="$2"; shift 2 ;;
     --enable-imu) require_value "$@"; ENABLE_IMU="$2"; shift 2 ;;
     --no-ui) START_UI="false"; shift ;;
+    --web-port) require_value "$@"; WEB_PORT="$2"; shift 2 ;;
     --startup-timeout) require_value "$@"; STARTUP_TIMEOUT_SEC="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
@@ -96,11 +99,12 @@ done
 [[ "$CAMERA_MODE" == "auto" || "$CAMERA_MODE" == "start" || "$CAMERA_MODE" == "reuse" ]] || die "--camera must be auto, start, or reuse."
 [[ "$ENABLE_IMU" == "true" || "$ENABLE_IMU" == "false" ]] || die "--enable-imu must be true or false."
 [[ "$STARTUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ ]] || die "--startup-timeout must be a positive integer."
+[[ "$WEB_PORT" =~ ^[1-9][0-9]*$ ]] && ((WEB_PORT <= 65535)) || die "Invalid --web-port."
 [[ -z "$D435_SERIAL" || "$D435_SERIAL" =~ ^[0-9]+$ ]] || die "D435 serial must contain digits only."
 
 ROBOT_URDF="${DRIVER_REPO}/rby1_description/urdf/rby1${ROBOT_MODEL}/model_v${ROBOT_VERSION}.urdf"
 
-for f in "$ROS_SETUP" "$WORKSPACE_SETUP" "$DRIVER_CONFIG" "$CONTROL_CONFIG" "$PLANNER_CONFIG" "$ROBOT_URDF"; do
+for f in "$ROS_SETUP" "$WORKSPACE_SETUP" "$DRIVER_CONFIG" "$CONTROL_CONFIG" "$ROBOT_URDF"; do
   [[ -r "$f" ]] || die "Required file missing: $f"
 done
 
@@ -108,12 +112,12 @@ source "$ROS_SETUP"
 source "$WORKSPACE_SETUP"
 export ROS_DOMAIN_ID="$ROS_DOMAIN"
 
-for pkg in rby1_driver rby1_description robot_state_publisher rby1_control rby1_planner rby1_vslam tf2_ros; do
+for pkg in rby1_driver rby1_description robot_state_publisher rby1_control rby1_vslam tf2_ros; do
   ros2 pkg prefix "$pkg" >/dev/null 2>&1 || die "ROS package not found: $pkg"
 done
 
-if [[ "$START_UI" == "true" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-  die "Planner UI requested but DISPLAY/WAYLAND_DISPLAY is unset. Use X11/desktop or pass --no-ui."
+if [[ "$START_UI" == "true" ]]; then
+  ros2 pkg prefix rby1_web >/dev/null 2>&1 || die "Build rby1_web for the browser operator."
 fi
 
 python3 - "$ROBOT_IP" <<'PY' || die "RBY1 RPC is unreachable at ${ROBOT_IP}"
@@ -329,15 +333,19 @@ wait_for_message "/rby1/vslam/camera_odometry" LAB_cuVSLAM_return
 check_tf base d435_link true
 wait_for_message "/rby1/vslam/slam_odom" pose_adapter
 
-# 5) Planner UI for manual mapping.
+# 5) Browser operator for manual mapping (no desktop display needed).
 if [[ "$START_UI" == "true" ]]; then
-  if ros2 node list 2>/dev/null | grep -qx "/${NAMESPACE}/rby1_planner_ui"; then
-    info "Planner UI already exists; not starting duplicate."
+  if ros2 node list 2>/dev/null | grep -qx "/${NAMESPACE}/operator_web"; then
+    info "Web operator already exists; not starting duplicate."
   else
-    start_process planner_ui \
-      ros2 launch rby1_planner planner_ui.launch.py \
+    start_process operator_web \
+      ros2 launch rby1_web operator_web.launch.py \
         "namespace:=${NAMESPACE}" \
-        "config:=${PLANNER_CONFIG}"
+        "web_port:=${WEB_PORT}" \
+        "control_command_topic:=/${NAMESPACE}/control/command" \
+        "control_state_topic:=/${NAMESPACE}/control/state" \
+        "control_event_topic:=/${NAMESPACE}/control/event" \
+        "control_response_topic:=/${NAMESPACE}/control/response"
   fi
 fi
 
@@ -358,13 +366,13 @@ Verified:
 
 MANUAL MAPPING:
   1. Keep the physical EMO reachable.
-  2. Planner UI: verify EMO=RELEASED and Collision=CLEAR.
+  2. Open http://<UPC-IP>:${WEB_PORT}; verify EMO=OFF and Collision=OFF.
   3. Power ON.
   4. Servo ON.
-  5. Stream ON.
-  6. Control Manager ENABLE.
+  5. Control Manager ENABLE.
+  6. Stream ON.
   7. Confirm CONTROL is ENABLE or EXECUTING.
-  8. Base tab: start slow (~0.05 m/s, yaw ~0.10-0.15 rad/s).
+  8. Hold the web drive buttons; default speed is 0.02 m/s, yaw 0.08 rad/s.
   9. Move smoothly through the area and return near the start for loop closure.
 
 IMPORTANT:

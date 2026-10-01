@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RB-Y1 Operator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101720;color:#e8edf4;font:16px system-ui,sans-serif}
+main{max-width:780px;margin:auto;padding:28px 20px}h1{font-size:26px;margin-bottom:6px}
+p{color:#a7b4c4;line-height:1.6}section{background:#1a2431;border:1px solid #304052;border-radius:16px;padding:20px;margin:18px 0}
+button{background:#2c4057;border:1px solid #4a627b;border-radius:10px;color:inherit;font:inherit;padding:14px;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}button:active{background:#337daa}button:focus-visible{outline:3px solid #6fbaff}
+.steps{display:flex;flex-wrap:wrap;gap:10px}.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:420px;margin:20px auto}
+.drive{touch-action:none;user-select:none;min-height:80px;font-size:22px}.stop{background:#a83340;border-color:#d66a75;font-weight:bold}
+.wide{width:100%;font-size:21px}.status{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;color:#b6c7da}
+#connection{font-weight:bold;color:#ffcf74}input{width:100%;margin:12px 0}label{display:block;margin:12px 0}
+pre{white-space:pre-wrap;word-break:break-word;font:13px system-ui;max-height:180px;overflow:auto;color:#b6c7da}
+#error{color:#ffb0b0;min-height:24px}
+input[type=text],select{background:#101720;color:inherit;border:1px solid #4a627b;border-radius:8px;padding:10px}
+.vslam{display:none}body.vslam-mode .vslam{display:block}canvas{width:100%;height:360px;background:#111a25;border-radius:10px}
+table{width:100%;border-collapse:collapse;margin:14px 0}td,th{padding:9px;text-align:left;border-bottom:1px solid #304052}
+tr.selected{background:#2c4057}tbody tr{cursor:pointer}#pose{color:#a8d8ff;margin:12px 0}
+</style>
+<main>
+<h1 id="title">RB-Y1 모바일 베이스</h1>
+<p>UPC에서 실행 · 노트북 브라우저로 제어</p>
+<section>
+<div id="connection">백엔드 연결 확인 중…</div>
+<p>순서대로 활성화하세요. Power / Servo는 로봇 전체에 적용됩니다.</p>
+<div class="steps">
+<button data-op="power_on">1. Power ON</button><button data-op="servo_on">2. Servo ON</button>
+<button data-op="enable">3. Control Enable</button><button data-op="stream_on">4. Stream ON</button>
+</div>
+<div class="status" id="status" style="margin-top:18px"></div>
+</section>
+<section class="vslam">
+<strong>VSLAM / Navigation</strong>
+<p id="vslamStatus">VSLAM 상태 확인 중…</p>
+<div id="pose">현재 위치 없음</div>
+<canvas id="map" width="720" height="360" aria-label="지도, 경로, 웨이포인트와 현재 로봇 위치"></canvas>
+<p id="mapNote">occupancy map 없이도 웨이포인트·위치·경로를 표시합니다.</p>
+<p>LiDAR / 장애물 센서가 비활성인 구성에서는 장애물 회피를 하지 않습니다.</p>
+</section>
+<section>
+<label>직진 속도 <span id="linearValue"></span> m/s <input id="linear" type="range" min="0.02" max="0.2" step="0.01" value="0.1"></label>
+<label>회전 속도 <span id="angularValue"></span> rad/s <input id="angular" type="range" min="0.02" max="0.4" step="0.01" value="0.2"></label>
+<p>이동 버튼을 누르고 있는 동안만 움직입니다. 버튼 해제·화면 이탈·통신 끊김 시 정지합니다.</p>
+<div class="pad">
+<span></span><button class="drive" data-vx="1" data-wz="0">↑ 전진</button><span></span>
+<button class="drive" data-vx="0" data-wz="1">↶ 좌회전</button><button class="stop" id="stop">정지</button><button class="drive" data-vx="0" data-wz="-1">↷ 우회전</button>
+<button class="drive" data-vx="0" data-vy="1" data-wz="0">← 좌이동</button><span></span><button class="drive" data-vx="0" data-vy="-1" data-wz="0">→ 우이동</button>
+<span></span><button class="drive" data-vx="-1" data-wz="0">↓ 후진</button><span></span>
+</div>
+<button class="stop wide" id="stopAll">STOP · 베이스 정지</button>
+<p>이 버튼은 모바일 베이스 소프트웨어 정지입니다. 로봇의 물리 비상정지 버튼도 사용할 수 있습니다.</p>
+<div id="error" role="alert"></div>
+<div class="steps"><button data-op="stream_off">Stream OFF</button><button data-op="disable">Control Disable</button></div>
+</section>
+<section class="vslam">
+<strong>웨이포인트 · 현재 위치 저장 / 내비게이션</strong>
+<input type="text" id="waypointName" maxlength="100" placeholder="웨이포인트 이름">
+<div class="steps"><button id="savePoint">현재 위치 저장</button><button id="deletePoint">선택 삭제</button><button id="reloadPoints">불러오기</button></div>
+<table><thead><tr><th>이름</th><th>X (m)</th><th>Y (m)</th><th>Yaw (°)</th></tr></thead><tbody id="waypoints"></tbody></table>
+<div class="steps"><button id="navigate">선택 지점으로 이동</button><button class="stop" id="cancelNav">내비게이션 취소 + 정지</button></div>
+<p id="navStatus">내비게이션 대기</p>
+</section>
+<section><strong>제어 이벤트</strong><pre id="events">아직 이벤트 없음</pre></section>
+</main>
+<script>
+const token=__API_TOKEN__, session=crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2);
+let sequence=0, held=null, busy=false, connected=false, ready=false, lastState=0;
+let mode='mobile',operator={},selected=null,waypointKey='',mapData=null,mapImage=null;
+const $=id=>document.getElementById(id);
+const error=text=>$('error').textContent=text;
+async function command(operation,args={},keepalive=false,gesture=null){
+  const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json','X-RBY1-Token':token},
+    body:JSON.stringify({schema_version:1,session,seq:++sequence,operation,arguments:args,gesture}),keepalive,
+    signal:keepalive?undefined:AbortSignal.timeout(1200)});
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.error||'명령 전송 실패');
+}
+function stop(){held=null;command('stop',{},true).catch(e=>error(e.message));}
+for(const id of ['stop','stopAll'])$(id).onclick=stop;
+document.querySelectorAll('[data-op]').forEach(button=>button.onclick=async()=>{
+  stop();error('');
+  try{await command(button.dataset.op);}catch(e){error(e.message);}
+});
+function labels(){ $('linearValue').textContent=Number($('linear').value).toFixed(2);$('angularValue').textContent=Number($('angular').value).toFixed(2); }
+$('linear').oninput=labels;$('angular').oninput=labels;labels();
+async function drive(){
+  if(!held||busy)return;
+  if(!ready||performance.now()-lastState>1000){stop();return;}
+  busy=true;
+  const direction=held;
+  try{await command('set_velocity',{vx:direction.vx*Number($('linear').value),vy:direction.vy*Number($('linear').value),wz:direction.wz*Number($('angular').value)},false,direction.gesture);}
+  catch(e){error(e.message);stop();}
+  finally{busy=false;}
+}
+document.querySelectorAll('.drive').forEach(button=>{
+  button.onpointerdown=e=>{
+    if(!ready||held||e.button!==0)return;
+    e.preventDefault();button.setPointerCapture(e.pointerId);error('');
+    held={vx:Number(button.dataset.vx),vy:Number(button.dataset.vy||0),wz:Number(button.dataset.wz),gesture:Math.random().toString(36).slice(2)};drive();
+  };
+  button.onpointerup=stop;button.onpointercancel=stop;button.onlostpointercapture=()=>{if(held)stop();};
+  button.oncontextmenu=e=>e.preventDefault();
+});
+setInterval(drive,100);
+window.addEventListener('blur',stop);window.addEventListener('pagehide',stop);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});
+window.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();stop();}});
+const yes=value=>value===true?'ON':value===false?'OFF':'알 수 없음';
+async function waypointCommand(op){
+  error('');
+  try{await command(op,{name:op==='waypoint_save'?$('waypointName').value:selected});}
+  catch(e){error(e.message);}
+}
+$('savePoint').onclick=()=>waypointCommand('waypoint_save');
+$('deletePoint').onclick=()=>waypointCommand('waypoint_delete');
+$('reloadPoints').onclick=()=>waypointCommand('waypoint_reload');
+$('navigate').onclick=()=>{held=null;waypointCommand('navigate');};
+$('cancelNav').onclick=stop;
+function operatorView(){
+  const bridge=operator.bridge||{},gate=operator.gate||{},localization=operator.localization||{},nav=operator.navigation||{};
+  $('vslamStatus').textContent='TCP '+(bridge.connected?'연결됨':'연결 없음')+' · Tracking '+(bridge.tracking_ok?'OK':'대기')+' · 위치 보정 '+(localization.healthy?'OK':'대기')+' · Nav gate '+(gate.enabled?'ON':'OFF')+' / '+(gate.detail||'');
+  const pose=operator.pose;
+  $('pose').textContent=pose?`${operator.map_frame||'vslam_map'}: X ${pose.x.toFixed(3)} m · Y ${pose.y.toFixed(3)} m · Yaw ${(pose.yaw*180/Math.PI).toFixed(1)}°`:'현재 지도 위치 없음 · 수동 주행은 VSLAM 연결 없이 가능';
+  const items=operator.waypoints||[],key=JSON.stringify(items);
+  if(key!==waypointKey){
+    waypointKey=key;
+    if(!items.some(w=>w.name===selected))selected=null;
+    $('waypoints').replaceChildren(...items.map(w=>{
+      const row=document.createElement('tr');row.dataset.name=w.name;
+      [w.name,w.x.toFixed(3),w.y.toFixed(3),(w.yaw*180/Math.PI).toFixed(1)].forEach(value=>{const cell=document.createElement('td');cell.textContent=value;row.append(cell);});
+      row.onclick=()=>{selected=w.name;operatorView();};return row;
+    }));
+    if(document.activeElement!==$('waypointName'))$('waypointName').value=operator.next_name||'Point 1';
+  }
+  for(const row of $('waypoints').children)row.classList.toggle('selected',row.dataset.name===selected);
+  const active=['enabling','sending','navigating'].includes(nav.state);
+  $('savePoint').disabled=!connected||!pose;
+  $('deletePoint').disabled=!connected||!selected;
+  $('reloadPoints').disabled=!connected;
+  $('navigate').disabled=!ready||!pose||!selected||!operator.gate_fresh||active;
+  $('navStatus').textContent='내비게이션: '+(nav.state||'idle')+(nav.target?' → '+nav.target:'')+(nav.distance_remaining!==undefined?' · 남은 거리 '+nav.distance_remaining.toFixed(2)+' m':'');
+  drawMap();
+}
+function drawMap(){
+  const canvas=$('map'),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
+  ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,w,h);
+  const pose=operator.pose,points=(operator.waypoints||[]).map(p=>[p.x,p.y]),path=operator.path||[];
+  points.push(...path);if(pose)points.push([pose.x,pose.y]);
+  if(mapData){const [x,y,a]=mapData.origin,mw=mapData.width*mapData.resolution,mh=mapData.height*mapData.resolution;
+    for(const [u,v] of [[0,0],[mw,0],[0,mh],[mw,mh]])points.push([x+u*Math.cos(a)-v*Math.sin(a),y+u*Math.sin(a)+v*Math.cos(a)]);}
+  if(!points.length){ctx.fillStyle='#a7b4c4';ctx.font='16px system-ui';ctx.fillText('지도 위치 / 웨이포인트 대기',24,40);return;}
+  const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]),minX=Math.min(...xs)-1,maxX=Math.max(...xs)+1,minY=Math.min(...ys)-1,maxY=Math.max(...ys)+1;
+  const scale=Math.min(w/(maxX-minX),h/(maxY-minY));ctx.translate(w/2,h/2);ctx.scale(scale,-scale);ctx.translate(-(minX+maxX)/2,-(minY+maxY)/2);
+  if(mapImage){ctx.save();ctx.translate(mapData.origin[0],mapData.origin[1]);ctx.rotate(mapData.origin[2]);ctx.scale(mapData.resolution,-mapData.resolution);ctx.drawImage(mapImage,0,-mapData.height);ctx.restore();}
+  if(path.length){ctx.beginPath();path.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.strokeStyle='#56c5ff';ctx.lineWidth=3/scale;ctx.stroke();}
+  for(const point of operator.waypoints||[]){ctx.beginPath();ctx.arc(point.x,point.y,6/scale,0,Math.PI*2);ctx.fillStyle=point.name===selected?'#ffdf78':'#af94ff';ctx.fill();
+    ctx.save();ctx.translate(point.x,point.y);ctx.scale(1/scale,-1/scale);ctx.font='12px system-ui';ctx.fillText(point.name,9,-7);ctx.restore();}
+  if(pose){ctx.save();ctx.translate(pose.x,pose.y);ctx.rotate(pose.yaw);ctx.beginPath();ctx.moveTo(14/scale,0);ctx.lineTo(-9/scale,8/scale);ctx.lineTo(-9/scale,-8/scale);ctx.closePath();ctx.fillStyle='#5aefb3';ctx.fill();ctx.restore();}
+}
+async function refreshMap(){
+  if(mode==='vslam')try{
+    const r=await fetch('/api/map',{signal:AbortSignal.timeout(1500)}),data=await r.json();
+    if(data){mapData=data;mapImage=document.createElement('canvas');mapImage.width=data.width;mapImage.height=data.height;
+      const ctx=mapImage.getContext('2d'),pixels=ctx.createImageData(data.width,data.height);
+      data.cells.forEach((v,i)=>{const x=i%data.width,y=Math.floor(i/data.width),j=((data.height-1-y)*data.width+x)*4,c=v<0?58:255-Math.round(v*2.55);pixels.data.set([c,c,c,255],j);});ctx.putImageData(pixels,0,0);
+      $('mapNote').textContent='Occupancy map · '+(operator.map_frame||'vslam_map')+' · 파랑: 경로 / 초록: 로봇';
+    }else{mapData=mapImage=null;}
+  }catch(e){}setTimeout(refreshMap,3000);
+}refreshMap();
+async function refresh(){
+  try{
+    const response=await fetch('/api/state',{headers:{'X-RBY1-Session':session},signal:AbortSignal.timeout(1000)});
+    if(!response.ok)throw new Error('상태 조회 실패');
+    const data=await response.json(),s=data.snapshot;
+    if(mode!==data.mode){mode=data.mode;document.body.classList.toggle('vslam-mode',mode==='vslam');$('title').textContent=mode==='vslam'?'RB-Y1 VSLAM Operator':'RB-Y1 모바일 베이스';
+      if(mode==='vslam'){$('linear').value=0.02;$('angular').value=0.08;}}
+    operator=data.operator||{};
+    connected=data.connected;lastState=performance.now();
+    ready=connected&&s.stream_enabled===true&&[2,3].includes(s.control_state)&&s.emo_active===false&&s.collision_active===false&&s.cmd_vel_subscribers>0;
+    $('connection').textContent=connected?(ready?'연결됨 · 이동 가능':'연결됨 · 활성화 / 로봇 상태 확인 필요'):'제어 백엔드 연결 끊김';
+    const entries=[['Power',yes(s.power_enabled)],['Servo',yes(s.servo_enabled)],['Control',s.control_state??'알 수 없음'],['Stream',yes(s.stream_enabled)],['EMO',yes(s.emo_active)],['Collision',yes(s.collision_active)]];
+    $('status').replaceChildren(...entries.map(([key,value])=>{const div=document.createElement('div');div.textContent=key+': '+value;return div;}));
+    for(const [id,limit] of [['linear',data.limits.linear],['angular',data.limits.angular]]){
+      $(id).max=limit;$(id).min=Math.min(0.02,limit);$(id).value=Math.min(Number($(id).value),limit);
+    }labels();
+    $('events').textContent=data.events.map(e=>'['+(e.level||'info')+'] '+e.message).join('\n')||'아직 이벤트 없음';
+  }catch(e){connected=ready=false;$('connection').textContent='웹 서버 연결 끊김';}
+  document.querySelectorAll('.drive').forEach(b=>b.disabled=!ready);
+  document.querySelectorAll('[data-op]').forEach(b=>b.disabled=!connected);
+  if(mode==='vslam')operatorView();
+  if(!ready&&held)stop();
+  setTimeout(refresh,250);
+}refresh();
+</script>
+</html>
