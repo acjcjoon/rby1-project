@@ -173,7 +173,7 @@ def align_base_and_pick_up_object(
     task = Task(f'align_base_and_pick_up_object_{object_id}')
     tcp_motion = [3.0, 1.0, 1.0, 1.0]
     pickup_distance = 0.075
-    contact_offset = [0.0, 0.0, 0.05] 
+    contact_offset = [0.0, 0.0, 0.065] 
     approach_offset = list_sum(contact_offset, [0.0, 0.0, pickup_distance])
     pickup_motion = [3.0, 1.0, 1.0, 1.0]
 
@@ -199,22 +199,22 @@ def object_handover_demo_final() -> RunnableTaskDefinition:
 
     task.extend(object_gripping_initial_pose_torso_right())
 
-    task.extend(align_base_and_pick_up_object('tag_4'))
+    task.extend(align_base_and_pick_up_object('tag_2'))
     task.extend(turn_and_move('A', 'C'))
     task.extend(align_base_and_put_down_object('tag_3'))
 
-    task.extend(turn_and_move('C', 'B'))
-    task.extend(align_base_and_pick_up_object('tag_5'))
+    task.extend(turn_and_move('C', 'B'))    
+    task.extend(align_base_and_pick_up_object('tag_1'))
     task.extend(turn_and_move('B', 'D'))
     task.extend(align_base_and_put_down_object('tag_0'))
 
     task.extend(turn_and_move('D', 'C'))
-    task.extend(align_base_and_pick_up_object('tag_4'))
+    task.extend(align_base_and_pick_up_object('tag_3'))
     task.extend(turn_and_move('C', 'A'))
     task.extend(align_base_and_put_down_object('tag_2'))
 
     task.extend(turn_and_move('A', 'D'))
-    task.extend(align_base_and_pick_up_object('tag_5'))
+    task.extend(align_base_and_pick_up_object('tag_0'))
     task.extend(turn_and_move('D', 'B'))
     task.extend(align_base_and_put_down_object('tag_1'))
 
