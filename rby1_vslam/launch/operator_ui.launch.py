@@ -9,6 +9,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from nav2_common.launch import ReplaceString
+from rby1_vslam.waypoint_store import default_waypoints_path
 
 
 def generate_launch_description():
@@ -27,8 +28,9 @@ def generate_launch_description():
         DeclareLaunchArgument('base_frame', default_value='base'),
         DeclareLaunchArgument(
             'waypoints_file',
-            default_value=str(Path.home() / 'rby1_maps/rby1_vslam_waypoints.yaml'),
-            description='Absolute waypoint YAML path on the Jetson.',
+            default_value=str(default_waypoints_path(
+                get_package_share_directory('rby1_vslam'))),
+            description='Waypoint YAML in package data (source with symlink-install).',
         ),
         Node(
             package='rviz2',

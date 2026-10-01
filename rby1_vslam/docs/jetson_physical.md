@@ -188,8 +188,11 @@ ros2 run tf2_ros tf2_echo vslam_map base
 5. hold-to-move 버튼으로 천천히 이동한다. 버튼을 놓으면 0 명령이 전송된다.
 6. 원하는 위치에서 이름을 확인하고 `Save Current Pose`를 누른다.
 
-Point는 Jetson의 `$HOME/rby1_maps/rby1_vslam_waypoints.yaml`에 저장된다. cuVSLAM 지도
-파일과는 별도다.
+Point는 `rby1_vslam/data/rby1_vslam_waypoints.yaml`에 저장된다. `--symlink-install`
+빌드에서는 소스 패키지, 일반 설치에서는 설치된 `share/rby1_vslam` 안의 `data`를
+사용한다. 실제 경로는 UI 로그의 `Waypoint file:`에서 확인한다. cuVSLAM 지도 파일과는
+별도이며, `waypoints_file:=/절대경로/points.yaml`로 경로를 지정할 수도 있다.
+기존 `$HOME/rby1_maps/rby1_vslam_waypoints.yaml`은 자동 이동하지 않는다.
 
 지도 작성은 온라인이다. 별도의 offline mapping 단계는 필수가 아니다. 충분히 이동하고
 시작점 근처로 돌아와 loop closure를 만든 다음 LAB에서 지도를 저장한다.

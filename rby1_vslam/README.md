@@ -226,7 +226,13 @@ ros2 topic echo /rby1/vslam/slam_odom --once
 4. 가능한 경우 시작 지점 근처로 돌아와 loop closure를 만든다.
 5. 원하는 위치마다 이름을 입력하고 `Save Current Pose`를 누른다.
 
-Point는 Jetson의 `$HOME/rby1_maps/rby1_vslam_waypoints.yaml`에 즉시 저장된다.
+Point는 `rby1_vslam/data/rby1_vslam_waypoints.yaml`에 즉시 저장된다.
+`colcon build --symlink-install`로 빌드하면 소스 패키지의 `data` 폴더를 사용하고,
+일반 설치에서는 설치된 패키지의 `share/rby1_vslam/data` 폴더를 사용한다.
+폴더와 YAML 파일은 첫 저장 시 생성된다. UI 로그의 `Waypoint file:`에서 실제 경로를
+확인할 수 있으며, `waypoints_file:=/절대경로/points.yaml`로 덮어쓸 수 있다.
+기존 `$HOME/rby1_maps/rby1_vslam_waypoints.yaml`은 자동 이동하지 않는다. 기존 포인트를
+사용하려면 UI를 종료한 상태에서 새 경로로 복사하거나 기존 경로를 인자로 지정한다.
 cuVSLAM 지도와 Point 파일은 서로 다른 파일이다. 별도 offline mapping은 필요 없고,
 온라인 mapping을 충분히 수행한 뒤 LAB 컨테이너의 다른 터미널에서 지도를 저장한다.
 

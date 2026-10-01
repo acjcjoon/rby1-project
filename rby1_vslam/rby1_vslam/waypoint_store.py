@@ -9,6 +9,15 @@ from typing import Iterable, List
 import yaml
 
 
+def default_waypoints_path(package_share) -> Path:
+    """Use source package data with symlink-install, otherwise installed data."""
+    share = Path(package_share).resolve()
+    # colcon --symlink-install links config files back to the source package.
+    source_root = (share / 'config' / 'isaac_vslam.yaml').resolve().parent.parent
+    package_root = source_root if (source_root / 'package.xml').is_file() else share
+    return package_root / 'data' / 'rby1_vslam_waypoints.yaml'
+
+
 @dataclass(frozen=True)
 class Waypoint:
     name: str

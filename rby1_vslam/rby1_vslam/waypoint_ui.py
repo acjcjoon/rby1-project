@@ -7,6 +7,7 @@ import sys
 import time
 
 from geometry_msgs.msg import PoseStamped
+from ament_index_python.packages import get_package_share_directory
 from nav2_msgs.action import NavigateToPose
 import rclpy
 from rclpy.action import ActionClient
@@ -35,7 +36,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .waypoint_store import Waypoint, load_waypoints, next_name, save_waypoints
+from .waypoint_store import (
+    Waypoint, default_waypoints_path, load_waypoints, next_name, save_waypoints,
+)
 
 
 def _yaw_from_quaternion(rotation):
@@ -61,7 +64,8 @@ class OperatorNode(Node):
         defaults = {
             'map_frame': 'vslam_map',
             'base_frame': 'base',
-            'waypoints_file': '~/rby1_maps/rby1_vslam_waypoints.yaml',
+            'waypoints_file': str(default_waypoints_path(
+                get_package_share_directory('rby1_vslam'))),
             'navigate_action': '/rby1/vslam/nav2/navigate_to_pose',
             'enable_service': '/rby1/vslam/enable',
             'cancel_service': '/rby1/vslam/cancel',

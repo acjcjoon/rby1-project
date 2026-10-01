@@ -8,6 +8,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from rby1_vslam.waypoint_store import default_waypoints_path
 
 
 def _boolean(context, name):
@@ -158,8 +159,7 @@ def generate_launch_description():
                               description='false means Nav2 has no obstacle sensing/avoidance.'),
         DeclareLaunchArgument('scan_topic', default_value='/scan'),
         DeclareLaunchArgument('waypoints_file',
-                              default_value=str(Path.home() / 'rby1_maps' /
-                                                'rby1_vslam_waypoints.yaml')),
+                              default_value=str(default_waypoints_path(share))),
         DeclareLaunchArgument('publish_mount_tf', default_value='true'),
         DeclareLaunchArgument('mount_x', default_value='0.0464'),
         DeclareLaunchArgument('mount_y', default_value='0.0'),
