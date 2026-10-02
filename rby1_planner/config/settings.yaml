@@ -2,26 +2,21 @@ locations:
   A:
     position: [0.0, 0.0]
     side: right
+    tag_2:
+      offset: [-0.05, 0.06250, -0.009]
   B:
     position: [ -0.50, 0.0]
     side: right
+    tag_1:
+      offset: [-0.05, 0.06250, -0.009]
   C:
     position: [0.0, 0.81]
     side: left
+    tag_3:
+      offset: [-0.05, 0.06250, -0.009]
   D:
     position: [0.60, 0.81]
     side: left
-
-tag:
-  tag_0:
-    offset: [-0.05, 0.06250, -0.009]
-  tag_1:
-    offset: [-0.05, 0.06250, -0.009]
-  tag_2:
-    offset: [-0.05, 0.06250, -0.009]
-  tag_3:
-    offset: [-0.05, 0.06250, -0.009]
-  # tag_4:
-  #   offset: [0.0, 0.0, 0.0]
-  # tag_5:
-  #   offset: [0.0, 0.0, 0.0]
+    tag_0:
+      offset: [-0.05, 0.06250, -0.009]
+  current_location:

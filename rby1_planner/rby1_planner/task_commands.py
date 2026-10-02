@@ -939,7 +939,7 @@ class Task(_CanonicalTask):
 
 def get_object_position(
     camera: 'CameraClient',
-    object_id: str = 'tag_4',
+    object_id: str,
     *,
     max_age_sec: Optional[float] = None,
     minimum_confidence: Optional[float] = None,
@@ -1018,24 +1018,32 @@ def _load_tag_approach_offset(object_id: str) -> tuple[float, float, float]:
     if not isinstance(object_id, str) or not object_id.strip():
         raise ValueError('object_id must be a nonempty string')
     object_id = object_id.strip()
-    tags = _load_task_settings().get('tag')
-    if not isinstance(tags, dict) or not tags:
-        raise ValueError('settings.yaml tag must be a nonempty mapping')
-    if object_id not in tags:
+    locations = _load_move_locations()
+    location_tags = _location_tags(locations)
+    matches = [
+        (location_name, config)
+        for location_name, (tag_id, config) in location_tags.items()
+        if tag_id == object_id
+    ]
+    if not matches:
         raise ValueError(f'Unknown tag {object_id!r} in settings.yaml')
-    config = tags[object_id]
-    if not isinstance(config, dict):
-        raise ValueError(f'Tag {object_id!r} must contain an offset')
+    location_name, config = matches[0]
     offset = config.get('offset')
     if not isinstance(offset, list) or len(offset) != 3:
-        raise ValueError(f'Tag {object_id!r} offset must be [x, y, z] in metres')
+        raise ValueError(
+            f'Location {location_name!r} tag {object_id!r} offset must be '
+            '[x, y, z] in metres'
+        )
     if any(
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not math.isfinite(value)
         for value in offset
     ):
-        raise ValueError(f'Tag {object_id!r} offset must contain finite numbers')
+        raise ValueError(
+            f'Location {location_name!r} tag {object_id!r} offset must '
+            'contain finite numbers'
+        )
     return float(offset[0]), float(offset[1]), float(offset[2])
 
 
@@ -1045,7 +1053,82 @@ def _load_move_locations() -> dict:
     locations = settings.get('locations')
     if not isinstance(locations, dict) or not locations:
         raise ValueError('settings.yaml locations must be a nonempty mapping')
+    # current_location은 지점 정의가 아닌 작업 구성용 초기 위치이다.
+    locations = {
+        name: config for name, config in locations.items()
+        if name != 'current_location'
+    }
+    if not locations:
+        raise ValueError('settings.yaml locations must be a nonempty mapping')
     return locations
+
+
+def _load_current_location() -> Optional[str]:
+    """Read the initial named location without changing the settings file."""
+    locations = _load_task_settings().get('locations')
+    if not isinstance(locations, dict):
+        raise ValueError('settings.yaml locations must be a nonempty mapping')
+    current_location = locations.get('current_location')
+    if current_location is None:
+        return None
+    if not isinstance(current_location, str) or not current_location.strip():
+        raise ValueError('settings.yaml current_location must be a location name')
+    _move_location(locations, current_location)
+    return current_location
+
+
+def _location_tags(locations: dict) -> dict[str, tuple[str, dict]]:
+    """Return and validate the single fixed AprilTag assigned to each point."""
+    result: dict[str, tuple[str, dict]] = {}
+    tag_locations: dict[str, str] = {}
+    for location_name, location in locations.items():
+        if not isinstance(location_name, str) or not location_name.strip():
+            raise ValueError('settings.yaml location names must be nonempty strings')
+        if not isinstance(location, dict):
+            raise ValueError(
+                f'Location {location_name!r} must contain position, side, and one tag'
+            )
+        tag_ids = [
+            key for key in location
+            if isinstance(key, str) and key.startswith('tag_')
+        ]
+        if len(tag_ids) != 1:
+            raise ValueError(
+                f'Location {location_name!r} must contain exactly one tag_* mapping'
+            )
+        tag_id = tag_ids[0]
+        if not tag_id.removeprefix('tag_').isdigit():
+            raise ValueError(
+                f'Location {location_name!r} has invalid tag ID {tag_id!r}'
+            )
+        previous_location = tag_locations.get(tag_id)
+        if previous_location is not None:
+            raise ValueError(
+                f'Tag {tag_id!r} is assigned to both locations '
+                f'{previous_location!r} and {location_name!r}'
+            )
+        config = location[tag_id]
+        if not isinstance(config, dict):
+            raise ValueError(
+                f'Location {location_name!r} tag {tag_id!r} must contain an offset'
+            )
+        tag_locations[tag_id] = location_name
+        result[location_name] = (tag_id, config)
+    return result
+
+
+def _location_tag_id(locations: dict, name: str) -> str:
+    """Return the fixed AprilTag ID assigned to a named movement point."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError('location name must be a nonempty string')
+    if name not in locations:
+        raise ValueError(f'Unknown location {name!r} in settings.yaml')
+    return _location_tags(locations)[name][0]
+
+
+def _load_location_tag_id(name: str) -> str:
+    """Load settings and return the fixed AprilTag assigned to one point."""
+    return _location_tag_id(_load_move_locations(), name)
 
 
 def _move_location(locations: dict, name: str) -> tuple[float, float, str]:

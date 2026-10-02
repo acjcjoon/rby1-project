@@ -8,7 +8,11 @@ import yaml
 from rby1_planner import task as task_source
 from rby1_planner import task_commands
 from rby1_planner.observation import rpy_deg_to_quaternion
-from rby1_planner.task_commands import CameraLinearAbsoluteStep, Task
+from rby1_planner.task_commands import (
+    CameraLinearAbsoluteStep,
+    CameraMoveToTagStep,
+    Task,
+)
 from rby1_planner.task_runner import PlannerTaskRunner
 from test_task_runner import FakeBackend, FakeCamera, FakeNode, _camera_observation
 
@@ -18,8 +22,29 @@ OFFSETS = {
     'tag_1': [0.01, 0.02, -0.003],
     'tag_2': [0.0, 0.0, 0.0],
     'tag_3': [0.05, -0.06250, -0.009],
-    'tag_4': [0.0, 0.0, 0.0],
 }
+LOCATION_TAGS = {
+    'A': 'tag_2',
+    'B': 'tag_1',
+    'C': 'tag_3',
+    'D': 'tag_0',
+}
+LOCATION_FIELDS = {
+    'A': {'position': [0.0, 0.0], 'side': 'right'},
+    'B': {'position': [-0.5, 0.0], 'side': 'right'},
+    'C': {'position': [0.0, 0.81], 'side': 'left'},
+    'D': {'position': [0.6, 0.81], 'side': 'left'},
+}
+
+
+def nested_settings(location_tags=LOCATION_TAGS, offsets=OFFSETS):
+    locations = {}
+    for location_name, tag_id in location_tags.items():
+        locations[location_name] = {
+            **LOCATION_FIELDS[location_name],
+            tag_id: {'offset': offsets[tag_id]},
+        }
+    return {'locations': locations}
 
 
 @pytest.fixture
@@ -27,9 +52,7 @@ def settings_file(tmp_path, monkeypatch):
     (tmp_path / 'package.xml').write_text('<package/>', encoding='utf-8')
     (tmp_path / 'config').mkdir()
     path = tmp_path / 'config' / 'settings.yaml'
-    path.write_text(yaml.safe_dump({
-        'tag': {name: {'offset': offset} for name, offset in OFFSETS.items()},
-    }), encoding='utf-8')
+    path.write_text(yaml.safe_dump(nested_settings()), encoding='utf-8')
     monkeypatch.setattr(
         task_commands, '__file__', str(tmp_path / 'rby1_planner' / 'task_commands.py'),
     )
@@ -41,21 +64,21 @@ def camera_steps(definition):
 
 
 @pytest.mark.parametrize('object_id', OFFSETS)
-@pytest.mark.parametrize('operation, contact_z', [
-    ('align_base_and_pick_up_object', 0.05),
-    ('align_base_and_put_down_object', 0.065),
+@pytest.mark.parametrize('operation', [
+    'align_base_and_pick_up_object',
+    'align_base_and_put_down_object',
 ])
 def test_both_camera_moves_get_same_tag_correction(
-    settings_file, monkeypatch, object_id, operation, contact_z,
+    settings_file, monkeypatch, object_id, operation,
 ):
     builder = getattr(task_source, operation)
     definition = builder(object_id)
     approach, contact = camera_steps(definition)
     dx, dy, dz = OFFSETS[object_id]
     assert approach.object_to_end_effector_position == pytest.approx(
-        (dx, dy, contact_z + 0.075 + dz),
+        (dx, dy, 0.065 + 0.075 + dz),
     )
-    assert contact.object_to_end_effector_position == pytest.approx((dx, dy, contact_z + dz))
+    assert contact.object_to_end_effector_position == pytest.approx((dx, dy, 0.065 + dz))
     assert approach.object_id == contact.object_id == object_id
     assert approach.camera_source == contact.camera_source == 'd405'
     assert not approach.reuse_previous_observation
@@ -93,9 +116,10 @@ def test_custom_approach_is_added_once_without_mutating_arguments(settings_file)
 
 def test_yaml_is_read_again_when_task_is_rebuilt(settings_file):
     first = task_source.align_base_and_put_down_object('tag_3')
-    settings_file.write_text(yaml.safe_dump({
-        'tag': {'tag_3': {'offset': [0.01, 0.02, 0.03]}},
-    }), encoding='utf-8')
+    settings_file.write_text(yaml.safe_dump(nested_settings(
+        {'C': 'tag_3'},
+        {'tag_3': [0.01, 0.02, 0.03]},
+    )), encoding='utf-8')
     second = task_source.align_base_and_put_down_object('tag_3')
     assert camera_steps(first)[0].object_to_end_effector_position == pytest.approx((0.05, -0.0625, 0.131))
     assert camera_steps(second)[0].object_to_end_effector_position == pytest.approx((0.01, 0.02, 0.17))
@@ -104,16 +128,22 @@ def test_yaml_is_read_again_when_task_is_rebuilt(settings_file):
 
 
 @pytest.mark.parametrize('text', [
-    '', '[]', 'tag: [', 'tag: []', 'tag: {}',
-    'locations: {}', 'tag: {tag_0: {offset: [0, 0, 0]}}',
-    'tag: {tag_3: null}', 'tag: {tag_3: {}}',
-    'tag: {tag_3: {offset: [0, 0]}}',
-    'tag: {tag_3: {offset: [0, 0, 0, 0]}}',
-    'tag: {tag_3: {offset: "0,0,0"}}',
-    'tag: {tag_3: {offset: [true, 0, 0]}}',
-    'tag: {tag_3: {offset: [0, .nan, 0]}}',
-    'tag: {tag_3: {offset: [0, 0, .inf]}}',
-    'tag: {tag_3: {offset: [0, 0, "0.1"]}}',
+    '', '[]', 'locations: [', 'locations: []', 'locations: {}',
+    'tag: {tag_3: {offset: [0, 0, 0]}}',
+    'locations: {C: null}',
+    'locations: {C: {position: [0, 0], side: left}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: null}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, 0, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: "0,0,0"}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [true, 0, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, .nan, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, .inf]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, "0.1"]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_name: {offset: [0, 0, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_2: {offset: [0, 0, 0]}, tag_3: {offset: [0, 0, 0]}}}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, 0]}}, D: {position: [1, 0], side: left, tag_3: {offset: [0, 0, 0]}}}',
 ])
 def test_bad_or_missing_tag_config_fails_before_motion(settings_file, text):
     settings_file.write_text(text, encoding='utf-8')
@@ -131,6 +161,29 @@ def test_missing_settings_file_is_not_silently_ignored(settings_file):
 def test_invalid_tag_id_is_rejected(settings_file, object_id):
     with pytest.raises(ValueError, match='object_id'):
         task_source._load_tag_approach_offset(object_id)
+
+
+def test_location_to_tag_mapping_drives_the_handover(settings_file):
+    location_tags = {
+        'A': 'tag_0',
+        'B': 'tag_2',
+        'C': 'tag_1',
+        'D': 'tag_3',
+    }
+    settings_file.write_text(yaml.safe_dump(nested_settings(
+        location_tags,
+        {tag_id: [0.0, 0.0, 0.0] for tag_id in location_tags.values()},
+    )), encoding='utf-8')
+
+    definition = task_source.object_handover_demo_final()
+    alignment_steps = [
+        step for step in definition.commands
+        if isinstance(step, CameraMoveToTagStep)
+    ]
+    location_order = ('A', 'C', 'B', 'D', 'C', 'A', 'D', 'B')
+    assert [step.object_id for step in alignment_steps] == [
+        location_tags[name] for name in location_order
+    ]
 
 
 @pytest.mark.parametrize('rpy, expected_xy, expected_yaw', [
