@@ -36,7 +36,7 @@ ROS_DOMAIN="${ROS_DOMAIN_ID:-10}"
 LAB_HOST=""
 D435_SERIAL=""
 CAMERA_MODE="auto"
-ENABLE_IMU="false"
+ENABLE_IMU="true"
 START_UI="true"
 WEB_PORT=8080
 STARTUP_TIMEOUT_SEC=45
@@ -59,7 +59,7 @@ Options:
   --robot-version VERSION      URDF version (default: 1_3)
   --d435-serial SERIAL         Pin D435i serial (digits only)
   --camera auto|start|reuse    auto: reuse existing IR camera if present
-  --enable-imu true|false      Forward/use IMU in UPC bridge (default: false)
+  --enable-imu true|false      Forward/use IMU in UPC bridge (default: true)
   --no-ui                      Do not launch the web operator
   --web-port PORT              Web operator TCP port (default: 8080)
   --startup-timeout SEC        Readiness timeout per stage (default: 45)

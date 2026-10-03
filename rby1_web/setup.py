@@ -15,5 +15,6 @@ setup(
     entry_points={'console_scripts': [
         'mobile_base_web = rby1_web.web_node:main',
         'operator_web = rby1_web.web_node:main',
+        'mobile_base_qt = rby1_web.mobile_base_qt:main',
     ]},
 )

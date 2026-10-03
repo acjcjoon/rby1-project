@@ -1,5 +1,8 @@
 # UPC web operator for rby1_vslam
 
+For the four standard browser/local-Qt launchers and independent full-topic
+trial recording, see [LAUNCHERS.md](../LAUNCHERS.md).
+
 Run the robot driver, existing `rby1_control` safety backend and HTTP operator
 on UPC. A laptop needs only a browser and network access to UPC; no ROS/DDS,
 LAB PC, SLAM, camera, Nav2, RViz or desktop display is required.

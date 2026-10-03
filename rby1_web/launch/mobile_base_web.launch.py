@@ -1,10 +1,10 @@
-"""UPC-only driver + existing safe control backend + browser operator."""
+"""UPC-only driver + safe control + selectable browser/local Qt operator."""
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
@@ -18,6 +18,7 @@ def generate_launch_description():
     value = lambda key, kind: ParameterValue(LaunchConfiguration(key), value_type=kind)
     declarations = [
         DeclareLaunchArgument('namespace', default_value='rby1'),
+        DeclareLaunchArgument('ui_backend', default_value='web', choices=['web', 'qt']),
         DeclareLaunchArgument('robot_address', default_value='192.168.30.1:50051'),
         DeclareLaunchArgument('robot_model', default_value='m'),
         DeclareLaunchArgument('start_driver', default_value='true'),
@@ -56,8 +57,18 @@ def generate_launch_description():
     web = Node(
         package='rby1_web', executable='mobile_base_web', name='mobile_base_web',
         namespace=LaunchConfiguration('namespace'), output='screen',
+        condition=LaunchConfigurationEquals('ui_backend', 'web'),
         parameters=[{
             'host': value('web_host', str), 'port': value('web_port', int),
+            'max_linear_speed': value('max_linear_speed', float),
+            'max_angular_speed': value('max_angular_speed', float),
+        }],
+    )
+    qt = Node(
+        package='rby1_web', executable='mobile_base_qt', name='mobile_base_qt',
+        namespace=LaunchConfiguration('namespace'), output='screen',
+        condition=LaunchConfigurationEquals('ui_backend', 'qt'),
+        parameters=[{
             'max_linear_speed': value('max_linear_speed', float),
             'max_angular_speed': value('max_angular_speed', float),
         }],
@@ -66,5 +77,5 @@ def generate_launch_description():
     handlers = [RegisterEventHandler(OnProcessExit(
         target_action=node, on_exit=[EmitEvent(event=Shutdown(
             reason='Mobile-base stack process exited'))],
-    )) for node in (driver, control, web)]
-    return LaunchDescription(declarations + handlers + [driver, control, web])
+    )) for node in (driver, control, web, qt)]
+    return LaunchDescription(declarations + handlers + [driver, control, web, qt])

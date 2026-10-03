@@ -10,7 +10,7 @@ MAP_PATH=""
 BIND_HOST="0.0.0.0"
 PORT="7447"
 ROS_DOMAIN="${ROS_DOMAIN_ID:-85}"
-ENABLE_IMU="false"
+ENABLE_IMU="true"
 START_RVIZ="true"
 RVIZ_CONFIG=""
 
@@ -23,7 +23,7 @@ Usage: run_vslam_lab.sh [options]
   --bind-host ADDRESS                   Default: 0.0.0.0
   --port PORT                           Default: 7447
   --domain ID                           Default: env or 85
-  --enable-imu true|false               Default: false
+  --enable-imu true|false               Default: true
   --no-rviz                             Do not start RViz2
   --rviz-config PATH                    Optional RViz2 config file
   --workspace PATH                      Default: /workspaces/isaac_ros-dev

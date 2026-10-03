@@ -124,7 +124,7 @@ mapping/localization/lab 중 하나만 LAB에서 실행한다.
 
 반복 실험에서는 scripts/run_vslam_lab.sh와 scripts/run_vslam_upc.sh를 사용한다.
 LAB 스크립트는 Isaac ROS Jazzy 컨테이너 내부에서 cuVSLAM과 RViz2를 함께 띄우며,
-RViz Fixed Frame을 vslam_map으로 시작한다. 기본값은 mapping, IMU 비활성,
+RViz Fixed Frame을 vslam_map으로 시작한다. 기본값은 mapping, IMU 활성,
 ROS_DOMAIN_ID=85이다.
 
     # LAB PC의 Isaac ROS 컨테이너 내부

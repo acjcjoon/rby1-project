@@ -13,7 +13,7 @@ ROS_SETUP="${RBY1_UPC_ROS_SETUP:-/opt/ros/humble/setup.bash}"
 LAB_HOST=""
 PORT="7447"
 ROS_DOMAIN="${ROS_DOMAIN_ID:-0}"
-ENABLE_IMU="false"
+ENABLE_IMU="true"
 START_CAMERA="true"
 SERIAL_NO=""
 
@@ -24,7 +24,7 @@ Usage: run_vslam_upc.sh --lab-host LAB_IP [options]
   --lab-host HOST          Required LAB PC wired-LAN address
   --port PORT              Default: 7447
   --domain ID              Default: env or 0
-  --enable-imu true|false  Default: false
+  --enable-imu true|false  Default: true
   --start-camera true|false
                            Use false if the D435i is already running
   --serial SERIAL          Optional D435i serial number
