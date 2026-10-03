@@ -67,22 +67,31 @@ WORKSPACE_SETUP="${LAB_WS}/install/setup.bash"
 [[ -r "$ROS_SETUP" ]] || die "ROS setup not found: $ROS_SETUP"
 [[ -r "$WORKSPACE_SETUP" ]] || die "Workspace is not built: $WORKSPACE_SETUP"
 
+# ROS/colcon generated setup files read optional variables directly and are not
+# safe to source while Bash nounset is enabled. Keep strict mode for this script,
+# but disable nounset only while importing the ROS environments.
+set +u
 # shellcheck disable=SC1090
 source "$ROS_SETUP"
 # shellcheck disable=SC1090
 source "$WORKSPACE_SETUP"
+set -u
 export ROS_DOMAIN_ID="$ROS_DOMAIN"
 
 ros2 pkg prefix isaac_ros_visual_slam >/dev/null 2>&1 || die "isaac_ros_visual_slam is not installed"
 VSLAM_PREFIX="$(ros2 pkg prefix rby1_vslam 2>/dev/null)" || die "rby1_vslam is not built in $LAB_WS"
 VSLAM_PARAMS="${VSLAM_PREFIX}/share/rby1_vslam/config/isaac_vslam.yaml"
 [[ -r "$VSLAM_PARAMS" ]] || die "Installed VSLAM config not found: $VSLAM_PARAMS"
+if [[ -z "$RVIZ_CONFIG" ]]; then
+  RVIZ_CONFIG="${VSLAM_PREFIX}/share/rby1_vslam/config/lab_vslam.rviz"
+fi
 if [[ "$START_RVIZ" == "true" ]] && grep -Eq '^[[:space:]]*publish_(map_to_odom|odom_to_base)_tf:[[:space:]]*false' "$VSLAM_PARAMS"; then
   die "Installed config disables VSLAM TF. Copy the updated package into $LAB_WS/src and rebuild rby1_vslam."
 fi
 if [[ "$START_RVIZ" == "true" ]]; then
   command -v rviz2 >/dev/null 2>&1 || die "rviz2 is not installed"
   [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] || die "RViz2 requested but DISPLAY/WAYLAND_DISPLAY is unset"
+  [[ -r "$RVIZ_CONFIG" ]] || die "RViz config not found: $RVIZ_CONFIG. Rebuild rby1_vslam."
 fi
 
 ARGS=("mode:=$MODE" "bind_host:=$BIND_HOST" "port:=$PORT" "enable_imu:=$ENABLE_IMU")
@@ -90,6 +99,7 @@ ARGS=("mode:=$MODE" "bind_host:=$BIND_HOST" "port:=$PORT" "enable_imu:=$ENABLE_I
 
 echo "[vslam-lab] workspace=$LAB_WS"
 echo "[vslam-lab] mode=$MODE, listen=$BIND_HOST:$PORT, ROS_DOMAIN_ID=$ROS_DOMAIN_ID, IMU=$ENABLE_IMU"
+[[ "$START_RVIZ" == "true" ]] && echo "[vslam-lab] RViz preset=$RVIZ_CONFIG"
 
 CHILD_PIDS=()
 CHILD_NAMES=()
@@ -126,8 +136,7 @@ trap 'exit 143' TERM
 start_process cuvslam ros2 launch rby1_vslam lab.launch.py "${ARGS[@]}"
 
 if [[ "$START_RVIZ" == "true" ]]; then
-  RVIZ_ARGS=(-f vslam_map)
-  [[ -n "$RVIZ_CONFIG" ]] && RVIZ_ARGS+=(-d "$RVIZ_CONFIG")
+  RVIZ_ARGS=(-d "$RVIZ_CONFIG" -f vslam_map)
   start_process rviz2 rviz2 "${RVIZ_ARGS[@]}"
 fi
 

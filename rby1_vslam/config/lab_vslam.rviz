@@ -1,0 +1,335 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1
+        - /Camera Images1
+        - /VSLAM Motion1
+        - /VSLAM Map1
+      Splitter Ratio: 0.55
+    Tree Height: 720
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Views
+    Name: Views
+    Expanded:
+      - /Current View1
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 120; 120; 120
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Ground Grid
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.35
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree: {}
+      Update Interval: 0
+      Value: true
+    - Class: rviz_common/Group
+      Displays:
+        - Class: rviz_default_plugins/Image
+          Enabled: true
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: Left IR
+          Normalize Range: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /d435/d435/infra1/image_rect_raw
+          Value: true
+        - Class: rviz_default_plugins/Image
+          Enabled: true
+          Max Value: 1
+          Median window: 5
+          Min Value: 0
+          Name: Right IR
+          Normalize Range: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /d435/d435/infra2/image_rect_raw
+          Value: true
+      Enabled: true
+      Name: Camera Images
+    - Class: rviz_common/Group
+      Displays:
+        - Angle Tolerance: 0.1
+          Class: rviz_default_plugins/Odometry
+          Enabled: true
+          Keep: 2000
+          Name: Tracking Odometry
+          Position Tolerance: 0.02
+          Shape:
+            Alpha: 1
+            Axes Length: 0.25
+            Axes Radius: 0.02
+            Color: 50; 130; 255
+            Head Length: 0.12
+            Head Radius: 0.06
+            Shaft Length: 0.2
+            Shaft Radius: 0.03
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /rby1/vslam/camera_odometry
+          Value: true
+        - Angle Tolerance: 0.1
+          Class: rviz_default_plugins/Odometry
+          Enabled: true
+          Keep: 2000
+          Name: SLAM Odometry
+          Position Tolerance: 0.02
+          Shape:
+            Alpha: 1
+            Axes Length: 0.3
+            Axes Radius: 0.025
+            Color: 40; 220; 80
+            Head Length: 0.15
+            Head Radius: 0.07
+            Shaft Length: 0.25
+            Shaft Radius: 0.035
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /rby1/vslam/camera_slam_odometry
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 50; 130; 255
+          Enabled: true
+          Line Style: Lines
+          Line Width: 0.03
+          Name: VO Path
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/tracking/vo_path
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 40; 220; 80
+          Enabled: true
+          Line Style: Lines
+          Line Width: 0.05
+          Name: SLAM Path
+          Pose Style: None
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/tracking/slam_path
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Name: Gravity
+          Namespaces: {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/gravity
+          Value: true
+      Enabled: true
+      Name: VSLAM Motion
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: true
+          Name: Loop Closures
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 4
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/loop_closure_cloud
+          Use Fixed Frame: true
+          Value: true
+        - Class: rviz_default_plugins/PoseArray
+          Color: 255; 80; 40
+          Enabled: true
+          Name: Pose Graph Nodes
+          Shape: Axes
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/pose_graph_nodes
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Name: Pose Graph Edges
+          Namespaces: {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/pose_graph_edges
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: false
+          Name: Landmarks (enable in VSLAM config)
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/landmarks_cloud
+          Use Fixed Frame: true
+          Value: false
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: RGB8
+          Decay Time: 0
+          Enabled: false
+          Name: Observations (enable in VSLAM config)
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /visual_slam/vis/observations_cloud
+          Use Fixed Frame: true
+          Value: false
+      Enabled: true
+      Name: VSLAM Map
+  Enabled: true
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: vslam_map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 5
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.65
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.8
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 1000
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Selection:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1600
+  X: 40
+  Y: 40
