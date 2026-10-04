@@ -9,8 +9,9 @@ import time
 
 
 CAMERA_TOPICS = [
-    ('/d435/d435/infra1/image_rect_raw', 'sensor_msgs/msg/Image', 'sensor'),
-    ('/d435/d435/infra2/image_rect_raw', 'sensor_msgs/msg/Image', 'sensor'),
+    # CameraInfo is published once per delivered stereo frame with the same
+    # source stamp.  Observe it instead of copying ~18 MB/s of raw images into
+    # this Python diagnostics process.
     ('/d435/d435/infra1/camera_info', 'sensor_msgs/msg/CameraInfo', 'sensor'),
     ('/d435/d435/infra2/camera_info', 'sensor_msgs/msg/CameraInfo', 'sensor'),
     ('/d435/d435/imu', 'sensor_msgs/msg/Imu', 'sensor'),
@@ -104,7 +105,7 @@ def main():
     import rclpy
     from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_rosout_default, qos_profile_sensor_data, QoSProfile
+    from rclpy.qos import qos_profile_sensor_data, QoSProfile
     from rosidl_runtime_py.utilities import get_message
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +153,11 @@ def main():
         if qos_name == 'sensor':
             qos = qos_profile_sensor_data
         elif qos_name == 'rosout':
-            qos = qos_profile_rosout_default
+            # Humble and the Isaac ROS Jazzy image do not consistently export
+            # qos_profile_rosout_default from rclpy.qos.  A reliable volatile
+            # reader is compatible with the standard transient-local rosout
+            # publisher and records new log messages without version checks.
+            qos = QoSProfile(depth=100)
         else:
             qos = QoSProfile(depth=100)
         subscriptions.append(node.create_subscription(

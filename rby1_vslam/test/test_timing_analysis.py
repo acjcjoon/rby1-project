@@ -59,7 +59,7 @@ def test_exact_stamp_matching_does_not_invent_nearest_latency():
 
 
 def test_report_flags_cuvslam_when_images_continue_but_pose_stalls():
-    image_topic = '/d435/d435/infra1/image_rect_raw'
+    image_topic = '/d435/d435/infra1/camera_info'
     pose_topic = '/rby1/vslam/camera_odometry'
     images = []
     for index in range(31):

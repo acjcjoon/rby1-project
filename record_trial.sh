@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Passive full-topic recording, independent of robot/UI launcher lifetime.
+# Passive low-overhead diagnostics, independent of robot/UI launcher lifetime.
 set -Eeo pipefail
 ROLE=''; RUN_ID=''; OUTPUT="${HOME}/rby1_trials"; DOMAIN=''; WAYPOINTS=''; PORT=7447
+FULL_BAG=false
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 die() { echo "[record] $*" >&2; exit 2; }
 usage() {
@@ -11,7 +12,8 @@ Usage: bash record_trial.sh --role upc|lab --run-id NAME [options]
   --output DIR      Parent directory (default: ~/rby1_trials)
   --waypoints FILE  Also copy a custom waypoint YAML at start/end (UPC)
   --port PORT       VSLAM TCP port for socket snapshots (default: 7447)
-All discovered topics, including images and hidden action topics, are recorded.
+  --full-bag        Record every topic, including raw images (high overhead)
+By default only low-bandwidth state/pose/TF/action topics are bagged.
 Timing metadata and an automatic local bottleneck report are also saved.
 Start BEFORE the operator stack. Stop robot via UI, then Ctrl+C here to finalize.
 This script never sends robot commands. Topic recording is not service tracing.
@@ -21,6 +23,7 @@ EOF
 while (($#)); do
   case "$1" in
     -h|--help) usage; exit 0 ;;
+    --full-bag) FULL_BAG=true; shift ;;
     --role|--run-id|--output|--domain|--waypoints|--port)
       [[ $# -ge 2 && -n "$2" ]] || die "Missing value: $1"
       case "$1" in
@@ -72,6 +75,7 @@ fi
   printf 'run_id=%s\nrole=%s\nROS_DOMAIN_ID=%s\nROS_DISTRO=%s\nwaypoints=%s\n' \
     "$RUN_ID" "$ROLE" "$DOMAIN" "${ROS_DISTRO:-unset}" "$WAYPOINTS"
   printf 'capture_id=%s\nVSLAM_TCP_PORT=%s\n' "$CAPTURE_ID" "$PORT"
+  printf 'full_bag=%s\n' "$FULL_BAG"
   git -C "$ROOT" rev-parse HEAD 2>/dev/null || true
   git -C "$ROOT" status --short 2>/dev/null || true
   date -u; uname -a; df -h "$RUN_DIR"
@@ -117,10 +121,34 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Reset SIGINT ignored by noninteractive Bash background children.
+# Reset SIGINT ignored by noninteractive Bash background children.  Raw image
+# recording is opt-in: serializing another copy of both 30 Hz images on LAB can
+# push the Python bridge behind and trip its acquisition-age safety check.
+BAG_ARGS=(--include-hidden-topics -o "$RUN_DIR/bag")
+if [[ "$FULL_BAG" == true ]]; then
+  BAG_ARGS=(-a "${BAG_ARGS[@]}")
+else
+  BAG_ARGS+=(
+    /rosout /tf /tf_static /diagnostics
+    /rby1/vslam/bridge_status
+    /rby1/vslam/camera_odometry /rby1/vslam/camera_slam_odometry
+  )
+  if [[ "$ROLE" == upc ]]; then
+    BAG_ARGS+=(
+      /rby1/vslam/odom /rby1/vslam/slam_odom
+      /rby1/odom /rby1/robot_state
+      /rby1/control/command /rby1/control/event
+      /rby1/vslam/localization_status /rby1/vslam/navigation_status
+      /rby1/vslam/nav2_cmd_vel /rby1/cmd_raw /rby1/cmd_vel
+      /rby1/vslam/nav2/navigate_to_pose/_action/status
+      /rby1/vslam/nav2/navigate_to_pose/_action/feedback
+    )
+  else
+    BAG_ARGS+=(/visual_slam/status)
+  fi
+fi
 python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1],sys.argv[1:])' \
-  ros2 bag record -a --include-hidden-topics -o "$RUN_DIR/bag" \
-  > "$RUN_DIR/recorder.log" 2>&1 &
+  ros2 bag record "${BAG_ARGS[@]}" > "$RUN_DIR/recorder.log" 2>&1 &
 BAG_PID=$!
 python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1],sys.argv[1:])' \
   python3 "$TIMING_OBSERVER" --role "$ROLE" --output "$RUN_DIR/events.jsonl" \

@@ -11,8 +11,8 @@ import sys
 
 
 SELECTED_TOPICS = (
-    '/d435/d435/infra1/image_rect_raw',
-    '/d435/d435/infra2/image_rect_raw',
+    '/d435/d435/infra1/camera_info',
+    '/d435/d435/infra2/camera_info',
     '/d435/d435/imu',
     '/visual_slam/status',
     '/rby1/vslam/camera_odometry',
@@ -32,8 +32,8 @@ RELEVANT_LOG_TERMS = (
 
 EXPECTED_TOPICS = {
     'upc': (
-        '/d435/d435/infra1/image_rect_raw',
-        '/d435/d435/infra2/image_rect_raw',
+        '/d435/d435/infra1/camera_info',
+        '/d435/d435/infra2/camera_info',
         '/rby1/vslam/bridge_status',
         '/rby1/vslam/camera_odometry',
         '/rby1/vslam/camera_slam_odometry',
@@ -41,8 +41,8 @@ EXPECTED_TOPICS = {
         '/rby1/vslam/slam_odom',
     ),
     'lab': (
-        '/d435/d435/infra1/image_rect_raw',
-        '/d435/d435/infra2/image_rect_raw',
+        '/d435/d435/infra1/camera_info',
+        '/d435/d435/infra2/camera_info',
         '/rby1/vslam/bridge_status',
         '/rby1/vslam/camera_odometry',
         '/rby1/vslam/camera_slam_odometry',
@@ -372,13 +372,14 @@ def build_report(captures, stale_ms):
                       clock_basis='cross-host wall clock' if cross_host else 'same-host monotonic')
         stages.append(result)
 
-    add_stage('UPC image -> LAB image', 'upc', '/d435/d435/infra1/image_rect_raw',
-              'lab', '/d435/d435/infra1/image_rect_raw', True)
-    add_stage('LAB image -> cuVSLAM tracking pose', 'lab',
-              '/d435/d435/infra1/image_rect_raw', 'lab',
+    add_stage('UPC frame metadata -> LAB frame metadata', 'upc',
+              '/d435/d435/infra1/camera_info', 'lab',
+              '/d435/d435/infra1/camera_info', True)
+    add_stage('LAB frame metadata -> cuVSLAM tracking pose', 'lab',
+              '/d435/d435/infra1/camera_info', 'lab',
               '/rby1/vslam/camera_odometry')
-    add_stage('LAB image -> cuVSLAM map pose', 'lab',
-              '/d435/d435/infra1/image_rect_raw', 'lab',
+    add_stage('LAB frame metadata -> cuVSLAM map pose', 'lab',
+              '/d435/d435/infra1/camera_info', 'lab',
               '/rby1/vslam/camera_slam_odometry')
     add_stage('LAB tracking pose -> UPC returned pose', 'lab',
               '/rby1/vslam/camera_odometry', 'upc',
@@ -390,8 +391,8 @@ def build_report(captures, stale_ms):
               '/rby1/vslam/camera_odometry', 'upc', '/rby1/vslam/odom')
     add_stage('UPC returned map pose -> PoseAdapter slam_odom', 'upc',
               '/rby1/vslam/camera_slam_odometry', 'upc', '/rby1/vslam/slam_odom')
-    add_stage('UPC image -> UPC returned tracking pose', 'upc',
-              '/d435/d435/infra1/image_rect_raw', 'upc',
+    add_stage('UPC frame metadata -> UPC returned tracking pose', 'upc',
+              '/d435/d435/infra1/camera_info', 'upc',
               '/rby1/vslam/camera_odometry')
 
     findings = []
@@ -410,8 +411,8 @@ def build_report(captures, stale_ms):
     def stats(role, topic):
         return topic_stats.get(role, {}).get(topic)
 
-    upc_image = stats('upc', '/d435/d435/infra1/image_rect_raw')
-    lab_image = stats('lab', '/d435/d435/infra1/image_rect_raw')
+    upc_image = stats('upc', '/d435/d435/infra1/camera_info')
+    lab_image = stats('lab', '/d435/d435/infra1/camera_info')
     lab_pose = stats('lab', '/rby1/vslam/camera_odometry')
     upc_pose = stats('upc', '/rby1/vslam/camera_odometry')
     upc_adapted = stats('upc', '/rby1/vslam/odom')
@@ -553,9 +554,9 @@ def render_text(report):
     lines.extend([
         '',
         'Interpretation order',
-        '1. UPC image gap -> camera/driver.',
-        '2. UPC image healthy but LAB image bad -> stereo sync/TCP/input bridge.',
-        '3. LAB image healthy but LAB pose bad -> cuVSLAM/GPU/compute/tracking.',
+        '1. UPC frame-metadata gap -> camera/driver.',
+        '2. UPC frame metadata healthy but LAB bad -> stereo sync/TCP/input bridge.',
+        '3. LAB frame metadata healthy but LAB pose bad -> cuVSLAM/GPU/compute/tracking.',
         '4. LAB pose healthy but UPC returned pose bad -> return bridge/TCP.',
         '5. UPC returned pose healthy but adapted pose bad -> TF/PoseAdapter.',
     ])

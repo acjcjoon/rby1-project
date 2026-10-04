@@ -374,7 +374,11 @@ class BridgeNode(Node):
                 stamp_ns = _stamp_ns(message.header.stamp)
                 age = (now_ns - stamp_ns) / 1_000_000_000
                 if stamp_ns <= 0 or not -self.cfg['max_future_image_sec'] <= age <= self.cfg['max_image_age_sec']:
-                    raise ProtocolError('stale/future camera timestamp; synchronize UPC/LAB clocks and check TCP delay')
+                    raise ProtocolError(
+                        f'stale/future camera timestamp: age={age:.6f}s, '
+                        f'allowed=[-{self.cfg["max_future_image_sec"]:.3f}, '
+                        f'{self.cfg["max_image_age_sec"]:.3f}]s; '
+                        'synchronize UPC/LAB clocks and check TCP delay')
             if self._lab_input_session != packet.session_id:
                 self._lab_input_session = packet.session_id
                 self._lab_first_image_stamp = min(_stamp_ns(msg.header.stamp) for msg in messages[:2])

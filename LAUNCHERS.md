@@ -93,7 +93,7 @@ LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_
 
 기본 저장 경로는 `~/rby1_trials/<시험>_<역할>_<시간>_<고유값>/`이다.
 
-- `bag/`: 발견되고 구독 가능한 모든 토픽 (`-a --include-hidden-topics`), 영상 포함
+- `bag/`: 기본값은 rosout, TF, diagnostics, bridge/pose/status/action/control 등 저용량 디버깅 필수 토픽. 원본 영상과 VSLAM point cloud는 제외
 - `recorder.log`, `bag_info.txt`: 구독 경고, 기록된 토픽/메시지 수, bag 확인 결과
 - `events.jsonl`, `observer.log`: 카메라→LAB→cuVSLAM pose→UPC 반환 pose의 stamp/rate/gap과 VSLAM·Nav2 상태
 - `timing_report.txt`, `timing_report.json`, `analysis.log`: Ctrl+C 종료 후 자동 생성되는 해당 PC 병목 요약
@@ -101,9 +101,9 @@ LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_
 - `nodes_start/end.txt`, `topics_start/end.txt`, `params_start/end/`: 노드/토픽/파라미터
 - `waypoints_start/end.yaml`: UPC 기본 Point YAML의 복사본. 사용자 지정 파일은 `--waypoints /경로/points.yaml` 사용
 
-영상 녹화는 부하가 크므로 정지 상태 30초 시험부터 하고 저장 공간과 메시지 수를 확인한다.
+원본 영상까지 반드시 필요할 때만 `--full-bag`을 붙인다. 이 옵션은 LAB Python bridge의 영상 publish를 지연시켜 500 ms stale 판정을 유발할 수 있으므로 정상 통신을 먼저 확인한 뒤 짧게 사용한다.
 QoS/구독 실패 메시지가 있으면 실제 토픽 설정에 맞춰 보완해야 한다.
-전체 토픽 녹화는 서비스 요청·응답 전체 또는 비 ROS 웹 이벤트를 보장하지 않는다.
+rosbag 녹화는 서비스 요청·응답 전체 또는 비 ROS 웹 이벤트를 보장하지 않는다.
 cuVSLAM 지도 저장도 별도이며, LAB mapping 종료 전에 기존 `map_tool save`로 저장한다.
 실제 실행 옵션과 시험 증상/시각은 시험 폴더에 메모한다.
 
