@@ -1,6 +1,6 @@
 """ROS-free duplex transport with bounded queues and reconnect isolation."""
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import replace
 import select
 import socket
@@ -78,6 +78,13 @@ class BoundedMailbox:
         self.stereo_max_age_sec = stereo_max_age_sec
         self.dropped_stereo = 0
         self.imu_overflows = 0
+        # Lifetime counters intentionally survive clear()/reconnect.  They are
+        # exposed through bridge_status so a passive recorder can distinguish
+        # producer gaps from latest-only mailbox replacement.
+        self._enqueued = Counter()
+        self._drained = Counter()
+        self._replaced = Counter()
+        self._expired = Counter()
 
     def put(self, packet):
         with self._lock:
@@ -88,9 +95,12 @@ class BoundedMailbox:
                     raise QueueOverflow('IMU queue overflow; session must reset')
                 self._imu.append(packet)
             else:
-                if packet.kind == 'stereo' and 'stereo' in self._latest:
-                    self.dropped_stereo += 1
+                if packet.kind in self._latest:
+                    self._replaced[packet.kind] += 1
+                    if packet.kind == 'stereo':
+                        self.dropped_stereo += 1
                 self._latest[packet.kind] = (packet, time.monotonic())
+            self._enqueued[packet.kind] += 1
 
     def drain(self, max_imu=32):
         with self._lock:
@@ -98,13 +108,17 @@ class BoundedMailbox:
             # Calibration precedes the first frame after every reconnect.
             if 'static_tf' in self._latest:
                 result.append(self._latest.pop('static_tf')[0])
+                self._drained['static_tf'] += 1
             for _ in range(min(max_imu, len(self._imu))):
                 result.append(self._imu.popleft())
+                self._drained['imu'] += 1
             for kind, (packet, queued_at) in self._latest.items():
                 if kind == 'stereo' and time.monotonic() - queued_at > self.stereo_max_age_sec:
                     self.dropped_stereo += 1
+                    self._expired[kind] += 1
                     continue
                 result.append(packet)
+                self._drained[kind] += 1
             self._latest.clear()
             return result
 
@@ -112,6 +126,19 @@ class BoundedMailbox:
         with self._lock:
             self._imu.clear()
             self._latest.clear()
+
+    def metrics(self):
+        """Return a JSON-safe snapshot without changing queue behavior."""
+        with self._lock:
+            queued = dict(Counter(packet.kind for packet in self._imu))
+            queued.update({kind: 1 for kind in self._latest})
+            return {
+                'enqueued': dict(self._enqueued),
+                'drained': dict(self._drained),
+                'replaced': dict(self._replaced),
+                'expired': dict(self._expired),
+                'queued': queued,
+            }
 
 
 class SocketLink:
@@ -140,6 +167,7 @@ class SocketLink:
         self._socket = None
         self._listener = None
         self._persistent = {}
+        self._connection_count = 0
         self._state = {'connected': False, 'session_id': '', 'reason': 'starting'}
 
     def start(self):
@@ -167,7 +195,10 @@ class SocketLink:
         with self._lock:
             return dict(self._state, role=self.role,
                         dropped_stereo=self.outbox.dropped_stereo + self.inbox.dropped_stereo,
-                        imu_overflows=self.outbox.imu_overflows + self.inbox.imu_overflows)
+                        imu_overflows=self.outbox.imu_overflows + self.inbox.imu_overflows,
+                        connection_count=self._connection_count,
+                        tx_mailbox=self.outbox.metrics(),
+                        rx_mailbox=self.inbox.metrics())
 
     def invalidate(self, reason):
         with self._lock:
@@ -206,6 +237,7 @@ class SocketLink:
             self.outbox.clear()
             self.inbox.clear()
             self._reset.clear()
+            self._connection_count += 1
             self._state.update(connected=True, session_id=session, reason='connected')
             for packet in self._persistent.values():
                 self.outbox.put(packet)

@@ -1,6 +1,6 @@
 # UPC / LAB 양쪽 시간 계측
 
-주행·VSLAM 로직이나 timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, 나중에 JSONL/rosbag/pcap을 CSV로 변환하여 구간별 지연과 정지 원인을 비교한다.
+주행·VSLAM 로직이나 timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. bridge 상태에는 송·수신 latest-only mailbox의 enqueue/drain/replace/expire 누적 카운터도 포함되어 Pose 또는 영상이 TCP 전후 어느 큐에서 교체됐는지 확인할 수 있다.
 
 ## 실행
 
@@ -26,9 +26,9 @@ bash scripts/capture_vslam_lab.sh --run-id point1_point2_01
 
 스크립트는 ROS_DOMAIN_ID를 덮어쓰지 않는다. 예를 들어 LAB stack이 85로 실행 중이면 이 수집 터미널에도 `export ROS_DOMAIN_ID=85`를 적용한다. UPC 값은 실제 stack을 따른다.
 
-공통 수집 파일 `capture_vslam_timing.sh`, 메타데이터 관측기 `timing_observer.py`, role wrapper를 **함께 복사**해야 한다. source scripts를 직접 실행하므로 패키지 재빌드는 필요 없다. Python 관측기는 ROS 환경의 python3에서 실행한다. 추가 pip 패키지 없이 rclpy와 rosidl_runtime_py를 사용한다.
+공통 수집 파일 `capture_vslam_timing.sh`, 메타데이터 관측기 `timing_observer.py`, 분석기 `analyze_vslam_timing.py`, role wrapper를 **함께 복사**해야 한다. source scripts를 직접 실행하므로 수집기 자체는 패키지 재빌드가 필요 없다. 다만 새 mailbox 카운터를 `bridge_status`에 넣으려면 수정된 `rby1_vslam` 패키지를 UPC와 LAB에서 다시 빌드/반영해야 한다. Python 관측기는 ROS 환경의 python3에서 실행한다. 추가 pip 패키지 없이 rclpy와 rosidl_runtime_py를 사용한다.
 
-두 PC 모두 수집이 시작됐는지 확인한 뒤 정지 10초→Point 1→Point 2→정지/취소 후 10초를 포함해 기록한다. status=4를 확인한 뒤 다음 goal을 보낸다. 각 수집 터미널에서 Ctrl+C로 종료하면 수집 자식 프로세스만 정리한다. 수집 프로세스는 이동/enable/cancel/전원 서비스를 호출하지 않는다.
+두 PC 모두 수집이 시작됐는지 확인한 뒤 정지 10초→Point 1→Point 2→정지/취소 후 10초를 포함해 기록한다. status=4를 확인한 뒤 다음 goal을 보낸다. 각 수집 터미널에서 Ctrl+C로 종료하면 수집 자식 프로세스만 정리하고 해당 PC의 단독 `timing_report.txt/json`을 자동 생성한다. 수집 프로세스는 이동/enable/cancel/전원 서비스를 호출하지 않는다.
 
 로그의 metadata/rosbag 구독 정보를 확인한다. `observer_health.counts`에 영상·포즈 토픽 수가 늘어나는지 확인하면 도메인 불일치 또는 없는 토픽을 발견할 수 있다. 현재 topic 이름은 저장소의 기본 launch 구성에 맞춰져 있다. 별도 remap을 사용한다면 관측기의 목록도 그 구성에 맞춰야 한다.
 
@@ -39,6 +39,9 @@ bash scripts/capture_vslam_lab.sh --run-id point1_point2_01
 | 파일 | 내용 |
 |---|---|
 | `events.jsonl` | 메시지별 원본 stamp·관측 시각·영상 크기·포즈/속도·상태 JSON |
+| `timing_report.txt` | 종료 시 자동 생성되는 사람이 읽는 단독 PC rate/gap/drop/상태 진단 |
+| `timing_report.json` | 위 결과의 기계 판독용 원본 통계와 exact-stamp 구간 매칭 결과 |
+| `analysis.log` | 자동 분석기의 stdout/stderr. 보고서 생성 실패 원인도 여기에 남음 |
 | `bag/` | rosout, TF, 진단, bridge, 포즈. UPC는 gate/localization/control/속도/action 상태·feedback도 포함 |
 | `environment.txt` | role, 공통 run_id, 로컬 capture_id, domain, ROS 배포판, 호스트, 최초 시계 상태 |
 | `*_params.yaml` | 실제 노드 파라미터와 timeout. 없는 노드나 조회 실패는 그 파일에 기록 |
@@ -46,6 +49,21 @@ bash scripts/capture_vslam_lab.sh --run-id point1_point2_01
 | `system_samples.txt` | wall/monotonic 시각, NTP 상태, load, NIC 누적 바이트/오류, TCP ss, 프로세스 CPU/메모리, 가능한 GPU 이용률 |
 | `metadata.log`, `rosbag.log` | 수집기 구독·경고·실패 정보 |
 | `tcp.pcap`, `tcpdump.log` | `--pcap`일 때만 생성되는 TCP 헤더 위주의 캡처와 캡처 drop 통계 |
+
+## UPC와 LAB을 합친 자동 병목 보고서
+
+각 PC에서 캡처를 종료한 뒤 두 결과 디렉터리를 한 PC에 모아 다음을 실행한다. 인자 순서는 상관없고, 정확히 UPC 하나와 LAB 하나여야 한다.
+
+```bash
+python3 scripts/analyze_vslam_timing.py \
+  ~/rby1_timing/point1_point2_01_upc_YYYYMMDD_HHMMSS_XXXXXX \
+  ~/rby1_timing/point1_point2_01_lab_YYYYMMDD_HHMMSS_XXXXXX \
+  --output-dir ~/rby1_timing/point1_point2_01_combined
+```
+
+`timing_report.txt`의 첫 `Likely bottlenecks / events` 절에 500 ms 초과 gap, cuVSLAM non-tracking, TCP 재연결, stereo sync drop, TX mailbox 영상/pose 교체, Nav2 status 5를 우선 표시한다. 이어지는 표는 입력 영상→LAB 영상→LAB pose→UPC 반환 pose→PoseAdapter 결과 순서의 rate와 최대 gap, exact source stamp 매칭 지연을 보여준다. 임계값을 바꿔 비교하려면 `--stale-ms 750`처럼 지정한다.
+
+두 PC 사이 구간은 wall clock으로 계산되므로 `environment.txt`의 NTP 상태를 먼저 확인한다. 시계 offset이 불명확해도 각 PC 내부 monotonic gap, 매칭률, mailbox 교체 및 topic rate 비교는 사용할 수 있다.
 
 JSONL은 오프라인 `json.loads()`로 읽어 CSV에 옮길 수 있는 원시 행이다. JSONL 안에는 start/end/observer_health/subscription_unavailable 이벤트도 있으므로 메시지 분석에서는 `event == "message"`로 필터링한다. 영상 픽셀·IMU 전체 배열은 JSONL에 저장하지 않는다. rosbag에도 영상 원본은 넣지 않는다.
 
@@ -62,7 +80,7 @@ JSONL은 오프라인 `json.loads()`로 읽어 CSV에 옮길 수 있는 원시 �
 | `frame_id`, `child_frame_id` | 측정 프레임과 포즈 대상 |
 | `width`, `height`, `step`, `encoding`, `payload_bytes` | 영상 메타데이터 및 원본 픽셀 바이트 수 |
 | `position`, `orientation`, `velocity` | pose/twist가 있을 때 작은 수치 배열 |
-| `state` | bridge/localization/gate 등의 JSON 전체. session_id와 detail, drop 카운터 보존 |
+| `state` | bridge/localization/gate 등의 JSON 전체. session_id, detail, drop 및 `tx_mailbox`/`rx_mailbox` enqueue·drain·replace·expire 카운터 보존 |
 
 ns 정수는 CSV 생성 시 **int64 또는 문자열로 유지**한다. Unix ns를 float로 바꾼 뒤 빼면 정밀도를 잃는다. 먼저 정수끼리 뺀 차이에 `/1e6`을 적용해 ms로 변환한다. source stamp가 0이거나 없는 값은 유효한 source latency 표본으로 취급하지 않는다.
 

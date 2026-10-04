@@ -64,12 +64,17 @@ LAB 보조 런처에 `--enable-imu false`를 함께 지정한다.
 ## 시작부터 Point2 정지까지 한 번의 녹화
 
 `record_trial.sh`는 런처와 별도로 실행한다. UPC와 LAB의 시험 이름만 일치시킨다.
-LAB 컨테이너에도 이 루트 스크립트를 복사하고 실행하거나 전체 저장소 경로를 사용한다.
+LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_observer.py`와
+`analyze_vslam_timing.py`도 함께 있어야 한다. 전체 저장소 경로에서 실행하거나,
+`record_trial.sh`를 LAB의 `rby1_vslam` 패키지 루트에 두면 `scripts/`를 자동으로 찾는다.
 
 1. UPC 녹화 터미널에서 **먼저** 실행한다.
+   `--domain`은 UPC 실행 스크립트가 시작할 때 출력한 값과 반드시 같게 한다.
+   아래 `10`은 `run_vslam_mapping_upc.sh` 기본값 예시이며, 전체 web 런처를 domain 0으로
+   실행했다면 `0`을 사용한다.
 
    ```bash
-   bash record_trial.sh --role upc --domain 0 --run-id point1_point2_01
+   bash record_trial.sh --role upc --domain 10 --run-id point1_point2_01
    ```
 
 2. LAB 컨테이너 녹화 터미널에서 실행한다. 출력 경로는 지속 보존되는 마운트 경로로 지정한다.
@@ -90,6 +95,8 @@ LAB 컨테이너에도 이 루트 스크립트를 복사하고 실행하거나 �
 
 - `bag/`: 발견되고 구독 가능한 모든 토픽 (`-a --include-hidden-topics`), 영상 포함
 - `recorder.log`, `bag_info.txt`: 구독 경고, 기록된 토픽/메시지 수, bag 확인 결과
+- `events.jsonl`, `observer.log`: 카메라→LAB→cuVSLAM pose→UPC 반환 pose의 stamp/rate/gap과 VSLAM·Nav2 상태
+- `timing_report.txt`, `timing_report.json`, `analysis.log`: Ctrl+C 종료 후 자동 생성되는 해당 PC 병목 요약
 - `environment.txt`, `system_samples.txt`: domain/배포판/시계/디스크/시스템 load
 - `nodes_start/end.txt`, `topics_start/end.txt`, `params_start/end/`: 노드/토픽/파라미터
 - `waypoints_start/end.yaml`: UPC 기본 Point YAML의 복사본. 사용자 지정 파일은 `--waypoints /경로/points.yaml` 사용
@@ -99,6 +106,15 @@ QoS/구독 실패 메시지가 있으면 실제 토픽 설정에 맞춰 보완�
 전체 토픽 녹화는 서비스 요청·응답 전체 또는 비 ROS 웹 이벤트를 보장하지 않는다.
 cuVSLAM 지도 저장도 별도이며, LAB mapping 종료 전에 기존 `map_tool save`로 저장한다.
 실제 실행 옵션과 시험 증상/시각은 시험 폴더에 메모한다.
+
+양쪽 결과를 한 PC에 모은 뒤 다음처럼 합치면 전송 전·후 구간까지 자동 비교한다.
+
+```bash
+python3 rby1_vslam/scripts/analyze_vslam_timing.py \
+  ~/rby1_trials/point1_point2_01_upc_YYYYMMDD_HHMMSS_XXXXXX \
+  ~/rby1_trials/point1_point2_01_lab_YYYYMMDD_HHMMSS_XXXXXX \
+  --output-dir ~/rby1_trials/point1_point2_01_combined
+```
 
 ## 기존 보조 스크립트
 

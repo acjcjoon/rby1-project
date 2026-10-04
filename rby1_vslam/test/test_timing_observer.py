@@ -41,6 +41,24 @@ class TimingMetadataTest(unittest.TestCase):
         encoded = json.dumps(result, allow_nan=False)
         self.assertEqual(json.loads(encoded)['pose'], ['nan', 'inf', '-inf'])
 
+    def test_rosout_keeps_failure_text(self):
+        message = SimpleNamespace(
+            level=40, name='visual_slam', msg='Visual tracking is lost',
+            file='visual_slam_impl.cpp', function='UpdatePose', line=123)
+        result = observer.message_metadata(message, 'rcl_interfaces/msg/Log')
+        self.assertEqual(result['log_name'], 'visual_slam')
+        self.assertEqual(result['log_message'], 'Visual tracking is lost')
+
+    def test_action_status_keeps_status_five_and_goal_id(self):
+        goal_info = SimpleNamespace(
+            goal_id=SimpleNamespace(uuid=[1, 2, 255]),
+            stamp=SimpleNamespace(sec=10, nanosec=20))
+        message = SimpleNamespace(status_list=[SimpleNamespace(
+            goal_info=goal_info, status=5)])
+        result = observer.message_metadata(message, 'action_msgs/msg/GoalStatusArray')
+        self.assertEqual(result['goal_statuses'][0], {
+            'goal_id': '0102ff', 'status': 5, 'goal_stamp_ns': 10_000_000_020})
+
 
 if __name__ == '__main__':
     unittest.main()

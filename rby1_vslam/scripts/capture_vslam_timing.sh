@@ -51,6 +51,7 @@ command -v python3 >/dev/null || die "python3 is required"
 command -v timeout >/dev/null || die "GNU timeout is required"
 python3 -c 'import rclpy; import rosidl_runtime_py' || die "ROS Python modules unavailable"
 [[ "$PCAP" == false ]] || command -v tcpdump >/dev/null || die "--pcap needs tcpdump"
+[[ -f "$SCRIPT_DIR/analyze_vslam_timing.py" ]] || die "Missing analyze_vslam_timing.py next to this script"
 
 mkdir -p -- "$OUTPUT_ROOT"
 RUN_DIR="$(mktemp -d "${OUTPUT_ROOT}/${RUN_LABEL}_${ROLE}_$(date +%Y%m%d_%H%M%S)_XXXXXX")"
@@ -73,6 +74,12 @@ cleanup() {
   done
   for pid in "${PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
   for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
+  if python3 "$SCRIPT_DIR/analyze_vslam_timing.py" "$RUN_DIR" \
+      --output-dir "$RUN_DIR" > "$RUN_DIR/analysis.log" 2>&1; then
+    echo "[timing] Report: $RUN_DIR/timing_report.txt"
+  else
+    echo "[timing] WARNING: automatic analysis failed; inspect $RUN_DIR/analysis.log" >&2
+  fi
   echo "[timing] Saved: $RUN_DIR"
   exit "$status"
 }
@@ -99,6 +106,8 @@ snapshot_clock() {
   printf 'role=%s\nrun_id=%s\ncapture_id=%s\n' "$ROLE" "$RUN_LABEL" "$CAPTURE_ID"
   printf 'ROS_DOMAIN_ID=%s\nROS_DISTRO=%s\nRMW_IMPLEMENTATION=%s\n' \
     "${ROS_DOMAIN_ID:-0}" "${ROS_DISTRO:-unset}" "${RMW_IMPLEMENTATION:-default}"
+  git -C "$SCRIPT_DIR/.." rev-parse HEAD 2>/dev/null || true
+  git -C "$SCRIPT_DIR/.." status --short 2>/dev/null || true
   uname -a
   snapshot_clock
 } > "$RUN_DIR/environment.txt" 2>&1
@@ -107,7 +116,8 @@ start_child metadata python3 "$SCRIPT_DIR/timing_observer.py" \
   --role "$ROLE" --output "$RUN_DIR/events.jsonl" --capture-id "$CAPTURE_ID"
 
 BAG_TOPICS=(/rosout /tf /tf_static /clock /diagnostics \
-  /rby1/vslam/bridge_status /rby1/vslam/camera_odometry /rby1/vslam/camera_slam_odometry)
+  /rby1/vslam/bridge_status /rby1/vslam/camera_odometry \
+  /rby1/vslam/camera_slam_odometry /rby1/vslam/odom)
 if [[ "$ROLE" == upc ]]; then
   BAG_TOPICS+=(/rby1/odom /rby1/robot_state /rby1/control/command /rby1/control/event \
     /rby1/vslam/slam_odom /rby1/vslam/localization_status /rby1/vslam/navigation_status \
@@ -118,6 +128,7 @@ if [[ "$ROLE" == upc ]]; then
     /rby1/vslam/nav2_gate /rby1/vslam/waypoint_ui /rby1/rby1_control \
     /rby1/vslam/nav2/controller_server /rby1/vslam/nav2/velocity_smoother)
 else
+  BAG_TOPICS+=(/visual_slam/status)
   NODES=(/rby1/vslam/lab_bridge /visual_slam)
 fi
 start_child rosbag ros2 bag record --include-hidden-topics \
@@ -146,6 +157,8 @@ while true; do
     python3 -c 'import json,time; print(json.dumps({"wall_ns":time.time_ns(),"monotonic_ns":time.monotonic_ns()}))'
     snapshot_clock
     cat /proc/loadavg
+    head -n 1 /proc/stat
+    awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {print}' /proc/meminfo
     cat /proc/net/dev
     if command -v ss >/dev/null; then timeout 2 ss -tinp "( sport = :$PORT or dport = :$PORT )" || true; fi
     ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -n 25 || true

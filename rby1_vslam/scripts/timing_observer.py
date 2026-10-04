@@ -17,8 +17,10 @@ CAMERA_TOPICS = [
     ('/rby1/vslam/camera_odometry', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/camera_slam_odometry', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/bridge_status', 'std_msgs/msg/String', 'reliable'),
+    ('/rosout', 'rcl_interfaces/msg/Log', 'rosout'),
 ]
 UPC_TOPICS = [
+    ('/rby1/vslam/odom', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/slam_odom', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/odom', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/localization_status', 'std_msgs/msg/String', 'reliable'),
@@ -26,9 +28,12 @@ UPC_TOPICS = [
     ('/rby1/vslam/nav2_cmd_vel', 'geometry_msgs/msg/Twist', 'reliable'),
     ('/rby1/cmd_raw', 'geometry_msgs/msg/Twist', 'reliable'),
     ('/rby1/cmd_vel', 'geometry_msgs/msg/Twist', 'reliable'),
+    ('/rby1/vslam/nav2/navigate_to_pose/_action/status',
+     'action_msgs/msg/GoalStatusArray', 'reliable'),
 ]
 LAB_TOPICS = [
     ('/visual_slam/status', 'isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus', 'sensor'),
+    ('/diagnostics', 'diagnostic_msgs/msg/DiagnosticArray', 'reliable'),
 ]
 
 
@@ -68,6 +73,23 @@ def message_metadata(message, message_type):
             fields['text'] = str(message.data)
     elif message_type.endswith('/VisualSlamStatus'):
         fields['vo_state'] = int(message.vo_state)
+    elif message_type == 'diagnostic_msgs/msg/DiagnosticArray':
+        fields['diagnostics'] = [{
+            'name': str(status.name), 'hardware_id': str(status.hardware_id),
+            'level': int(status.level), 'message': str(status.message),
+            'values': {str(item.key): str(item.value) for item in status.values},
+        } for status in message.status]
+    elif message_type == 'rcl_interfaces/msg/Log':
+        fields.update(log_level=int(message.level), log_name=str(message.name),
+                      log_message=str(message.msg), log_file=str(message.file),
+                      log_function=str(message.function), log_line=int(message.line))
+    elif message_type == 'action_msgs/msg/GoalStatusArray':
+        fields['goal_statuses'] = [{
+            'goal_id': bytes(status.goal_info.goal_id.uuid).hex(),
+            'status': int(status.status),
+            'goal_stamp_ns': int(status.goal_info.stamp.sec) * 1_000_000_000
+                             + int(status.goal_info.stamp.nanosec),
+        } for status in message.status_list]
     return safe_json(fields)
 
 
@@ -82,7 +104,7 @@ def main():
     import rclpy
     from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data, QoSProfile
+    from rclpy.qos import qos_profile_rosout_default, qos_profile_sensor_data, QoSProfile
     from rosidl_runtime_py.utilities import get_message
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +149,12 @@ def main():
                    'type': message_type, 'detail': str(exc)})
             node.get_logger().warning(f'Cannot observe {topic}: {exc}')
             continue
-        qos = qos_profile_sensor_data if qos_name == 'sensor' else QoSProfile(depth=100)
+        if qos_name == 'sensor':
+            qos = qos_profile_sensor_data
+        elif qos_name == 'rosout':
+            qos = qos_profile_rosout_default
+        else:
+            qos = QoSProfile(depth=100)
         subscriptions.append(node.create_subscription(
             cls, topic, callback_for(topic, message_type), qos))
     steady = Clock(clock_type=ClockType.STEADY_TIME)

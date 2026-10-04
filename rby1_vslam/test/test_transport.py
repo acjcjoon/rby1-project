@@ -112,6 +112,13 @@ def test_mailbox_latest_stereo_and_ordered_imu():
     assert [packet.payload['index'] for packet in drained if packet.kind == 'imu'] == [0, 1, 2]
     assert [packet.payload['index'] for packet in drained if packet.kind == 'stereo'] == [2]
     assert mailbox.dropped_stereo == 2
+    assert mailbox.metrics() == {
+        'enqueued': {'stereo': 3, 'imu': 3},
+        'drained': {'imu': 3, 'stereo': 1},
+        'replaced': {'stereo': 2},
+        'expired': {},
+        'queued': {},
+    }
 
 
 def test_imu_overflow_is_explicit_and_clears_gap():
@@ -128,6 +135,16 @@ def test_old_stereo_is_dropped_whole():
     mailbox.put(Packet('stereo', {'left': 'a', 'right': 'b'}))
     assert mailbox.drain() == []
     assert mailbox.dropped_stereo == 1
+    assert mailbox.metrics()['expired'] == {'stereo': 1}
+
+
+def test_mailbox_counts_latest_pose_replacement_without_changing_delivery():
+    mailbox = BoundedMailbox()
+    mailbox.put(Packet('tracking_odom', {'index': 1}))
+    mailbox.put(Packet('tracking_odom', {'index': 2}))
+    drained = mailbox.drain()
+    assert [packet.payload['index'] for packet in drained] == [2]
+    assert mailbox.metrics()['replaced'] == {'tracking_odom': 1}
 
 
 def test_stereo_sync_preserves_matching_calibration_and_stamps():
