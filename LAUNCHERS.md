@@ -54,6 +54,9 @@ UPC/LAB의 도메인은 서로 같을 필요가 없고 데이터는 TCP로 전�
 VSLAM 일반 런처와 LAB/UPC/mapping 보조 런처는 모두 **IMU 사용이 기본값**이다.
 UPC는 D435i의 gyro/accel을 통합한 `/d435/d435/imu`를 TCP로 전달하고,
 LAB cuVSLAM은 `tracking_mode=1`로 영상과 IMU를 함께 사용한다.
+UPC VSLAM 런처는 Jetson에서 IMU를 사용할 수 있도록 기본적으로
+`~/librealsense-rsusb-2.58.4/build-rsusb/Release`의 RSUSB librealsense를 강제한다.
+다른 위치를 사용하려면 `RBY1_RSUSB_LIB_DIR`에 `Release` 디렉터리를 지정한다.
 진단용으로 IMU를 끄려면 일반 UPC 런처에 `enable_imu:=false`,
 LAB 보조 런처에 `--enable-imu false`를 함께 지정한다.
 베이스 이동 전용 모드는 카메라/IMU/VSLAM을 시작하지 않는다.

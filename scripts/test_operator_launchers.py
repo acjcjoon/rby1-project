@@ -25,11 +25,18 @@ class Launchers(unittest.TestCase):
         self.shell_path = shell_path
         ros2 = Path(self.temp.name) / 'ros2'
         self.ros2 = ros2
-        ros2.write_text(f'#!{shell_path(BASH)}\nprintf "MOCK_ROS2 %s\\n" "$*"\n', encoding='utf-8')
+        ros2.write_text(f'#!{shell_path(BASH)}\nprintf "MOCK_ROS2 %s\\n" "$*"\n'
+                        'printf "MOCK_LD_LIBRARY_PATH=%s\\n" "${LD_LIBRARY_PATH:-}"\n',
+                        encoding='utf-8')
         ros2.chmod(0o755)
         setup.write_text(f'export PATH="{shell_path(self.temp.name)}:$PATH"\n', encoding='utf-8')
+        rsusb_lib = Path(self.temp.name) / 'rsusb' / 'Release'
+        rsusb_lib.mkdir(parents=True)
+        (rsusb_lib / 'librealsense2.so.2.58').touch()
+        self.rsusb_lib = rsusb_lib
         self.env = dict(os.environ, RBY1_ROS_SETUP=setup.as_posix(),
-                        RBY1_WORKSPACE_SETUP=setup.as_posix(), DISPLAY=':0', ROS_DOMAIN_ID='17')
+                        RBY1_WORKSPACE_SETUP=setup.as_posix(),
+                        RBY1_RSUSB_LIB_DIR=rsusb_lib.as_posix(), DISPLAY=':0', ROS_DOMAIN_ID='17')
 
     def run_script(self, script, *args):
         return subprocess.run([BASH, str(ROOT / script), *args], env=self.env,
@@ -49,8 +56,16 @@ class Launchers(unittest.TestCase):
                     self.assertIn('ROS_DOMAIN_ID=17', result.stdout)
                     if mode == 'vslam':
                         self.assertIn('enable_imu:=true', result.stdout)
+                        self.assertIn('RealSense backend=' + self.rsusb_lib.as_posix(), result.stdout)
+                        self.assertIn('MOCK_LD_LIBRARY_PATH=' + self.rsusb_lib.as_posix(), result.stdout)
                     else:
                         self.assertNotIn('enable_imu', result.stdout)
+
+    def test_vslam_rejects_missing_rsusb_library(self):
+        self.env['RBY1_RSUSB_LIB_DIR'] = str(Path(self.temp.name) / 'missing')
+        result = self.run_script('run_vslam_upc.sh', 'lab_host:=192.0.2.1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing RSUSB librealsense', result.stderr)
 
     def test_imu_opt_out_is_forwarded_after_default(self):
         result = self.run_script('run_vslam_web.sh', 'lab_host:=192.0.2.1', 'enable_imu:=false')

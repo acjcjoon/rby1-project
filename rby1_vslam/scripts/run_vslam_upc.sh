@@ -16,6 +16,7 @@ ROS_DOMAIN="${ROS_DOMAIN_ID:-0}"
 ENABLE_IMU="true"
 START_CAMERA="true"
 SERIAL_NO=""
+RSUSB_LIB_DIR="${RBY1_RSUSB_LIB_DIR:-${HOME}/librealsense-rsusb-2.58.4/build-rsusb/Release}"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ Usage: run_vslam_upc.sh --lab-host LAB_IP [options]
                            Use false if the D435i is already running
   --serial SERIAL          Optional D435i serial number
   --workspace PATH         Jetson ROS 2 workspace
+  RBY1_RSUSB_LIB_DIR       Override the RSUSB librealsense Release directory
   -h, --help
 
 This starts D435i, mount TF, TCP bridge and pose adapter through upc.launch.py.
@@ -64,12 +66,15 @@ done
 WORKSPACE_SETUP="${UPC_WS}/install/setup.bash"
 [[ -r "$ROS_SETUP" ]] || die "ROS setup not found: $ROS_SETUP"
 [[ -r "$WORKSPACE_SETUP" ]] || die "Workspace is not built: $WORKSPACE_SETUP"
+[[ -r "$RSUSB_LIB_DIR/librealsense2.so.2.58" ]] || \
+  die "RSUSB librealsense not found: $RSUSB_LIB_DIR/librealsense2.so.2.58"
 
 # shellcheck disable=SC1090
 source "$ROS_SETUP"
 # shellcheck disable=SC1090
 source "$WORKSPACE_SETUP"
 export ROS_DOMAIN_ID="$ROS_DOMAIN"
+export LD_LIBRARY_PATH="$RSUSB_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 ros2 pkg prefix rby1_vslam >/dev/null 2>&1 || die "rby1_vslam is not built in $UPC_WS"
 
@@ -77,6 +82,7 @@ ARGS=("lab_host:=$LAB_HOST" "port:=$PORT" "enable_imu:=$ENABLE_IMU" "start_camer
 [[ -n "$SERIAL_NO" ]] && ARGS+=("serial_no:=$SERIAL_NO")
 
 echo "[vslam-upc] workspace=$UPC_WS"
+echo "[vslam-upc] RealSense backend=$RSUSB_LIB_DIR/librealsense2.so.2.58"
 echo "[vslam-upc] LAB=$LAB_HOST:$PORT, ROS_DOMAIN_ID=$ROS_DOMAIN_ID, IMU=$ENABLE_IMU"
 echo "[vslam-upc] NOTE: driver/control/Nav2/UI are not started by this script."
 exec ros2 launch rby1_vslam upc.launch.py "${ARGS[@]}"

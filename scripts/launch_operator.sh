@@ -11,9 +11,10 @@ Mode: $MODE / UI: $UI. Run on UPC; choose only one operator launcher.
 Arguments: name:=value (standard ROS launch arguments).
 VSLAM requires lab_host:=<LAB-IP> and a running LAB VSLAM server.
 VSLAM uses IMU by default; enable_imu:=false opts out on UPC (match LAB).
+VSLAM forces the RSUSB librealsense build under ~/librealsense-rsusb-2.58.4.
 Mobile starts only driver, safe control and UI (no TCP/camera/Nav2).
 Defaults: ROS_DOMAIN_ID=current environment or 0; web port=8080.
-Set RBY1_ROS_SETUP / RBY1_WORKSPACE_SETUP for a different installation.
+Set RBY1_ROS_SETUP / RBY1_WORKSPACE_SETUP / RBY1_RSUSB_LIB_DIR for a different installation.
 Recording is separate: bash record_trial.sh --role upc --run-id trial01
 EOF
   exit 0
@@ -42,6 +43,13 @@ source "$ROS_SETUP"
 source "$WORKSPACE_SETUP"
 set -u
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
+if [[ "$MODE" == vslam ]]; then
+  RSUSB_LIB_DIR="${RBY1_RSUSB_LIB_DIR:-${HOME}/librealsense-rsusb-2.58.4/build-rsusb/Release}"
+  [[ -r "$RSUSB_LIB_DIR/librealsense2.so.2.58" ]] || \
+    die "Missing RSUSB librealsense: $RSUSB_LIB_DIR/librealsense2.so.2.58"
+  export LD_LIBRARY_PATH="$RSUSB_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  printf '[operator] RealSense backend=%s\n' "$RSUSB_LIB_DIR/librealsense2.so.2.58"
+fi
 printf '[operator] mode=%s UI=%s ROS_DOMAIN_ID=%s\n' "$MODE" "$UI" "$ROS_DOMAIN_ID"
 if [[ "$UI" == web ]]; then
   echo '[operator] Open http://<UPC-IP>:8080 (or your web_port override).'
