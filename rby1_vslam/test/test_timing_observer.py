@@ -32,6 +32,14 @@ class TimingMetadataTest(unittest.TestCase):
         self.assertEqual(result['state']['dropped_stereo'], 7)
         self.assertEqual(result['state']['detail'], 'base SLAM pose expired')
 
+    def test_internal_timing_string_promotes_exact_source_stamp(self):
+        result = observer.message_metadata(SimpleNamespace(data=json.dumps({
+            'stage': 'upc_stereo_enqueued', 'source_stamp_ns': 123456789,
+            'session_id': 'session-a', 'wall_ns': 20, 'monotonic_ns': 10,
+        })), 'std_msgs/msg/String')
+        self.assertEqual(result['source_stamp_ns'], 123456789)
+        self.assertEqual(result['timing_stage'], 'upc_stereo_enqueued')
+
     def test_malformed_status_is_retained_for_diagnosis(self):
         result = observer.message_metadata(SimpleNamespace(data='broken{'), 'std_msgs/msg/String')
         self.assertEqual(result, {'text': 'broken{'})

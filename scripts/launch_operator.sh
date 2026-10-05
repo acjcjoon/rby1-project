@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# Shared implementation for the four root operator launchers.
+# Shared implementation for the two UPC-local operator launchers.
 set -Eeo pipefail
-MODE="${1:?mode required}"; UI="${2:?UI required}"; shift 2
+MODE="${1:?mode required}"; shift
 die() { printf '[operator] %s\n' "$*" >&2; exit 2; }
 [[ "$MODE" == mobile || "$MODE" == vslam ]] || die 'Invalid mode'
-[[ "$UI" == web || "$UI" == qt ]] || die 'Invalid UI'
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
   cat <<EOF
-Mode: $MODE / UI: $UI. Run on UPC; choose only one operator launcher.
+Mode: $MODE / UPC-local Qt UI. Run on UPC; choose only one operator launcher.
 Arguments: name:=value (standard ROS launch arguments).
 VSLAM requires lab_host:=<LAB-IP> and a running LAB VSLAM server.
 VSLAM uses IMU by default; enable_imu:=false opts out on UPC (match LAB).
 VSLAM forces the RSUSB librealsense build under ~/librealsense-rsusb-2.58.4.
 Mobile starts only driver, safe control and UI (no TCP/camera/Nav2).
-Defaults: ROS_DOMAIN_ID=current environment or 0; web port=8080.
+Defaults: ROS_DOMAIN_ID=current environment or 0.
 Set RBY1_ROS_SETUP / RBY1_WORKSPACE_SETUP / RBY1_RSUSB_LIB_DIR for a different installation.
 Recording is separate: bash record_trial.sh --role upc --run-id trial01
 EOF
@@ -23,7 +22,7 @@ LAB_HOST=''
 for arg in "$@"; do
   [[ "$arg" == *:=* ]] || die "Expected name:=value, got: $arg"
   case "$arg" in
-    ui_backend:*|start_ui:*) die 'UI selection is fixed by this launcher' ;;
+    start_ui:*) die 'UI selection is fixed to UPC-local Qt' ;;
     lab_host:=*) LAB_HOST="${arg#lab_host:=}" ;;
   esac
 done
@@ -32,8 +31,8 @@ if [[ "$MODE" == vslam ]]; then
 else
   [[ -z "$LAB_HOST" ]] || die 'Mobile mode does not use lab_host'
 fi
-if [[ "$UI" == qt && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-  die 'UPC UI needs a desktop session; use web for headless operation'
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  die 'UPC-local Qt needs a desktop session'
 fi
 ROS_SETUP="${RBY1_ROS_SETUP:-/opt/ros/humble/setup.bash}"
 WORKSPACE_SETUP="${RBY1_WORKSPACE_SETUP:-${HOME}/rby1_ros2_ws/install/setup.bash}"
@@ -50,12 +49,9 @@ if [[ "$MODE" == vslam ]]; then
   export LD_LIBRARY_PATH="$RSUSB_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   printf '[operator] RealSense backend=%s\n' "$RSUSB_LIB_DIR/librealsense2.so.2.58"
 fi
-printf '[operator] mode=%s UI=%s ROS_DOMAIN_ID=%s\n' "$MODE" "$UI" "$ROS_DOMAIN_ID"
-if [[ "$UI" == web ]]; then
-  echo '[operator] Open http://<UPC-IP>:8080 (or your web_port override).'
-fi
+printf '[operator] mode=%s UI=upc-qt ROS_DOMAIN_ID=%s\n' "$MODE" "$ROS_DOMAIN_ID"
 if [[ "$MODE" == mobile ]]; then
-  exec ros2 launch rby1_web mobile_base_web.launch.py "$@" ui_backend:="$UI"
+  exec ros2 launch rby1_vslam mobile_base_upc.launch.py "$@"
 else
-  exec ros2 launch rby1_vslam physical.launch.py enable_imu:=true start_rviz:=false "$@" ui_backend:="$UI" start_ui:=true
+  exec ros2 launch rby1_vslam physical.launch.py enable_imu:=true "$@" start_ui:=true
 fi

@@ -273,6 +273,7 @@ def fake_receiver(bridge, now_ns):
         _synchronizer=SimpleNamespace(slop_ns=5_000_000),
         _lab_input_session='', _lab_first_image_stamp=None,
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=now_ns)),
+        _timing=lambda *args, **kwargs: None,
         _publishers={name: SimpleNamespace(publish=published.append)
                      for name in ('left', 'right', 'left_info', 'right_info')},
     )

@@ -80,6 +80,7 @@ fi
   git -C "$ROOT" status --short 2>/dev/null || true
   date -u; uname -a; df -h "$RUN_DIR"
   if command -v chronyc >/dev/null; then timeout 2 chronyc tracking || true; fi
+  if command -v timedatectl >/dev/null; then timeout 2 timedatectl timesync-status || true; fi
 } > "$RUN_DIR/environment.txt" 2>&1
 snapshot() {
   local phase="$1" node
@@ -130,7 +131,7 @@ if [[ "$FULL_BAG" == true ]]; then
 else
   BAG_ARGS+=(
     /rosout /tf /tf_static /diagnostics
-    /rby1/vslam/bridge_status
+    /rby1/vslam/bridge_status /rby1/vslam/timing
     /rby1/vslam/camera_odometry /rby1/vslam/camera_slam_odometry
   )
   if [[ "$ROLE" == upc ]]; then
@@ -163,6 +164,7 @@ snapshot start & SNAPSHOT_PID=$!
     awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {print}' /proc/meminfo
     cat /proc/net/dev
     if command -v chronyc >/dev/null; then timeout 2 chronyc tracking || true; fi
+    if command -v timedatectl >/dev/null; then timeout 2 timedatectl timesync-status || true; fi
     if command -v ss >/dev/null; then timeout 2 ss -tinp "( sport = :$PORT or dport = :$PORT )" || true; fi
     ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -n 25 || true
     if command -v nvidia-smi >/dev/null; then

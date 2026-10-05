@@ -3,6 +3,7 @@
 
 import argparse
 from collections import Counter, defaultdict, deque
+import csv
 import json
 import math
 from pathlib import Path
@@ -20,6 +21,7 @@ SELECTED_TOPICS = (
     '/rby1/vslam/odom',
     '/rby1/vslam/slam_odom',
     '/rby1/vslam/bridge_status',
+    '/rby1/vslam/timing',
     '/rby1/vslam/localization_status',
     '/rby1/vslam/navigation_status',
 )
@@ -217,6 +219,219 @@ def match_latency(left_records, right_records, clock_field, stale_ms):
     }
 
 
+def timing_events(capture):
+    """Return validated internal boundary events from one passive capture."""
+    result = []
+    for record in capture.get('messages', {}).get('/rby1/vslam/timing', []):
+        state = record.get('state')
+        if not isinstance(state, dict):
+            continue
+        if not isinstance(state.get('stage'), str):
+            continue
+        if not all(isinstance(state.get(name), int)
+                   for name in ('source_stamp_ns', 'wall_ns', 'monotonic_ns')):
+            continue
+        if state['source_stamp_ns'] <= 0:
+            continue
+        event = dict(state)
+        event['observer_wall_ns'] = record.get('observed_wall_ns')
+        event['observer_monotonic_ns'] = record.get('observed_monotonic_ns')
+        result.append(event)
+    return sorted(result, key=lambda event: event['monotonic_ns'])
+
+
+def _first_after(events, monotonic_ns=None):
+    if not events:
+        return None
+    if monotonic_ns is None:
+        return events[0]
+    return next((event for event in events
+                 if event['monotonic_ns'] >= monotonic_ns), None)
+
+
+def build_end_to_end(captures, stale_ms=500.0):
+    """Match recorder-only stage events into clock-safe per-frame samples.
+
+    The total is measured exclusively on UPC monotonic time. Each explicit
+    component is also a duration on one host. Subtracting those components
+    from the total produces a clock-independent transport/queue residual.
+    One-way fields are diagnostic only because they use cross-host wall time.
+    """
+    by_role = {capture['role']: capture for capture in captures}
+    if 'upc' not in by_role or 'lab' not in by_role:
+        return {'started': 0, 'complete': 0, 'completion_fraction': None,
+                'incomplete_reasons': {}, 'sessions': [], 'samples': []}
+    upc_events = timing_events(by_role['upc'])
+    lab_events = timing_events(by_role['lab'])
+
+    def session_index(events):
+        index = defaultdict(list)
+        for event in events:
+            session = event.get('session_id')
+            stamp = event.get('source_stamp_ns')
+            if session and isinstance(stamp, int):
+                index[(event.get('stage'), event.get('kind'), session, stamp)].append(event)
+        return index
+
+    def stamp_index(events):
+        index = defaultdict(list)
+        for event in events:
+            index[(event.get('stage'), event.get('kind'),
+                   event.get('source_stamp_ns'))].append(event)
+        return index
+
+    upc_session = session_index(upc_events)
+    lab_session = session_index(lab_events)
+    upc_stamp = stamp_index(upc_events)
+    starts = [event for event in upc_events
+              if event.get('stage') == 'upc_stereo_enqueued'
+              and event.get('kind') == 'stereo' and event.get('session_id')]
+    samples = []
+    incomplete = Counter()
+    started_by_session = Counter(str(event['session_id']) for event in starts)
+
+    def need(index, stage, kind, session, stamp, after=None):
+        return _first_after(index.get((stage, kind, session, stamp), []), after)
+
+    def need_stamp(stage, kind, stamp, after=None):
+        return _first_after(upc_stamp.get((stage, kind, stamp), []), after)
+
+    for start in starts:
+        session = str(start['session_id'])
+        stamp = start['source_stamp_ns']
+        key_args = (session, stamp)
+        boundaries = {
+            'lab_dequeued': need(lab_session, 'lab_stereo_dequeued', 'stereo', *key_args),
+            'lab_published': need(lab_session, 'lab_stereo_published', 'stereo', *key_args),
+            'lab_pose': need(lab_session, 'lab_pose_enqueued', 'tracking_odom', *key_args),
+            'upc_dequeued': need(upc_session, 'upc_pose_dequeued', 'tracking_odom', *key_args),
+            'upc_published': need(upc_session, 'upc_pose_published', 'tracking_odom', *key_args),
+        }
+        missing = [name for name, event in boundaries.items() if event is None]
+        if missing:
+            incomplete['+'.join(missing)] += 1
+            continue
+        adapter_received = need_stamp(
+            'upc_pose_adapter_received', 'odom', stamp,
+            boundaries['upc_dequeued']['monotonic_ns'])
+        adapter_published = need_stamp(
+            'upc_pose_adapter_published', 'odom', stamp,
+            adapter_received['monotonic_ns'] if adapter_received else None)
+        if adapter_received is None or adapter_published is None:
+            incomplete['pose_adapter'] += 1
+            continue
+
+        def duration_ms(right, left, clock='monotonic_ns'):
+            return (right[clock] - left[clock]) / 1_000_000.0
+
+        lab_bridge_ms = duration_ms(boundaries['lab_published'], boundaries['lab_dequeued'])
+        vslam_ms = duration_ms(boundaries['lab_pose'], boundaries['lab_published'])
+        upc_bridge_ms = duration_ms(boundaries['upc_published'], boundaries['upc_dequeued'])
+        upc_dds_ms = duration_ms(adapter_received, boundaries['upc_published'])
+        adapter_ms = duration_ms(adapter_published, adapter_received)
+        total_ms = duration_ms(adapter_published, start)
+        local_components = lab_bridge_ms + vslam_ms + upc_bridge_ms + upc_dds_ms + adapter_ms
+        socket_boundaries = {
+            'upc_sent': need(upc_session, 'upc_stereo_socket_sent', 'stereo', *key_args),
+            'lab_received': need(
+                lab_session, 'lab_stereo_socket_received', 'stereo', *key_args),
+            'lab_sent': need(
+                lab_session, 'lab_pose_socket_sent', 'tracking_odom', *key_args),
+            'upc_received': need(
+                upc_session, 'upc_pose_socket_received', 'tracking_odom', *key_args),
+        }
+        socket_complete = all(socket_boundaries.values())
+        if socket_complete:
+            upc_tx_ms = duration_ms(socket_boundaries['upc_sent'], start)
+            lab_input_ms = duration_ms(
+                boundaries['lab_published'], socket_boundaries['lab_received'])
+            lab_tx_ms = duration_ms(socket_boundaries['lab_sent'], boundaries['lab_pose'])
+            upc_return_ms = duration_ms(
+                adapter_received, socket_boundaries['upc_received'])
+            network_ms = total_ms - (
+                upc_tx_ms + lab_input_ms + vslam_ms + lab_tx_ms
+                + upc_return_ms + adapter_ms)
+            forward_socket_ms = duration_ms(
+                socket_boundaries['lab_received'], socket_boundaries['upc_sent'], 'wall_ns')
+            return_socket_ms = duration_ms(
+                socket_boundaries['upc_received'], socket_boundaries['lab_sent'], 'wall_ns')
+        else:
+            # Compatibility for captures made after boundary events were added
+            # but before socket-worker tracing existed.
+            upc_tx_ms = lab_tx_ms = 0.0
+            lab_input_ms = lab_bridge_ms
+            upc_return_ms = upc_bridge_ms + upc_dds_ms
+            network_ms = total_ms - (
+                lab_input_ms + vslam_ms + upc_return_ms + adapter_ms)
+            forward_socket_ms = return_socket_ms = None
+        samples.append({
+            'session_id': session, 'source_stamp_ns': stamp,
+            'upc_start_wall_ns': start['wall_ns'],
+            'total_ms': total_ms,
+            'returned_pose_ms': duration_ms(boundaries['upc_published'], start),
+            'transport_queue_residual_ms': total_ms - local_components,
+            'upc_tx_queue_socket_ms': upc_tx_ms,
+            'network_roundtrip_residual_ms': network_ms,
+            'lab_input_delivery_ms': lab_input_ms,
+            'lab_bridge_publish_ms': lab_bridge_ms,
+            'lab_vslam_ms': vslam_ms,
+            'lab_tx_queue_socket_ms': lab_tx_ms,
+            'upc_return_delivery_ms': upc_return_ms,
+            'upc_bridge_publish_ms': upc_bridge_ms,
+            'upc_dds_delivery_ms': upc_dds_ms,
+            'pose_adapter_ms': adapter_ms,
+            'forward_one_way_wall_ms': duration_ms(
+                boundaries['lab_dequeued'], start, 'wall_ns'),
+            'return_one_way_wall_ms': duration_ms(
+                boundaries['upc_dequeued'], boundaries['lab_pose'], 'wall_ns'),
+            'forward_socket_wall_ms': forward_socket_ms,
+            'return_socket_wall_ms': return_socket_ms,
+            'socket_boundaries_complete': socket_complete,
+            'over_threshold': total_ms > stale_ms,
+        })
+
+    sessions = []
+    fields = (
+        'total_ms', 'returned_pose_ms', 'transport_queue_residual_ms',
+        'upc_tx_queue_socket_ms', 'network_roundtrip_residual_ms',
+        'lab_input_delivery_ms', 'lab_bridge_publish_ms', 'lab_vslam_ms',
+        'lab_tx_queue_socket_ms', 'upc_return_delivery_ms',
+        'upc_bridge_publish_ms', 'upc_dds_delivery_ms', 'pose_adapter_ms',
+        'forward_one_way_wall_ms', 'return_one_way_wall_ms',
+        'forward_socket_wall_ms', 'return_socket_wall_ms',
+    )
+    by_session = defaultdict(list)
+    for sample in samples:
+        by_session[sample['session_id']].append(sample)
+    for session, values in sorted(
+            by_session.items(), key=lambda item: min(v['upc_start_wall_ns'] for v in item[1])):
+        summary = {
+            'session_id': session,
+            'started': started_by_session[session], 'complete': len(values),
+            'completion_fraction': (len(values) / started_by_session[session]
+                                    if started_by_session[session] else None),
+            'samples_over_threshold': sum(value['over_threshold'] for value in values),
+        }
+        summary.update({field: numeric_stats([
+            value[field] for value in values
+            if isinstance(value.get(field), (int, float))])
+                        for field in fields})
+        summary['socket_boundary_samples'] = sum(
+            value['socket_boundaries_complete'] for value in values)
+        # Individually positive one-way measurements are a necessary but not
+        # sufficient NTP health check. Keep this explicit in the report.
+        summary['one_way_wall_samples_nonnegative'] = sum(
+            value['forward_one_way_wall_ms'] >= 0
+            and value['return_one_way_wall_ms'] >= 0 for value in values)
+        sessions.append(summary)
+    return {
+        'started': len(starts), 'complete': len(samples),
+        'completion_fraction': len(samples) / len(starts) if starts else None,
+        'incomplete_reasons': dict(incomplete), 'sessions': sessions,
+        'samples': samples,
+    }
+
+
 def bridge_summary(records):
     states = [record.get('state') for record in records if isinstance(record.get('state'), dict)]
     if not states:
@@ -357,6 +572,8 @@ def build_report(captures, stale_ms):
             '/rby1/vslam/nav2/navigate_to_pose/_action/status', []))
         logs[role] = relevant_logs(capture['messages'].get('/rosout', []))
 
+    end_to_end = build_end_to_end(captures, stale_ms)
+
     stages = []
 
     def add_stage(label, left_role, left_topic, right_role, right_topic, cross_host=False):
@@ -460,6 +677,27 @@ def build_report(captures, stale_ms):
     canceled = goals.get('upc', {}).get('status_5_canceled_goals', 0)
     if canceled:
         findings.append(f'UPC recorded {canceled} NavigateToPose goals ending in status 5 (canceled).')
+    component_labels = {
+        'upc_tx_queue_socket_ms': 'UPC TX queue/socket',
+        'network_roundtrip_residual_ms': 'TCP roundtrip residual',
+        'lab_input_delivery_ms': 'LAB receive/publish',
+        'lab_vslam_ms': 'cuVSLAM',
+        'lab_tx_queue_socket_ms': 'LAB TX queue/socket',
+        'upc_return_delivery_ms': 'UPC receive/DDS',
+        'pose_adapter_ms': 'PoseAdapter',
+    }
+    for session in end_to_end.get('sessions', []):
+        if not session['samples_over_threshold']:
+            continue
+        means = {label: (session.get(field) or {}).get('mean')
+                 for field, label in component_labels.items()}
+        means = {label: value for label, value in means.items()
+                 if isinstance(value, (int, float))}
+        leading = max(means, key=means.get) if means else 'unknown stage'
+        findings.append(
+            f'Session {session["session_id"][:12]} has '
+            f'{session["samples_over_threshold"]}/{session["complete"]} complete samples '
+            f'over {stale_ms:g} ms; largest mean component is {leading}.')
     if not findings:
         findings.append('No stage-specific failure was proven from this capture; check missing-topic warnings and capture both PCs together.')
 
@@ -469,13 +707,28 @@ def build_report(captures, stale_ms):
     for capture in captures:
         if capture['malformed_lines']:
             warnings.append(f'{capture["role"]}: ignored {capture["malformed_lines"]} malformed JSONL lines.')
+    if len(captures) == 2 and not end_to_end['samples']:
+        warnings.append(
+            'No complete internal timing samples were matched. Rebuild both bridge nodes, '
+            'record /rby1/vslam/timing, and start the recorder before the trial.')
+    for session in end_to_end.get('sessions', []):
+        if session.get('socket_boundary_samples', 0) < session['complete']:
+            warnings.append(
+                f'Session {session["session_id"][:12]} is missing socket-worker boundaries '
+                'for some samples; its TCP residual also includes unseparated queues.')
+        network = session.get('network_roundtrip_residual_ms') or {}
+        if isinstance(network.get('min'), (int, float)) and network['min'] < -1.0:
+            warnings.append(
+                f'Session {session["session_id"][:12]} has negative TCP residual samples; '
+                'inspect exact-stamp pairing and event ordering before interpreting the stack.')
     return {
-        'schema_version': 1,
+        'schema_version': 2,
         'stale_threshold_ms': stale_ms,
         'captures': [{key: value for key, value in capture.items()
                       if key not in ('messages',)} for capture in captures],
         'topic_stats': topic_stats,
         'pipeline_stages': stages,
+        'end_to_end': end_to_end,
         'bridge': bridge,
         'visual_slam_status': visual_status,
         'navigate_to_pose': goals,
@@ -529,6 +782,30 @@ def render_text(report):
             f'{format_number(latency.get("p50")):>6}  {format_number(latency.get("p95")):>6}  '
             f'{format_number(latency.get("max")):>6}  {stage["samples_over_stale"]:>6}  '
             f'{stage["clock_basis"]}')
+    end_to_end = report.get('end_to_end', {})
+    lines.extend([
+        '', 'Per-session internal timing',
+        f'session       complete/started  total_p50  total_p95  total_max  '
+        f'>{report["stale_threshold_ms"]:g}  '
+        'tcp_resid_mean  vslam_mean  adapter_mean',
+    ])
+    for session in end_to_end.get('sessions', []):
+        total = session.get('total_ms') or {}
+        transport = session.get('network_roundtrip_residual_ms') or {}
+        vslam = session.get('lab_vslam_ms') or {}
+        adapter = session.get('pose_adapter_ms') or {}
+        lines.append(
+            f'{session["session_id"][:12]:<12}  '
+            f'{session["complete"]:>7}/{session["started"]:<7}  '
+            f'{format_number(total.get("p50")):>9}  '
+            f'{format_number(total.get("p95")):>9}  '
+            f'{format_number(total.get("max")):>9}  '
+            f'{session["samples_over_threshold"]:>5}  '
+            f'{format_number(transport.get("mean")):>14}  '
+            f'{format_number(vslam.get("mean")):>10}  '
+            f'{format_number(adapter.get("mean")):>12}')
+    if not end_to_end.get('sessions'):
+        lines.append('(no complete UPC+LAB internal timing samples)')
     lines.extend(['', 'Bridge summaries'])
     for role, state in sorted(report['bridge'].items()):
         if not state:
@@ -592,11 +869,21 @@ def main(argv=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / 'timing_report.json'
     text_path = output_dir / 'timing_report.txt'
+    samples_path = output_dir / 'timing_samples.csv'
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + '\n',
                          encoding='utf-8')
     text_path.write_text(render_text(report), encoding='utf-8')
+    samples = report.get('end_to_end', {}).get('samples', [])
+    if samples:
+        with samples_path.open('w', encoding='utf-8', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(samples[0]))
+            writer.writeheader()
+            writer.writerows(samples)
+    else:
+        samples_path.write_text('', encoding='utf-8')
     print(text_path)
     print(json_path)
+    print(samples_path)
     return 0
 
 

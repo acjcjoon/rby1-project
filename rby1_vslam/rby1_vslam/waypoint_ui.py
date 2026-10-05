@@ -18,7 +18,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QEvent, QTimer, Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -471,6 +471,18 @@ class OperatorWindow(QMainWindow):
         self.manual_timer.stop()
         self.manual_velocity = None
         self.node.emergency_stop()
+
+    def event(self, event):
+        if (event.type() == QEvent.WindowDeactivate
+                and hasattr(self, 'manual_timer')):
+            self._stop_manual()
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Space:
+            self._emergency_stop()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self.manual_timer.stop()

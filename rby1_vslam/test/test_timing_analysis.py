@@ -32,6 +32,22 @@ def capture(role, topics):
     }
 
 
+def timing_message(role, stage, kind, session, stamp, mono_ms, wall_ms=None):
+    wall_ms = mono_ms if wall_ms is None else wall_ms
+    state = {
+        'schema_version': 1, 'stage': stage, 'role': role,
+        'kind': kind, 'session_id': session, 'source_stamp_ns': stamp,
+        'monotonic_ns': int(mono_ms * 1_000_000),
+        'wall_ns': int(wall_ms * 1_000_000),
+    }
+    return {
+        'event': 'message', 'role': role, 'topic': '/rby1/vslam/timing',
+        'state': state, 'source_stamp_ns': stamp,
+        'observed_monotonic_ns': state['monotonic_ns'] + 1000,
+        'observed_wall_ns': state['wall_ns'] + 1000,
+    }
+
+
 def test_topic_summary_reports_rate_and_stale_gap():
     records = [
         message('lab', '/pose', 1, 1_000_000_000, 1_010_000_000),
@@ -73,6 +89,51 @@ def test_report_flags_cuvslam_when_images_continue_but_pose_stalls():
         image_topic: images, pose_topic: poses,
     })], stale_ms=500.0)
     assert any('cuVSLAM tracking or LAB compute' in item for item in report['findings'])
+
+
+def test_internal_events_form_clock_independent_stacked_sample():
+    stamp = 9_000_000_000
+    session = 'session-a'
+    upc = [
+        timing_message('upc', 'upc_stereo_enqueued', 'stereo', session, stamp, 100, 1000),
+        timing_message('upc', 'upc_stereo_socket_sent', 'stereo', session, stamp, 110, 1010),
+        timing_message('upc', 'upc_pose_socket_received', 'tracking_odom', session, stamp, 165, 1068),
+        timing_message('upc', 'upc_pose_dequeued', 'tracking_odom', session, stamp, 170, 1070),
+        timing_message('upc', 'upc_pose_published', 'tracking_odom', session, stamp, 172, 1072),
+        timing_message('upc', 'upc_pose_adapter_received', 'odom', '', stamp, 175, 1075),
+        timing_message('upc', 'upc_pose_adapter_published', 'odom', '', stamp, 180, 1080),
+    ]
+    # LAB wall time has a +40 ms clock offset. The one-way fields inherit it,
+    # while the total and residual remain based on same-host durations.
+    lab = [
+        timing_message('lab', 'lab_stereo_socket_received', 'stereo', session, stamp, 195, 1050),
+        timing_message('lab', 'lab_stereo_dequeued', 'stereo', session, stamp, 200, 1050),
+        timing_message('lab', 'lab_stereo_published', 'stereo', session, stamp, 202, 1052),
+        timing_message('lab', 'lab_pose_enqueued', 'tracking_odom', session, stamp, 222, 1072),
+        timing_message('lab', 'lab_pose_socket_sent', 'tracking_odom', session, stamp, 230, 1080),
+    ]
+    result = analysis.build_end_to_end([
+        capture('upc', {'/rby1/vslam/timing': upc}),
+        capture('lab', {'/rby1/vslam/timing': lab}),
+    ])
+    assert result['complete'] == 1
+    sample = result['samples'][0]
+    assert sample['total_ms'] == 80.0
+    assert sample['lab_bridge_publish_ms'] == 2.0
+    assert sample['lab_vslam_ms'] == 20.0
+    assert sample['upc_bridge_publish_ms'] == 2.0
+    assert sample['upc_dds_delivery_ms'] == 3.0
+    assert sample['pose_adapter_ms'] == 5.0
+    assert sample['transport_queue_residual_ms'] == 48.0
+    assert sample['upc_tx_queue_socket_ms'] == 10.0
+    assert sample['network_roundtrip_residual_ms'] == 20.0
+    assert sample['lab_input_delivery_ms'] == 7.0
+    assert sample['lab_tx_queue_socket_ms'] == 8.0
+    assert sample['upc_return_delivery_ms'] == 10.0
+    assert sample['forward_one_way_wall_ms'] == 50.0
+    assert sample['return_one_way_wall_ms'] == -2.0
+    assert sample['forward_socket_wall_ms'] == 40.0
+    assert sample['return_socket_wall_ms'] == -12.0
 
 
 def test_cli_writes_human_and_json_reports(tmp_path):

@@ -18,6 +18,7 @@ CAMERA_TOPICS = [
     ('/rby1/vslam/camera_odometry', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/camera_slam_odometry', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/bridge_status', 'std_msgs/msg/String', 'reliable'),
+    ('/rby1/vslam/timing', 'std_msgs/msg/String', 'reliable'),
     ('/rosout', 'rcl_interfaces/msg/Log', 'rosout'),
 ]
 UPC_TOPICS = [
@@ -70,10 +71,27 @@ def message_metadata(message, message_type):
     elif message_type == 'std_msgs/msg/String':
         try:
             fields['state'] = json.loads(message.data)
+            if isinstance(fields['state'], dict):
+                stamp = fields['state'].get('source_stamp_ns')
+                if isinstance(stamp, int) and stamp > 0:
+                    fields['source_stamp_ns'] = stamp
+                if isinstance(fields['state'].get('stage'), str):
+                    fields['timing_stage'] = fields['state']['stage']
         except (ValueError, TypeError):
             fields['text'] = str(message.data)
     elif message_type.endswith('/VisualSlamStatus'):
         fields['vo_state'] = int(message.vo_state)
+        # Interface revisions expose additional execution counters under
+        # different names. Preserve every scalar without binding this tool to
+        # a single Isaac ROS release or serializing nested arrays.
+        scalar = {}
+        get_types = getattr(message, 'get_fields_and_field_types', None)
+        for name in (get_types() if callable(get_types) else {}):
+            value = getattr(message, name, None)
+            if isinstance(value, (bool, int, float, str)):
+                scalar[str(name)] = value
+        if scalar:
+            fields['visual_slam_scalars'] = scalar
     elif message_type == 'diagnostic_msgs/msg/DiagnosticArray':
         fields['diagnostics'] = [{
             'name': str(status.name), 'hardware_id': str(status.hardware_id),
@@ -115,6 +133,7 @@ def main():
     host = socket.gethostname()
     topics = CAMERA_TOPICS + (UPC_TOPICS if args.role == 'upc' else LAB_TOPICS)
     counts = {}
+    current_bridge = {'session_id': '', 'connected': False}
     subscriptions = []
     stream = args.output.open('x', encoding='utf-8', buffering=1024 * 1024)
 
@@ -136,6 +155,15 @@ def main():
                 'observed_monotonic_ns': mono_ns, 'observed_ros_ns': ros_ns,
             }
             record.update(message_metadata(message, message_type))
+            state = record.get('state')
+            if topic == '/rby1/vslam/bridge_status' and isinstance(state, dict):
+                current_bridge['session_id'] = str(state.get('session_id') or '')
+                current_bridge['connected'] = bool(state.get('connected', False))
+            exact_session = (str(state.get('session_id') or '')
+                             if topic == '/rby1/vslam/timing' and isinstance(state, dict)
+                             else '')
+            record['bridge_session_id'] = exact_session or current_bridge['session_id']
+            record['bridge_connected'] = current_bridge['connected']
             write(record)
         return callback
 

@@ -1,4 +1,4 @@
-"""Legacy Qt/RViz operator retained during browser hardware verification."""
+"""UPC-local Qt/RViz operator for manual drive and named Nav2 poses."""
 
 from pathlib import Path
 

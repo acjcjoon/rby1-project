@@ -164,12 +164,16 @@ def test_stereo_sync_preserves_matching_calibration_and_stamps():
 
 
 def test_duplex_reconnect_replays_static_only_and_rejects_commands():
-    lab = SocketLink('lab', bind_host='127.0.0.1', port=0, reconnect_delay_sec=0.02)
+    lab_trace = []
+    upc_trace = []
+    lab = SocketLink('lab', bind_host='127.0.0.1', port=0, reconnect_delay_sec=0.02,
+                     trace_callback=lab_trace.append)
     lab.start()
     upc = None
     try:
         port = eventually(lambda: lab.port)
-        upc = SocketLink('upc', host='127.0.0.1', port=port, reconnect_delay_sec=0.02)
+        upc = SocketLink('upc', host='127.0.0.1', port=port, reconnect_delay_sec=0.02,
+                         trace_callback=upc_trace.append)
         upc.send(Packet('static_tf', {'transforms': []}), persistent=True)
         upc.start()
         eventually(lambda: lab.state()['connected'] and upc.state()['connected'])
@@ -179,6 +183,13 @@ def test_duplex_reconnect_replays_static_only_and_rejects_commands():
         assert first_static[0].session_id == first_session
         assert lab.send(Packet('tracking_odom', {'sequence': 42}))
         assert eventually(upc.receive)[0].payload['sequence'] == 42
+        eventually(lambda: lab_trace and upc_trace)
+        assert lab_trace[-1]['event'] == 'socket_sent'
+        assert lab_trace[-1]['packet'].kind == 'tracking_odom'
+        assert lab_trace[-1]['wire_bytes'] > 0
+        assert lab_trace[-1]['io_duration_ns'] >= 0
+        assert upc_trace[-1]['event'] == 'socket_received'
+        assert upc_trace[-1]['packet'].kind == 'tracking_odom'
         for sequence in range(5):
             assert upc.send(Packet('imu', {'sequence': sequence}))
         received = []

@@ -122,14 +122,10 @@ def _launch(context):
 
     if _boolean(context, 'start_ui'):
         actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(share / 'launch/operator_ui.launch.py')),
+            PythonLaunchDescriptionSource(str(share / 'launch/operator_qt.launch.py')),
             launch_arguments={
                 'base_frame': 'base',
                 'waypoints_file': LaunchConfiguration('waypoints_file'),
-                'ui_backend': LaunchConfiguration('ui_backend'),
-                'web_host': LaunchConfiguration('web_host'),
-                'web_port': LaunchConfiguration('web_port'),
-                'start_rviz': LaunchConfiguration('start_rviz'),
             }.items(),
         ))
     return actions
@@ -150,10 +146,6 @@ def generate_launch_description():
         DeclareLaunchArgument('start_camera', default_value='true'),
         DeclareLaunchArgument('start_navigation', default_value='true'),
         DeclareLaunchArgument('start_ui', default_value='true'),
-        DeclareLaunchArgument('ui_backend', default_value='web'),
-        DeclareLaunchArgument('web_host', default_value='0.0.0.0'),
-        DeclareLaunchArgument('web_port', default_value='8080'),
-        DeclareLaunchArgument('start_rviz', default_value='false'),
         DeclareLaunchArgument('serial_no', default_value=''),
         DeclareLaunchArgument('infra_profile', default_value='640,480,30'),
         DeclareLaunchArgument('camera_params_file',

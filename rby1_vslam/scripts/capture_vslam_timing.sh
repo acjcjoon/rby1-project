@@ -116,7 +116,7 @@ start_child metadata python3 "$SCRIPT_DIR/timing_observer.py" \
   --role "$ROLE" --output "$RUN_DIR/events.jsonl" --capture-id "$CAPTURE_ID"
 
 BAG_TOPICS=(/rosout /tf /tf_static /clock /diagnostics \
-  /rby1/vslam/bridge_status /rby1/vslam/camera_odometry \
+  /rby1/vslam/bridge_status /rby1/vslam/timing /rby1/vslam/camera_odometry \
   /rby1/vslam/camera_slam_odometry /rby1/vslam/odom)
 if [[ "$ROLE" == upc ]]; then
   BAG_TOPICS+=(/rby1/odom /rby1/robot_state /rby1/control/command /rby1/control/event \

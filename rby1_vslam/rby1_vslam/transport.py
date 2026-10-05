@@ -13,6 +13,7 @@ from .wire import Packet, ProtocolError, encode_packet, read_packet
 
 UPC_KINDS = frozenset({'stereo', 'imu', 'static_tf'})
 LAB_KINDS = frozenset({'tracking_odom', 'slam_odom', 'tracking_status'})
+TRACE_KINDS = frozenset({'stereo', 'tracking_odom', 'slam_odom'})
 
 
 class QueueOverflow(RuntimeError):
@@ -146,7 +147,7 @@ class SocketLink:
 
     def __init__(self, role, host='127.0.0.1', bind_host='0.0.0.0', port=7447,
                  timeout_sec=2.0, reconnect_delay_sec=1.0, max_imu=512,
-                 stereo_max_age_sec=0.5):
+                 stereo_max_age_sec=0.5, trace_callback=None):
         if role not in ('upc', 'lab'):
             raise ValueError('role must be upc or lab')
         if timeout_sec < 0.5 or reconnect_delay_sec < 0.01 or not 0 <= port <= 65535:
@@ -169,6 +170,19 @@ class SocketLink:
         self._persistent = {}
         self._connection_count = 0
         self._state = {'connected': False, 'session_id': '', 'reason': 'starting'}
+        self._trace_callback = trace_callback
+
+    def _trace(self, event, packet, wall_ns, monotonic_ns, **fields):
+        if self._trace_callback is None or packet.kind not in TRACE_KINDS:
+            return
+        try:
+            self._trace_callback({
+                'event': event, 'packet': packet, 'wall_ns': int(wall_ns),
+                'monotonic_ns': int(monotonic_ns), **fields,
+            })
+        except Exception:
+            # Diagnostics must never reset or delay the transport session.
+            pass
 
     def start(self):
         if self._thread is not None:
@@ -274,7 +288,14 @@ class SocketLink:
             for packet in self.outbox.drain():
                 if self._reset.is_set() or self._stop.is_set():
                     break
-                sock.sendall(encode_packet(replace(packet, session_id=session)))
+                outbound = replace(packet, session_id=session)
+                encoded = encode_packet(outbound)
+                started_ns = time.monotonic_ns()
+                sock.sendall(encoded)
+                finished_mono_ns = time.monotonic_ns()
+                self._trace('socket_sent', outbound, time.time_ns(), finished_mono_ns,
+                            io_duration_ns=finished_mono_ns - started_ns,
+                            wire_bytes=len(encoded))
                 last_send = time.monotonic()
             now = time.monotonic()
             if now - last_send >= min(0.5, self.timeout_sec / 3):
@@ -292,6 +313,7 @@ class SocketLink:
                     continue
                 if packet.kind not in allowed:
                     raise ProtocolError('message kind is not allowed in this direction')
+                self._trace('socket_received', packet, time.time_ns(), time.monotonic_ns())
                 with self._lock:
                     if not self._reset.is_set():
                         self.inbox.put(packet)

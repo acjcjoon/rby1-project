@@ -1,11 +1,11 @@
 # 일반 실행과 시험 녹화
 
-모든 일반 런처는 **UPC에서** 실행한다. 네 개 중 하나만 켠다.
+모든 일반 런처와 조작 UI는 **UPC에서** 실행한다. 둘 중 하나만 켠다.
 
-| 모드 | 웹 (Windows 브라우저) | UPC 화면 (Qt) |
-|---|---|---|
-| 베이스 수동 이동 | `bash run_mobile_base_web.sh` | `bash run_mobile_base_upc.sh` |
-| TCP VSLAM + Nav2 | `bash run_vslam_web.sh lab_host:=<LAB-IP>` | `bash run_vslam_upc.sh lab_host:=<LAB-IP>` |
+| 모드 | UPC 로컬 실행 |
+|---|---|
+| 베이스 수동 이동 | `bash run_mobile_base_upc.sh` |
+| TCP VSLAM + Nav2 | `bash run_vslam_upc.sh lab_host:=<LAB-IP>` |
 
 베이스 모드는 driver/control/UI만 실행한다. 카메라, TCP, VSLAM, Nav2는 실행하지 않는다.
 VSLAM 모드는 기존 physical launch로 driver/control/D435i/TCP/위치 추정/Nav2/UI를 실행한다.
@@ -20,7 +20,7 @@ UPC workspace에서 의존성을 준비하고 빌드한다 (로컬 Qt는 `python
 ```bash
 source /opt/ros/humble/setup.bash
 cd ~/rby1_ros2_ws
-colcon build --symlink-install --packages-up-to rby1_web rby1_description
+colcon build --symlink-install --packages-up-to rby1_control rby1_vslam rby1_description
 source install/setup.bash
 cd src/rby1-project
 ```
@@ -31,11 +31,10 @@ cd src/rby1-project
 
 ```bash
 export ROS_DOMAIN_ID=0
-bash run_mobile_base_web.sh robot_address:=192.168.30.1:50051 web_port:=8080
+bash run_mobile_base_upc.sh robot_address:=192.168.30.1:50051
 ```
 
-웹 주소는 `http://<UPC-IP>:8080`이다. Qt는 UPC 데스크톱 세션에서 실행한다.
-추가 인자는 기존 ROS `name:=value` 형식이며 UI 선택은 파일 이름으로 고정된다.
+Qt는 UPC 데스크톱 세션에서 실행한다. 추가 인자는 기존 ROS `name:=value` 형식이다.
 VSLAM의 `use_scan:=false` 기본값에는 장애물 회피가 없다. LiDAR가 준비된 경우
 `use_scan:=true`를 사용하고, 정렬된 occupancy map은 `occupancy_map:=/절대경로/map.yaml`로 지정한다.
 
@@ -70,7 +69,7 @@ LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_
 
 1. UPC 녹화 터미널에서 **먼저** 실행한다.
    `--domain`은 UPC 실행 스크립트가 시작할 때 출력한 값과 반드시 같게 한다.
-   아래 `10`은 `run_vslam_mapping_upc.sh` 기본값 예시이며, 전체 web 런처를 domain 0으로
+   아래 `10`은 `run_vslam_mapping_upc.sh` 기본값 예시이며, 전체 UPC 런처를 domain 0으로
    실행했다면 `0`을 사용한다.
 
    ```bash
@@ -84,11 +83,11 @@ LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_
      --output /workspaces/isaac_ros-dev/trials
    ```
 
-3. LAB VSLAM과 UPC `run_vslam_web.sh lab_host:=<LAB-IP>`를 별도 터미널에서 실행한다.
+3. LAB VSLAM과 UPC `run_vslam_upc.sh lab_host:=<LAB-IP>`를 별도 터미널에서 실행한다.
    이미 LAB이 실행 중이면 중복 실행하지 않는다. 각 `recorder.log`에서 구독 시작을 확인한다.
-4. 웹에서 초기 위치 Point1 저장 → 수동 이동 후 Point2 저장 → Point1 근처로 복귀 → Point2 이동.
-5. 멈춘 뒤 웹을 전면에 유지하고 10~20초 더 기록한다. 웹 포커스 상실/연결 끊김은 STOP·취소를 유발할 수 있다.
-6. 웹 STOP 후 **녹화 터미널 각각에서 Ctrl+C**. 저장 완료까지 기다린다. 녹화 종료는 로봇을 멈추지 않는다.
+4. UPC Qt에서 초기 위치 Point1 저장 → 수동 이동 후 Point2 저장 → Point1 근처로 복귀 → Point2 이동.
+5. 멈춘 뒤 UPC Qt를 전면에 유지하고 10~20초 더 기록한다. 창 포커스를 잃으면 수동 속도는 정지한다.
+6. Qt의 STOP 후 **녹화 터미널 각각에서 Ctrl+C**. 저장 완료까지 기다린다. 녹화 종료는 로봇을 멈추지 않는다.
    노드 설정을 수집할 수 있도록 전체 스택은 녹화 종료가 끝날 때까지 유지한다.
 
 기본 저장 경로는 `~/rby1_trials/<시험>_<역할>_<시간>_<고유값>/`이다.
@@ -96,14 +95,14 @@ LAB 컨테이너에는 이 스크립트뿐 아니라 `rby1_vslam/scripts/timing_
 - `bag/`: 기본값은 rosout, TF, diagnostics, bridge/pose/status/action/control 등 저용량 디버깅 필수 토픽. 원본 영상과 VSLAM point cloud는 제외
 - `recorder.log`, `bag_info.txt`: 구독 경고, 기록된 토픽/메시지 수, bag 확인 결과
 - `events.jsonl`, `observer.log`: 카메라→LAB→cuVSLAM pose→UPC 반환 pose의 stamp/rate/gap과 VSLAM·Nav2 상태
-- `timing_report.txt`, `timing_report.json`, `analysis.log`: Ctrl+C 종료 후 자동 생성되는 해당 PC 병목 요약
+- `timing_report.txt`, `timing_report.json`, `timing_samples.csv`, `analysis.log`: Ctrl+C 종료 후 생성되는 병목 요약과 프레임별 구간
 - `environment.txt`, `system_samples.txt`: domain/배포판/시계/디스크/시스템 load
 - `nodes_start/end.txt`, `topics_start/end.txt`, `params_start/end/`: 노드/토픽/파라미터
 - `waypoints_start/end.yaml`: UPC 기본 Point YAML의 복사본. 사용자 지정 파일은 `--waypoints /경로/points.yaml` 사용
 
 원본 영상까지 반드시 필요할 때만 `--full-bag`을 붙인다. 이 옵션은 LAB Python bridge의 영상 publish를 지연시켜 500 ms stale 판정을 유발할 수 있으므로 정상 통신을 먼저 확인한 뒤 짧게 사용한다.
 QoS/구독 실패 메시지가 있으면 실제 토픽 설정에 맞춰 보완해야 한다.
-rosbag 녹화는 서비스 요청·응답 전체 또는 비 ROS 웹 이벤트를 보장하지 않는다.
+rosbag 녹화는 서비스 요청·응답 전체를 보장하지 않는다.
 cuVSLAM 지도 저장도 별도이며, LAB mapping 종료 전에 기존 `map_tool save`로 저장한다.
 실제 실행 옵션과 시험 증상/시각은 시험 폴더에 메모한다.
 
@@ -115,6 +114,19 @@ python3 rby1_vslam/scripts/analyze_vslam_timing.py \
   ~/rby1_trials/point1_point2_01_lab_YYYYMMDD_HHMMSS_XXXXXX \
   --output-dir ~/rby1_trials/point1_point2_01_combined
 ```
+
+합친 `timing_report.json`과 플롯 스크립트만 Windows로 복사해도 오프라인 그래프를 만들 수 있다.
+
+```powershell
+py -m pip install matplotlib
+py rby1_vslam\scripts\plot_vslam_timing.py `
+  --report timing_report.json --output-dir timing_plots --threshold-ms 500
+```
+
+`total_latency_by_session.png`은 세션별 프레임 지연과 500 ms 빨간 점선,
+`session_stage_breakdown.png`은 세션별 평균 총시간을 TX/TCP/LAB/cuVSLAM/UPC/PoseAdapter
+구간으로 나눈 누적 막대다. `one_way_wall_clock_diagnostic.png`은 NTP 상태를 확인한 경우에만
+편도 지연으로 해석한다.
 
 ## 기존 보조 스크립트
 

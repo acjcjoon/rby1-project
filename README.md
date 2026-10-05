@@ -1,7 +1,7 @@
 # RBY1 ROS 2 Development Log
 
-일반 실행은 [런처/녹화 안내](LAUNCHERS.md)의 웹·UPC × 베이스·VSLAM 네 가지
-런처를 사용한다. 시험 녹화는 `record_trial.sh`로 별도로 실행한다.
+일반 실행은 [런처/녹화 안내](LAUNCHERS.md)의 UPC 로컬 Qt 베이스·VSLAM 런처를
+사용한다. 시험 녹화는 `record_trial.sh`로 별도로 실행한다.
 
 Current package ownership and runtime data flow are documented in
 [ARCHITECTURE.md](ARCHITECTURE.md). The standalone `rby1_control_ui` and

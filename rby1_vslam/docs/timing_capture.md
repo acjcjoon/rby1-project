@@ -1,6 +1,6 @@
 # UPC / LAB 양쪽 시간 계측
 
-주행·VSLAM 로직이나 timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. bridge 상태에는 송·수신 latest-only mailbox의 enqueue/drain/replace/expire 누적 카운터도 포함되어 Pose 또는 영상이 TCP 전후 어느 큐에서 교체됐는지 확인할 수 있다.
+주행·VSLAM timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. `/rby1/vslam/timing`에는 UPC stereo enqueue, LAB receive/publish, cuVSLAM pose callback, UPC pose receive/publish, PoseAdapter receive/publish 경계가 원본 stamp와 TCP session ID로 기록된다. bridge 상태에는 송·수신 latest-only mailbox의 enqueue/drain/replace/expire 누적 카운터도 포함된다.
 
 ## 실행
 
@@ -26,7 +26,7 @@ bash scripts/capture_vslam_lab.sh --run-id point1_point2_01
 
 스크립트는 ROS_DOMAIN_ID를 덮어쓰지 않는다. 예를 들어 LAB stack이 85로 실행 중이면 이 수집 터미널에도 `export ROS_DOMAIN_ID=85`를 적용한다. UPC 값은 실제 stack을 따른다.
 
-공통 수집 파일 `capture_vslam_timing.sh`, 메타데이터 관측기 `timing_observer.py`, 분석기 `analyze_vslam_timing.py`, role wrapper를 **함께 복사**해야 한다. source scripts를 직접 실행하므로 수집기 자체는 패키지 재빌드가 필요 없다. 다만 새 mailbox 카운터를 `bridge_status`에 넣으려면 수정된 `rby1_vslam` 패키지를 UPC와 LAB에서 다시 빌드/반영해야 한다. Python 관측기는 ROS 환경의 python3에서 실행한다. 추가 pip 패키지 없이 rclpy와 rosidl_runtime_py를 사용한다.
+공통 수집 파일 `capture_vslam_timing.sh`, 메타데이터 관측기 `timing_observer.py`, 분석기 `analyze_vslam_timing.py`, 플로터 `plot_vslam_timing.py`, role wrapper를 함께 복사한다. 내부 경계 이벤트를 얻으려면 수정된 `rby1_vslam`을 **UPC와 LAB 양쪽에서 다시 빌드/반영**해야 한다. 수집·분석은 추가 pip 패키지 없이 실행되고, PNG 생성에만 matplotlib가 필요하다.
 
 두 PC 모두 수집이 시작됐는지 확인한 뒤 정지 10초→Point 1→Point 2→정지/취소 후 10초를 포함해 기록한다. status=4를 확인한 뒤 다음 goal을 보낸다. 각 수집 터미널에서 Ctrl+C로 종료하면 수집 자식 프로세스만 정리하고 해당 PC의 단독 `timing_report.txt/json`을 자동 생성한다. 수집 프로세스는 이동/enable/cancel/전원 서비스를 호출하지 않는다.
 
@@ -41,6 +41,7 @@ bash scripts/capture_vslam_lab.sh --run-id point1_point2_01
 | `events.jsonl` | 메시지별 원본 stamp·관측 시각·영상 크기·포즈/속도·상태 JSON |
 | `timing_report.txt` | 종료 시 자동 생성되는 사람이 읽는 단독 PC rate/gap/drop/상태 진단 |
 | `timing_report.json` | 위 결과의 기계 판독용 원본 통계와 exact-stamp 구간 매칭 결과 |
+| `timing_samples.csv` | session/stamp별 전체 지연과 누적 막대용 각 구간 ms |
 | `analysis.log` | 자동 분석기의 stdout/stderr. 보고서 생성 실패 원인도 여기에 남음 |
 | `bag/` | rosout, TF, 진단, bridge, 포즈. UPC는 gate/localization/control/속도/action 상태·feedback도 포함 |
 | `environment.txt` | role, 공통 run_id, 로컬 capture_id, domain, ROS 배포판, 호스트, 최초 시계 상태 |
@@ -63,6 +64,30 @@ python3 scripts/analyze_vslam_timing.py \
 
 `timing_report.txt`의 첫 `Likely bottlenecks / events` 절에 500 ms 초과 gap, cuVSLAM non-tracking, TCP 재연결, stereo sync drop, TX mailbox 영상/pose 교체, Nav2 status 5를 우선 표시한다. 이어지는 표는 입력 영상→LAB 영상→LAB pose→UPC 반환 pose→PoseAdapter 결과 순서의 rate와 최대 gap, exact source stamp 매칭 지연을 보여준다. 임계값을 바꿔 비교하려면 `--stale-ms 750`처럼 지정한다.
 
+세션별 그래프는 합친 보고서에서 오프라인으로 만든다.
+
+```bash
+python3 scripts/plot_vslam_timing.py --report /path/to/timing_report.json \
+  --output-dir /path/to/timing_plots --threshold-ms 500
+```
+
+Windows에서도 ROS 없이 `py -m pip install matplotlib` 후 같은 명령을 실행할 수 있다.
+`total_latency_by_session.png`은 프레임별 총 지연과 500 ms 빨간 점선,
+`session_stage_breakdown.png`은 세션별 평균 총 지연을 다음 구간으로 나눈 누적 막대다.
+
+1. UPC TX queue/socket
+2. TCP 왕복 residual
+3. LAB receive/publish
+4. cuVSLAM
+5. LAB TX queue/socket
+6. UPC receive/DDS
+7. PoseAdapter
+
+총 지연은 UPC의 monotonic clock 하나로 측정한다. 개별 명시 구간도 각 호스트의 monotonic
+duration이며, 이를 총 지연에서 뺀 TCP 왕복 residual도 PC 간 시계 offset에 영향을 받지 않는다.
+반면 `one_way_wall_clock_diagnostic.png`의 UPC→LAB/LAB→UPC 편도 값은 wall clock이므로 NTP
+offset/dispersion을 확인한 뒤에만 해석한다.
+
 두 PC 사이 구간은 wall clock으로 계산되므로 `environment.txt`의 NTP 상태를 먼저 확인한다. 시계 offset이 불명확해도 각 PC 내부 monotonic gap, 매칭률, mailbox 교체 및 topic rate 비교는 사용할 수 있다.
 
 JSONL은 오프라인 `json.loads()`로 읽어 CSV에 옮길 수 있는 원시 행이다. JSONL 안에는 start/end/observer_health/subscription_unavailable 이벤트도 있으므로 메시지 분석에서는 `event == "message"`로 필터링한다. 영상 픽셀·IMU 전체 배열은 JSONL에 저장하지 않는다. rosbag에도 영상 원본은 넣지 않는다.
@@ -81,10 +106,12 @@ JSONL은 오프라인 `json.loads()`로 읽어 CSV에 옮길 수 있는 원시 �
 | `width`, `height`, `step`, `encoding`, `payload_bytes` | 영상 메타데이터 및 원본 픽셀 바이트 수 |
 | `position`, `orientation`, `velocity` | pose/twist가 있을 때 작은 수치 배열 |
 | `state` | bridge/localization/gate 등의 JSON 전체. session_id, detail, drop 및 `tx_mailbox`/`rx_mailbox` enqueue·drain·replace·expire 카운터 보존 |
+| `bridge_session_id`, `bridge_connected` | 관측 당시 bridge 상태. timing 이벤트는 wire packet의 정확한 session ID 우선 |
+| `timing_stage` | `/rby1/vslam/timing` 내부 경계 이름 |
 
 ns 정수는 CSV 생성 시 **int64 또는 문자열로 유지**한다. Unix ns를 float로 바꾼 뒤 빼면 정밀도를 잃는다. 먼저 정수끼리 뺀 차이에 `/1e6`을 적용해 ms로 변환한다. source stamp가 0이거나 없는 값은 유효한 source latency 표본으로 취급하지 않는다.
 
-`observed_*`는 브리지 내부의 enqueue/send/recv 함수 시각이 아니라 **별도의 구독자 콜백 관측 시각**이다. DDS 배달·executor 대기도 포함한다. Humble/Jazzy 공통 호환을 위해 DDS MessageInfo에 의존하지 않으며 DDS 내부 도착 시각은 별도 필드로 주장하지 않는다. [Humble executor 구현](https://github.com/ros2/rclpy/blob/humble/rclpy/rclpy/executors.py)
+`observed_*`는 별도의 구독자 콜백 관측 시각이라 DDS 배달·executor 대기도 포함한다. 반면 timing 토픽의 `state.wall_ns`와 `state.monotonic_ns`는 bridge/PoseAdapter가 해당 경계에서 찍은 내부 시각이다. Humble/Jazzy 공통 호환을 위해 DDS MessageInfo에는 의존하지 않는다. [Humble executor 구현](https://github.com/ros2/rclpy/blob/humble/rclpy/rclpy/executors.py)
 
 ## 어떤 구간을 계산할까
 
@@ -139,10 +166,10 @@ IPv6이면 ip.src/ip.dst 대신 ipv6.src/ipv6.dst도 포함한다. seq/ack는 �
 
 컨테이너에 chronyc/timedatectl이 없거나 NTP daemon 접근이 안 되면 해당 시계 상태는 저장되지 않는다. LAB 호스트에서 별도로 NTP 상태를 남겨야 한다. 시계를 바꾸거나 동기화 설정을 수정하는 동작은 수집 스크립트에 없다.
 
-## 권장 그래프
+## 생성되는 그래프와 추가 권장 그래프
 
-1. 시간축별 UPC 영상 age, LAB 영상 age, UPC base pose age를 겹쳐 그리고 **500 ms 선**을 표시한다.
-2. 구간별 지연의 p50/p95/p99/max와 히스토그램을 낸다. 시계 정합이 확인된 구간만 cross-host 통계에 사용한다.
+1. 기본 플로터가 세션별 UPC enqueue→base pose 총 지연과 **500 ms 선**을 표시한다.
+2. 기본 플로터가 세션별 평균 구간 누적 막대와 total p95 마커를 표시한다.
 3. 카메라/포즈 source 주기와 로컬 관측 간격을 그려 멈춤 또는 몰아서 도착하는 구간을 찾는다.
 4. tracking_ok, localization healthy, gate enabled/fault, cancel_pending, action status를 같은 시간축에 그린다.
 5. TCP RTT/retransmission/send-q/recv-q 및 CPU/GPU 부하를 겹쳐 지연 상승의 위치를 좁힌다.

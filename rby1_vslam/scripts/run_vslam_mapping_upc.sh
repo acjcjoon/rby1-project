@@ -6,7 +6,7 @@
 #   robot_state_publisher
 #   rby1_control
 #   rby1_vslam/upc.launch.py (D435i + TCP bridge + pose adapter)
-#   rby1_web/operator_web.launch.py (browser operator)
+#   rby1_vslam/mobile_base_qt (UPC-local convenience operator)
 #
 # Intentionally DOES NOT start:
 #   rby1_navigation / Nav2
@@ -38,7 +38,6 @@ D435_SERIAL=""
 CAMERA_MODE="auto"
 ENABLE_IMU="true"
 START_UI="true"
-WEB_PORT=8080
 STARTUP_TIMEOUT_SEC=45
 
 CONTROL_CONFIG="${PROJECT_ROOT}/rby1_control/config/default.yaml"
@@ -60,14 +59,13 @@ Options:
   --d435-serial SERIAL         Pin D435i serial (digits only)
   --camera auto|start|reuse    auto: reuse existing IR camera if present
   --enable-imu true|false      Forward/use IMU in UPC bridge (default: true)
-  --no-ui                      Do not launch the web operator
-  --web-port PORT              Web operator TCP port (default: 8080)
+  --no-ui                      Do not launch the UPC-local Qt operator
   --startup-timeout SEC        Readiness timeout per stage (default: 45)
   -h, --help
 
 This mapping launcher intentionally does NOT start rby1_navigation/Nav2.
-Use http://<UPC-IP>:8080 for slow manual mapping motion.
-For driving without LAB/TCP, use the project run_mobile_base_web.sh instead.
+The Qt window on the UPC provides slow manual mapping motion.
+For driving without LAB/TCP, use the project run_mobile_base_upc.sh instead.
 EOF
 }
 
@@ -87,7 +85,6 @@ while (($#)); do
     --camera) require_value "$@"; CAMERA_MODE="$2"; shift 2 ;;
     --enable-imu) require_value "$@"; ENABLE_IMU="$2"; shift 2 ;;
     --no-ui) START_UI="false"; shift ;;
-    --web-port) require_value "$@"; WEB_PORT="$2"; shift 2 ;;
     --startup-timeout) require_value "$@"; STARTUP_TIMEOUT_SEC="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
@@ -99,7 +96,6 @@ done
 [[ "$CAMERA_MODE" == "auto" || "$CAMERA_MODE" == "start" || "$CAMERA_MODE" == "reuse" ]] || die "--camera must be auto, start, or reuse."
 [[ "$ENABLE_IMU" == "true" || "$ENABLE_IMU" == "false" ]] || die "--enable-imu must be true or false."
 [[ "$STARTUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ ]] || die "--startup-timeout must be a positive integer."
-[[ "$WEB_PORT" =~ ^[1-9][0-9]*$ ]] && ((WEB_PORT <= 65535)) || die "Invalid --web-port."
 [[ -z "$D435_SERIAL" || "$D435_SERIAL" =~ ^[0-9]+$ ]] || die "D435 serial must contain digits only."
 
 ROBOT_URDF="${DRIVER_REPO}/rby1_description/urdf/rby1${ROBOT_MODEL}/model_v${ROBOT_VERSION}.urdf"
@@ -116,8 +112,8 @@ for pkg in rby1_driver rby1_description robot_state_publisher rby1_control rby1_
   ros2 pkg prefix "$pkg" >/dev/null 2>&1 || die "ROS package not found: $pkg"
 done
 
-if [[ "$START_UI" == "true" ]]; then
-  ros2 pkg prefix rby1_web >/dev/null 2>&1 || die "Build rby1_web for the browser operator."
+if [[ "$START_UI" == "true" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  die "UPC-local Qt needs a desktop session; use --no-ui for headless mapping."
 fi
 
 python3 - "$ROBOT_IP" <<'PY' || die "RBY1 RPC is unreachable at ${ROBOT_IP}"
@@ -333,19 +329,14 @@ wait_for_message "/rby1/vslam/camera_odometry" LAB_cuVSLAM_return
 check_tf base d435_link true
 wait_for_message "/rby1/vslam/slam_odom" pose_adapter
 
-# 5) Browser operator for manual mapping (no desktop display needed).
+# 5) UPC-local Qt operator for manual mapping.
 if [[ "$START_UI" == "true" ]]; then
-  if ros2 node list 2>/dev/null | grep -qx "/${NAMESPACE}/operator_web"; then
-    info "Web operator already exists; not starting duplicate."
+  if ros2 node list 2>/dev/null | grep -qx "/${NAMESPACE}/mobile_base_qt"; then
+    info "UPC Qt operator already exists; not starting duplicate."
   else
-    start_process operator_web \
-      ros2 launch rby1_web operator_web.launch.py \
-        "namespace:=${NAMESPACE}" \
-        "web_port:=${WEB_PORT}" \
-        "control_command_topic:=/${NAMESPACE}/control/command" \
-        "control_state_topic:=/${NAMESPACE}/control/state" \
-        "control_event_topic:=/${NAMESPACE}/control/event" \
-        "control_response_topic:=/${NAMESPACE}/control/response"
+    start_process mobile_base_qt \
+      ros2 run rby1_vslam mobile_base_qt --ros-args \
+        -r "__ns:=/${NAMESPACE}"
   fi
 fi
 
@@ -366,13 +357,13 @@ Verified:
 
 MANUAL MAPPING:
   1. Keep the physical EMO reachable.
-  2. Open http://<UPC-IP>:${WEB_PORT}; verify EMO=OFF and Collision=OFF.
+  2. Use the RBY1 Mobile Base / UPC window; verify EMO=OFF and Collision=OFF.
   3. Power ON.
   4. Servo ON.
   5. Control Manager ENABLE.
   6. Stream ON.
   7. Confirm CONTROL is ENABLE or EXECUTING.
-  8. Hold the web drive buttons; default speed is 0.02 m/s, yaw 0.08 rad/s.
+  8. Hold the local drive buttons; default speed is 0.02 m/s, yaw 0.08 rad/s.
   9. Move smoothly through the area and return near the start for loop closure.
 
 IMPORTANT:

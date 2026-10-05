@@ -28,5 +28,6 @@ setup(
         'nav2_gate = rby1_vslam.nav2_gate:main',
         'map_tool = rby1_vslam.map_tool:main',
         'waypoint_ui = rby1_vslam.waypoint_ui:main',
+        'mobile_base_qt = rby1_vslam.mobile_base_qt:main',
     ]},
 )

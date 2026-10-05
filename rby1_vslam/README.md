@@ -1,26 +1,20 @@
 # rby1_vslam
 
-## 웹 오퍼레이터
+## UPC 로컬 오퍼레이터
 
-`rby1_vslam`이 SLAM·위치 추정·Nav2를 맡고, `rby1_web`이 UPC의 웹 운영 화면을 맡는다.
-`physical.launch.py`의 기본 UI는 웹이며 노트북에서 `http://<UPC-IP>:8080`으로 접속한다.
-UPC 빌드 대상에 `rby1_web`도 포함한다. 기존 웨이포인트 YAML을 그대로 사용한다.
+조작 UI는 UPC의 Qt/RViz로만 실행한다. `physical.launch.py`는 수동 주행, 현재 위치
+저장/삭제/불러오기, 웨이포인트 이동/취소와 TCP·추적·Nav2 상태를 보여 주는
+`waypoint_ui`를 시작한다. 기존 웨이포인트 YAML을 그대로 사용한다.
 
 ```bash
-colcon build --symlink-install --packages-up-to rby1_web rby1_description
+colcon build --symlink-install --packages-up-to rby1_control rby1_vslam rby1_description
 ros2 launch rby1_vslam physical.launch.py lab_host:=192.168.30.50
 ```
 
-웹에서 수동 주행, 현재 위치 저장/삭제/불러오기, 웨이포인트 이동/취소, 지도/경로/로봇 위치와
-TCP·추적·Nav2 상태를 확인한다. Qt/RViz는 `ui_backend:=qt`로 선택할 수 있는 검증용 fallback이다.
-
 **랩 PC/TCP 연결 없이 수동 베이스만 움직일 때는** 프로젝트 루트에서
-`bash run_mobile_base_web.sh`를 실행한다. 이 경로는 카메라·VSLAM·Nav2를 실행하지 않으며
-`lab_host`나 tracking 상태를 요구하지 않는다. 전체 VSLAM 웹 실행 스크립트는
-`bash run_vslam_web.sh lab_host:=<LAB-IP>`다. 두 스택을 동시에 실행하지 않는다.
-
-자세한 실행법과 merge 인터페이스는 [rby1_web 안내](../rby1_web/README.md)와
-[인터페이스 계약](../rby1_web/INTERFACES.md)에 있다.
+`bash run_mobile_base_upc.sh`를 실행한다. 이 경로는 카메라·VSLAM·Nav2를 실행하지 않으며
+`lab_host`나 tracking 상태를 요구하지 않는다. 전체 VSLAM 실행은
+`bash run_vslam_upc.sh lab_host:=<LAB-IP>`다. 두 스택을 동시에 실행하지 않는다.
 
 UPC/LAB 지연을 정량적으로 기록하려면 **[양쪽 시간 계측 가이드](docs/timing_capture.md)**를
 참고한다. 실행 로직을 바꾸지 않고 JSONL·rosbag 및 선택적 TCP pcap을 수집하여 오프라인
@@ -113,7 +107,8 @@ ros2 run tf2_ros tf2_echo base d435_link
 | `mapping.launch.py` | LAB Jazzy | 새 특징점 지도 작성 |
 | `localization.launch.py` | LAB Jazzy | 기존 지도 선택, 이후 위치 힌트로 localize |
 | `navigation.launch.py` | Jetson | Nav2 + VSLAM 위치 TF + cmd_raw 게이트 |
-| `operator_ui.launch.py` | Jetson | RViz + 수동 mapping + named Point UI |
+| `operator_qt.launch.py` | Jetson | RViz + 수동 mapping + named Point UI |
+| `mobile_base_upc.launch.py` | Jetson | driver/control + 로컬 수동 이동 Qt |
 | `map_tool` | LAB Jazzy | 지도 저장 / 힌트 기반 재위치 추정 |
 
 `upc.launch.py`가 내부에서 `d435i.launch.py`를 포함한다. 따라서 `d435i.launch.py`를
@@ -321,6 +316,7 @@ cuVGL을 추가하며, 오늘의 pose-hint 절차와 Jetson에는 필요하지 �
 | `/rby1/vslam/camera_slam_odometry` | `nav_msgs/Odometry` | LAB → UPC, `d435_link`의 SLAM 위치 |
 | `/rby1/vslam/odom`, `/rby1/vslam/slam_odom` | `nav_msgs/Odometry` | UPC에서 `base` 위치로 변환 |
 | `/rby1/vslam/bridge_status` | `std_msgs/String` | 각 PC의 로컬 브릿지 JSON 상태 |
+| `/rby1/vslam/timing` | `std_msgs/String` | recorder 구독 중에만 발행되는 session/stamp 내부 경계 이벤트 |
 | `/rby1/vslam/nav2_cmd_vel` | `geometry_msgs/Twist` | UPC Nav2 → cmd_raw 게이트 |
 | `/rby1/cmd_raw` | `geometry_msgs/Twist` | UPC 출력, 기존 control 입력 |
 | `/scan` | `sensor_msgs/LaserScan` | UPC Nav2 장애물 costmap 입력 |

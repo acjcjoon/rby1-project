@@ -43,23 +43,22 @@ class Launchers(unittest.TestCase):
                               cwd=ROOT, capture_output=True, text=True,
                               encoding='utf-8', errors='replace', timeout=10)
 
-    def test_four_routes(self):
+    def test_two_upc_local_routes(self):
         for mode in ('mobile_base', 'vslam'):
-            for ui in ('web', 'upc'):
-                with self.subTest(mode=mode, ui=ui):
-                    args = ['lab_host:=192.0.2.1'] if mode == 'vslam' else []
-                    result = self.run_script(f'run_{mode}_{ui}.sh', *args)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    target = 'physical.launch.py' if mode == 'vslam' else 'mobile_base_web.launch.py'
-                    self.assertIn(target, result.stdout)
-                    self.assertIn('ui_backend:=' + ('qt' if ui == 'upc' else 'web'), result.stdout)
-                    self.assertIn('ROS_DOMAIN_ID=17', result.stdout)
-                    if mode == 'vslam':
-                        self.assertIn('enable_imu:=true', result.stdout)
-                        self.assertIn('RealSense backend=' + self.rsusb_lib.as_posix(), result.stdout)
-                        self.assertIn('MOCK_LD_LIBRARY_PATH=' + self.rsusb_lib.as_posix(), result.stdout)
-                    else:
-                        self.assertNotIn('enable_imu', result.stdout)
+            with self.subTest(mode=mode):
+                args = ['lab_host:=192.0.2.1'] if mode == 'vslam' else []
+                result = self.run_script(f'run_{mode}_upc.sh', *args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                target = 'physical.launch.py' if mode == 'vslam' else 'mobile_base_upc.launch.py'
+                self.assertIn(target, result.stdout)
+                self.assertIn('UI=upc-qt', result.stdout)
+                self.assertIn('ROS_DOMAIN_ID=17', result.stdout)
+                if mode == 'vslam':
+                    self.assertIn('enable_imu:=true', result.stdout)
+                    self.assertIn('RealSense backend=' + self.rsusb_lib.as_posix(), result.stdout)
+                    self.assertIn('MOCK_LD_LIBRARY_PATH=' + self.rsusb_lib.as_posix(), result.stdout)
+                else:
+                    self.assertNotIn('enable_imu', result.stdout)
 
     def test_vslam_rejects_missing_rsusb_library(self):
         self.env['RBY1_RSUSB_LIB_DIR'] = str(Path(self.temp.name) / 'missing')
@@ -68,19 +67,18 @@ class Launchers(unittest.TestCase):
         self.assertIn('Missing RSUSB librealsense', result.stderr)
 
     def test_imu_opt_out_is_forwarded_after_default(self):
-        result = self.run_script('run_vslam_web.sh', 'lab_host:=192.0.2.1', 'enable_imu:=false')
+        result = self.run_script('run_vslam_upc.sh', 'lab_host:=192.0.2.1', 'enable_imu:=false')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(result.stdout.index('enable_imu:=true'), result.stdout.index('enable_imu:=false'))
 
     def test_missing_host_and_ui_override_rejected(self):
-        self.assertNotEqual(self.run_script('run_vslam_web.sh').returncode, 0)
-        self.assertNotEqual(self.run_script('run_mobile_base_web.sh', 'ui_backend:=qt').returncode, 0)
-        self.assertNotEqual(self.run_script('run_mobile_base_web.sh', 'lab_host:=192.0.2.1').returncode, 0)
+        self.assertNotEqual(self.run_script('run_vslam_upc.sh').returncode, 0)
+        self.assertNotEqual(self.run_script('run_mobile_base_upc.sh', 'start_ui:=false').returncode, 0)
+        self.assertNotEqual(self.run_script('run_mobile_base_upc.sh', 'lab_host:=192.0.2.1').returncode, 0)
 
     def test_help_needs_no_ros(self):
         self.env['RBY1_ROS_SETUP'] = '/nonexistent'
-        for script in ('run_mobile_base_web.sh', 'run_mobile_base_upc.sh',
-                       'run_vslam_web.sh', 'run_vslam_upc.sh', 'record_trial.sh'):
+        for script in ('run_mobile_base_upc.sh', 'run_vslam_upc.sh', 'record_trial.sh'):
             self.assertEqual(self.run_script(script, '--help').returncode, 0)
 
     def test_qt_requires_desktop(self):
@@ -125,8 +123,8 @@ timeout() { shift; "$@"; }
         self.assertTrue((trial / 'params_end' / '_rby1_test_node.yaml').is_file())
 
     def test_shell_syntax(self):
-        for script in ('scripts/launch_operator.sh', 'run_mobile_base_web.sh',
-                       'run_mobile_base_upc.sh', 'run_vslam_web.sh', 'run_vslam_upc.sh', 'record_trial.sh'):
+        for script in ('scripts/launch_operator.sh', 'run_mobile_base_upc.sh',
+                       'run_vslam_upc.sh', 'record_trial.sh'):
             result = subprocess.run([BASH, '-n', str(ROOT / script)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -134,7 +132,7 @@ timeout() { shift; "$@"; }
 class MobileStop(unittest.TestCase):
     def setUp(self):
         # Exercise window logic without importing ROS/Qt or connecting hardware.
-        tree = ast.parse((ROOT / 'rby1_web/rby1_web/mobile_base_qt.py').read_text())
+        tree = ast.parse((ROOT / 'rby1_vslam/rby1_vslam/mobile_base_qt.py').read_text())
         window = next(item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == 'MobileWindow')
         scope = {'QWidget': object, 'rclpy': types.SimpleNamespace(ok=lambda: True, spin_once=lambda *a, **k: None)}
         exec(compile(ast.Module(body=[window], type_ignores=[]), '<window>', 'exec'), scope)
