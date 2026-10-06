@@ -19,7 +19,9 @@ UPC workspace에서 의존성을 준비하고 빌드한다 (로컬 Qt는 `python
 
 ```bash
 source /opt/ros/humble/setup.bash
+sudo apt-get install -y ros-humble-nav2-mppi-controller
 cd ~/rby1_ros2_ws
+rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
 colcon build --symlink-install --packages-up-to rby1_control rby1_vslam rby1_description
 source install/setup.bash
 cd src/rby1-project
@@ -108,6 +110,17 @@ QoS/구독 실패 메시지가 있으면 실제 토픽 설정에 맞춰 보완�
 rosbag 녹화는 서비스 요청·응답 전체를 보장하지 않는다.
 cuVSLAM 지도 저장도 별도이며, LAB mapping 종료 전에 기존 `map_tool save`로 저장한다.
 실제 실행 옵션과 시험 증상/시각은 시험 폴더에 메모한다.
+
+Theta* 근거리 path, MPPI 제어, action status 6, localization 보정과 Nav2 parameter를 함께 볼 때는
+stack을 `nav2_log_level:=debug`로 실행하고 UPC의 별도 터미널에서 다음 wrapper를 쓴다.
+
+```bash
+bash rby1_vslam/scripts/capture_navigation_debug.sh
+```
+
+`Nav2 ready parameter snapshot complete` 문구 뒤 goal을 보내고, 정지 후 10초 뒤
+Ctrl+C로 수집기를 끝낸다. 자세한 판독 기준은
+[`rby1_vslam/docs/nav2_close_goal_review.md`](rby1_vslam/docs/nav2_close_goal_review.md)에 있다.
 
 양쪽 결과를 한 PC에 모은 뒤 다음처럼 합치면 전송 전·후 구간까지 자동 비교한다.
 

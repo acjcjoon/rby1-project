@@ -27,11 +27,32 @@ UPC_TOPICS = [
     ('/rby1/odom', 'nav_msgs/msg/Odometry', 'sensor'),
     ('/rby1/vslam/localization_status', 'std_msgs/msg/String', 'reliable'),
     ('/rby1/vslam/navigation_status', 'std_msgs/msg/String', 'reliable'),
+    ('/rby1/vslam/navigation_event', 'std_msgs/msg/String', 'reliable'),
     ('/rby1/vslam/nav2_cmd_vel', 'geometry_msgs/msg/Twist', 'reliable'),
     ('/rby1/cmd_raw', 'geometry_msgs/msg/Twist', 'reliable'),
     ('/rby1/cmd_vel', 'geometry_msgs/msg/Twist', 'reliable'),
     ('/rby1/vslam/nav2/navigate_to_pose/_action/status',
-     'action_msgs/msg/GoalStatusArray', 'reliable'),
+     'action_msgs/msg/GoalStatusArray', 'action_status'),
+    ('/rby1/vslam/nav2/navigate_to_pose/_action/feedback',
+     'nav2_msgs/action/NavigateToPose_FeedbackMessage', 'reliable'),
+    ('/rby1/vslam/nav2/navigate_through_poses/_action/status',
+     'action_msgs/msg/GoalStatusArray', 'action_status'),
+    ('/rby1/vslam/nav2/navigate_through_poses/_action/feedback',
+     'nav2_msgs/action/NavigateThroughPoses_FeedbackMessage', 'reliable'),
+    ('/tf', 'tf2_msgs/msg/TFMessage', 'reliable'),
+    ('/parameter_events', 'rcl_interfaces/msg/ParameterEvent', 'parameter_events'),
+]
+NAV2_DEBUG_TOPICS = [
+    ('/rby1/vslam/nav2/plan', 'nav_msgs/msg/Path', 'reliable'),
+    ('/rby1/vslam/nav2/received_global_plan', 'nav_msgs/msg/Path', 'reliable'),
+    ('/rby1/vslam/nav2/transformed_global_plan', 'nav_msgs/msg/Path', 'reliable'),
+    ('/rby1/vslam/nav2/local_plan', 'nav_msgs/msg/Path', 'reliable'),
+    ('/rby1/vslam/nav2/compute_path_to_pose/_action/status',
+     'action_msgs/msg/GoalStatusArray', 'action_status'),
+    ('/rby1/vslam/nav2/follow_path/_action/status',
+     'action_msgs/msg/GoalStatusArray', 'action_status'),
+    ('/rby1/vslam/nav2/follow_path/_action/feedback',
+     'nav2_msgs/action/FollowPath_FeedbackMessage', 'reliable'),
 ]
 LAB_TOPICS = [
     ('/visual_slam/status', 'isaac_ros_visual_slam_interfaces/msg/VisualSlamStatus', 'sensor'),
@@ -60,13 +81,56 @@ def integer_scalar(value):
     return int(value)
 
 
+def _stamp_ns(stamp):
+    return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+
+def _quaternion_yaw(rotation):
+    sin_yaw = 2.0 * (rotation.w * rotation.z + rotation.x * rotation.y)
+    cos_yaw = 1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z)
+    return math.atan2(sin_yaw, cos_yaw)
+
+
+def _pose2d(pose):
+    return [float(pose.position.x), float(pose.position.y),
+            float(_quaternion_yaw(pose.orientation))]
+
+
+def _duration_sec(duration):
+    return float(duration.sec) + float(duration.nanosec) * 1e-9
+
+
+def _parameter_value(value):
+    """Convert rcl_interfaces/ParameterValue without importing ROS constants."""
+    kind = integer_scalar(value.type)
+    fields = {
+        1: 'bool_value', 2: 'integer_value', 3: 'double_value', 4: 'string_value',
+        5: 'byte_array_value', 6: 'bool_array_value', 7: 'integer_array_value',
+        8: 'double_array_value', 9: 'string_array_value',
+    }
+    if kind == 0:
+        return None
+    name = fields.get(kind)
+    if name is None:
+        return {'unsupported_parameter_type': kind}
+    result = getattr(value, name)
+    if kind == 5:
+        return list(bytes(result))
+    if kind >= 6:
+        return list(result)
+    return result
+
+
+def _parameter(parameter):
+    return {'name': str(parameter.name), 'value': _parameter_value(parameter.value)}
+
+
 def message_metadata(message, message_type):
     """Keep stamps and small state, never serialize image pixels."""
     fields = {}
     header = getattr(message, 'header', None)
     if header is not None:
-        fields.update(source_stamp_ns=int(header.stamp.sec) * 1_000_000_000
-                      + int(header.stamp.nanosec), frame_id=str(header.frame_id))
+        fields.update(source_stamp_ns=_stamp_ns(header.stamp), frame_id=str(header.frame_id))
     if message_type == 'sensor_msgs/msg/Image':
         fields.update(width=int(message.width), height=int(message.height),
                       step=int(message.step), encoding=str(message.encoding),
@@ -116,9 +180,69 @@ def message_metadata(message, message_type):
         fields['goal_statuses'] = [{
             'goal_id': bytes(status.goal_info.goal_id.uuid).hex(),
             'status': int(status.status),
-            'goal_stamp_ns': int(status.goal_info.stamp.sec) * 1_000_000_000
-                             + int(status.goal_info.stamp.nanosec),
+            'goal_stamp_ns': _stamp_ns(status.goal_info.stamp),
         } for status in message.status_list]
+    elif message_type == 'nav_msgs/msg/Path':
+        points = [_pose2d(item.pose) for item in message.poses]
+        lengths = [math.hypot(right[0] - left[0], right[1] - left[1])
+                   for left, right in zip(points, points[1:])]
+        fields.update(
+            pose_count=len(points), path_length_m=sum(lengths),
+            direct_distance_m=(math.hypot(points[-1][0] - points[0][0],
+                                          points[-1][1] - points[0][1])
+                               if len(points) >= 2 else 0.0),
+            max_step_m=max(lengths) if lengths else 0.0,
+            start_pose=points[0] if points else None,
+            end_pose=points[-1] if points else None,
+        )
+    elif message_type == 'tf2_msgs/msg/TFMessage':
+        transforms = []
+        interesting = {'vslam_map', 'odom', 'base', 'base_footprint'}
+        for item in message.transforms:
+            parent = str(item.header.frame_id).lstrip('/')
+            child = str(item.child_frame_id).lstrip('/')
+            if parent not in interesting or child not in interesting:
+                continue
+            transform = item.transform
+            transforms.append({
+                'source_stamp_ns': _stamp_ns(item.header.stamp),
+                'parent_frame': parent, 'child_frame': child,
+                'translation': [float(transform.translation.x),
+                                float(transform.translation.y),
+                                float(transform.translation.z)],
+                'orientation': [float(transform.rotation.x), float(transform.rotation.y),
+                                float(transform.rotation.z), float(transform.rotation.w)],
+                'yaw': float(_quaternion_yaw(transform.rotation)),
+            })
+        fields['transforms'] = transforms
+    elif message_type == 'rcl_interfaces/msg/ParameterEvent':
+        fields.update(
+            source_stamp_ns=_stamp_ns(message.stamp),
+            parameter_node=str(message.node),
+            new_parameters=[_parameter(item) for item in message.new_parameters],
+            changed_parameters=[_parameter(item) for item in message.changed_parameters],
+            deleted_parameters=[str(item.name) for item in message.deleted_parameters],
+        )
+    elif message_type.endswith('_FeedbackMessage'):
+        feedback = message.feedback
+        fields['goal_id'] = bytes(message.goal_id.uuid).hex()
+        current_pose = getattr(feedback, 'current_pose', None)
+        if current_pose is not None:
+            fields['current_pose'] = _pose2d(current_pose.pose)
+            fields['current_pose_frame'] = str(current_pose.header.frame_id)
+            fields['current_pose_stamp_ns'] = _stamp_ns(current_pose.header.stamp)
+        for name in ('navigation_time', 'estimated_time_remaining'):
+            value = getattr(feedback, name, None)
+            if value is not None:
+                fields[name + '_sec'] = _duration_sec(value)
+        for name in ('number_of_recoveries', 'number_of_poses_remaining'):
+            value = getattr(feedback, name, None)
+            if value is not None:
+                fields[name] = int(value)
+        for name in ('distance_remaining', 'distance_to_goal', 'speed'):
+            value = getattr(feedback, name, None)
+            if value is not None:
+                fields[name + ('_m' if name != 'speed' else '_mps')] = float(value)
     return safe_json(fields)
 
 
@@ -127,12 +251,17 @@ def main():
     parser.add_argument('--role', required=True, choices=('upc', 'lab'))
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--capture-id', required=True)
+    parser.add_argument('--nav2-debug', action='store_true',
+                        help='UPC only: observe child actions and subscriber-driven plan topics')
     args = parser.parse_args()
+    if args.nav2_debug and args.role != 'upc':
+        parser.error('--nav2-debug is UPC-only')
 
     # Deferred imports keep help and metadata unit checks usable without ROS.
     import rclpy
     from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
+    from rclpy import qos as rclpy_qos
     from rclpy.qos import qos_profile_sensor_data, QoSProfile
     from rosidl_runtime_py.utilities import get_message
 
@@ -142,6 +271,8 @@ def main():
                 namespace='/rby1/diagnostics')
     host = socket.gethostname()
     topics = CAMERA_TOPICS + (UPC_TOPICS if args.role == 'upc' else LAB_TOPICS)
+    if args.nav2_debug:
+        topics += NAV2_DEBUG_TOPICS
     counts = {}
     current_bridge = {'session_id': '', 'connected': False}
     subscriptions = []
@@ -164,7 +295,12 @@ def main():
                 'observer_index': counts[topic], 'observed_wall_ns': wall_ns,
                 'observed_monotonic_ns': mono_ns, 'observed_ros_ns': ros_ns,
             }
-            record.update(message_metadata(message, message_type))
+            metadata = message_metadata(message, message_type)
+            # /tf carries the entire robot tree at high rate. Keep only the
+            # localization chain selected by message_metadata().
+            if message_type == 'tf2_msgs/msg/TFMessage' and not metadata['transforms']:
+                return
+            record.update(metadata)
             state = record.get('state')
             if topic == '/rby1/vslam/bridge_status' and isinstance(state, dict):
                 current_bridge['session_id'] = str(state.get('session_id') or '')
@@ -179,6 +315,7 @@ def main():
 
     write({'event': 'start', 'role': args.role, 'host': host,
            'capture_id': args.capture_id, 'schema_version': 1,
+           'nav2_debug': args.nav2_debug,
            'wall_ns': time.time_ns(), 'monotonic_ns': time.monotonic_ns()})
     for topic, message_type, qos_name in topics:
         try:
@@ -196,6 +333,12 @@ def main():
             # reader is compatible with the standard transient-local rosout
             # publisher and records new log messages without version checks.
             qos = QoSProfile(depth=100)
+        elif qos_name == 'parameter_events':
+            qos = getattr(
+                rclpy_qos, 'qos_profile_parameter_events', QoSProfile(depth=100))
+        elif qos_name == 'action_status':
+            qos = getattr(
+                rclpy_qos, 'qos_profile_action_status_default', QoSProfile(depth=10))
         else:
             qos = QoSProfile(depth=100)
         subscriptions.append(node.create_subscription(

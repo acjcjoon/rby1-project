@@ -72,6 +72,7 @@ sudo apt-get install -y \
   python3-colcon-common-extensions python3-rosdep python3-pyqt5 \
   ros-humble-realsense2-camera ros-humble-realsense2-description \
   ros-humble-navigation2 ros-humble-nav2-bringup \
+  ros-humble-nav2-mppi-controller \
   ros-humble-robot-state-publisher ros-humble-tf2-ros
 ```
 

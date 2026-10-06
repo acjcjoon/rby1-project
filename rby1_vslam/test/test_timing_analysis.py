@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 
@@ -189,3 +190,153 @@ def test_cli_writes_human_and_json_reports(tmp_path):
     assert (run_dir / 'timing_report.txt').is_file()
     parsed = json.loads((run_dir / 'timing_report.json').read_text(encoding='utf-8'))
     assert parsed['captures'][0]['role'] == 'upc'
+
+
+def test_goal_status_six_is_reported_as_aborted_once():
+    records = [
+        {'observed_wall_ns': 1, 'observed_monotonic_ns': 1,
+         'goal_statuses': [{'goal_id': 'abc', 'status': 1}]},
+        {'observed_wall_ns': 2, 'observed_monotonic_ns': 2,
+         'goal_statuses': [{'goal_id': 'abc', 'status': 2}]},
+        {'observed_wall_ns': 3, 'observed_monotonic_ns': 3,
+         'goal_statuses': [{'goal_id': 'abc', 'status': 6}]},
+        {'observed_wall_ns': 4, 'observed_monotonic_ns': 4,
+         'goal_statuses': [{'goal_id': 'abc', 'status': 6}]},
+    ]
+    result = analysis.goal_status_summary(records)
+    assert result['status_6_aborted_goals'] == 1
+    assert result['status_5_canceled_goals'] == 0
+    assert result['final_status_names'] == {'ABORTED': 1}
+    assert [item['status_name'] for item in result['transitions']] == [
+        'ACCEPTED', 'EXECUTING', 'ABORTED']
+
+
+def test_localization_correction_wraps_yaw_and_segments_sessions():
+    def tf_record(index, session, x, yaw):
+        return {
+            'observed_monotonic_ns': index * 10_000_000,
+            'observed_wall_ns': index * 10_000_000,
+            'bridge_session_id': session,
+            'transforms': [{
+                'parent_frame': 'vslam_map', 'child_frame': 'odom',
+                'translation': [x, 0.0, 0.0], 'yaw': yaw,
+            }],
+        }
+
+    records = [
+        tf_record(1, 'a', 0.0, math.radians(179.0)),
+        tf_record(2, 'a', 0.01, math.radians(-179.0)),
+        tf_record(3, 'a', 0.08, math.radians(-179.0)),
+        tf_record(4, 'b', 2.0, 1.0),  # New session is not a correction jump.
+    ]
+    odom_records = [
+        {'observed_monotonic_ns': index * 10_000_000,
+         'velocity': [0.0, 0.0, 0.0]}
+        for index in range(1, 5)
+    ]
+    result = analysis.localization_correction_summary(
+        records, odom_records, jump_m=0.05, jump_rad=math.radians(5.0))
+    assert result['segments'] == 2
+    assert result['jump_count'] == 1
+    assert result['goal_tolerance_exceedance_count'] == 2
+    assert result['stationary_matched_steps'] == 2
+    assert result['stationary_goal_tolerance_exceedance_count'] == 2
+    assert math.isclose(result['update_gap_ms']['max'], 10.0)
+    assert math.isclose(result['yaw_step_rad']['max'], math.radians(2.0), abs_tol=1e-9)
+    assert math.isclose(result['jumps'][0]['translation_m'], 0.07, abs_tol=1e-9)
+
+
+def test_parameter_events_keep_false_and_deletion():
+    records = [{
+        'observed_monotonic_ns': 1, 'observed_wall_ns': 2,
+        'parameter_node': '/rby1/vslam/nav2/controller_server',
+        'new_parameters': [{'name': 'debug', 'value': False}],
+        'changed_parameters': [{'name': 'goal_checker.xy_goal_tolerance',
+                                'value': 0.01}],
+        'deleted_parameters': ['old'],
+    }]
+    result = analysis.parameter_event_summary(records)
+    assert result['messages'] == 1
+    assert result['event_count'] == 3
+    assert result['events'][0]['value'] is False
+    assert result['events'][-1]['operation'] == 'deleted'
+
+
+def test_parameter_event_summary_keeps_runtime_tail_after_declarations():
+    records = []
+    for index in range(501):
+        records.append({
+            'observed_monotonic_ns': index,
+            'parameter_node': '/rby1/vslam/nav2/controller_server',
+            'new_parameters': [{'name': f'initial_{index}', 'value': index}],
+            'changed_parameters': [], 'deleted_parameters': [],
+        })
+    records.append({
+        'observed_monotonic_ns': 1000,
+        'parameter_node': '/rby1/vslam/nav2/controller_server',
+        'new_parameters': [],
+        'changed_parameters': [{'name': 'goal_checker.xy_goal_tolerance',
+                                'value': 0.02}],
+        'deleted_parameters': [],
+    })
+    result = analysis.parameter_event_summary(records)
+    assert result['truncated'] is True
+    assert result['discarded_initial_events'] == 2
+    assert result['events'][-1]['operation'] == 'changed'
+    assert result['events'][-1]['value'] == 0.02
+
+
+def test_path_summary_compares_plan_endpoint_to_structured_goal():
+    requested = {
+        'observed_monotonic_ns': 1, 'state': {
+            'event': 'requested', 'request_id': 'nav-1',
+            'goal': {'name': 'Point 2', 'x': 0.1, 'y': 0.0, 'yaw': 0.0},
+        },
+    }
+    accepted = {
+        'observed_monotonic_ns': 2, 'state': {
+            'event': 'accepted', 'request_id': 'nav-1', 'goal_id': 'action-1',
+            'goal': {'name': 'Point 2', 'x': 0.1, 'y': 0.0, 'yaw': 0.0},
+        },
+    }
+    plan = {
+        'observed_monotonic_ns': 3, 'observed_wall_ns': 3,
+        'pose_count': 2, 'path_length_m': 0.05, 'direct_distance_m': 0.05,
+        'max_step_m': 0.05, 'end_pose': [0.05, 0.0, 0.0],
+    }
+    result = analysis.path_quality_summary([plan], [], [requested, accepted])
+    assert result['plans'] == 1
+    assert result['requested_goals_seen'] == 1
+    assert result['accepted_goals_seen'] == 1
+    assert result['matched_plans'] == 1
+    assert math.isclose(result['endpoint_error_m']['max'], 0.05)
+    assert result['samples'][0]['request_id'] == 'nav-1'
+
+
+def test_path_summary_does_not_match_rejected_finished_or_nonfinite_endpoint():
+    goal = {'name': 'close', 'x': 0.02, 'y': 0.0, 'yaw': 0.0}
+    events = [
+        {'observed_monotonic_ns': 1, 'state': {
+            'event': 'requested', 'request_id': 'rejected', 'goal': goal}},
+        {'observed_monotonic_ns': 2, 'state': {
+            'event': 'rejected', 'request_id': 'rejected', 'goal': goal}},
+        {'observed_monotonic_ns': 3, 'state': {
+            'event': 'requested', 'request_id': 'accepted', 'goal': goal}},
+        {'observed_monotonic_ns': 4, 'state': {
+            'event': 'accepted', 'request_id': 'accepted', 'goal_id': 'id', 'goal': goal}},
+        {'observed_monotonic_ns': 6, 'state': {
+            'event': 'finished', 'request_id': 'accepted', 'goal_id': 'id',
+            'status': 6, 'goal': goal}},
+    ]
+    base = {'observed_wall_ns': 10, 'pose_count': 1, 'path_length_m': 0.0,
+            'direct_distance_m': 0.0, 'max_step_m': 0.0}
+    plans = [
+        dict(base, observed_monotonic_ns=2, end_pose=[0.0, 0.0, 0.0]),
+        dict(base, observed_monotonic_ns=5, end_pose=['nan', 0.0, 0.0]),
+        dict(base, observed_monotonic_ns=7, end_pose=[0.0, 0.0, 0.0]),
+    ]
+    result = analysis.path_quality_summary(plans, [], events)
+    assert result['requested_goals_seen'] == 2
+    assert result['accepted_goals_seen'] == 1
+    assert result['matched_plans'] == 0
+    assert result['endpoint_error_m'] is None

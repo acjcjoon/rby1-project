@@ -41,6 +41,12 @@ from .waypoint_store import (
 )
 
 
+GOAL_STATUS_NAMES = {
+    0: 'UNKNOWN', 1: 'ACCEPTED', 2: 'EXECUTING', 3: 'CANCELING',
+    4: 'SUCCEEDED', 5: 'CANCELED', 6: 'ABORTED',
+}
+
+
 def _yaw_from_quaternion(rotation):
     sin_yaw = 2.0 * (rotation.w * rotation.z + rotation.x * rotation.y)
     cos_yaw = 1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z)
@@ -69,6 +75,7 @@ class OperatorNode(Node):
             'navigate_action': '/rby1/vslam/nav2/navigate_to_pose',
             'enable_service': '/rby1/vslam/enable',
             'cancel_service': '/rby1/vslam/cancel',
+            'navigation_event_topic': '/rby1/vslam/navigation_event',
             'control_command_topic': '/rby1/control/command',
             'control_event_topic': '/rby1/control/event',
         }
@@ -89,6 +96,8 @@ class OperatorNode(Node):
         self.cancel_client = self.create_client(Trigger, str(self.p['cancel_service']))
         self.control_pub = self.create_publisher(
             String, str(self.p['control_command_topic']), 20)
+        self.navigation_event_pub = self.create_publisher(
+            String, str(self.p['navigation_event_topic']), 20)
         self.create_subscription(
             String, str(self.p['control_event_topic']), self._on_control_event, 50)
         self.create_subscription(
@@ -99,12 +108,31 @@ class OperatorNode(Node):
         self.bridge_sink = None
         self.navigation_sink = None
         self.goal_handle = None
+        self.goal_handles = {}
+        self.navigation_request_sequence = 0
+        self.latest_navigation_request_id = None
         self.last_feedback_log = 0.0
 
     def emit_log(self, message):
         self.get_logger().info(str(message))
         if self.log_sink is not None:
             self.log_sink(str(message))
+
+    def emit_navigation_event(self, event, waypoint=None, **fields):
+        payload = {
+            'schema_version': 1,
+            'event': str(event),
+            'stamp_ns': self.get_clock().now().nanoseconds,
+        }
+        if waypoint is not None:
+            payload['goal'] = {
+                'name': str(waypoint.name), 'frame_id': self.map_frame,
+                'x': float(waypoint.x), 'y': float(waypoint.y),
+                'yaw': float(waypoint.yaw),
+            }
+        payload.update(fields)
+        self.navigation_event_pub.publish(String(data=json.dumps(
+            payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))
 
     def _on_control_event(self, message):
         try:
@@ -177,23 +205,35 @@ class OperatorNode(Node):
         if not self.enable_client.service_is_ready():
             self.emit_log('Navigation failed: Nav gate enable service is not ready.')
             return
+        self.navigation_request_sequence += 1
+        request_id = (
+            f'nav-{self.get_clock().now().nanoseconds}-'
+            f'{self.navigation_request_sequence:06d}')
+        self.latest_navigation_request_id = request_id
         request = SetBool.Request(data=True)
         future = self.enable_client.call_async(request)
         future.add_done_callback(
-            lambda completed, target=waypoint: self._after_enable(completed, target))
+            lambda completed, target=waypoint, identifier=request_id:
+            self._after_enable(completed, target, identifier))
 
-    def _after_enable(self, future, waypoint):
+    def _after_enable(self, future, waypoint, request_id):
         try:
             response = future.result()
         except Exception as exc:
             self.emit_log(f'Navigation failed: gate response error: {exc}')
+            self.emit_navigation_event(
+                'enable_error', waypoint, request_id=request_id, detail=str(exc))
             return
         if response is None or not response.success:
             detail = getattr(response, 'message', 'no response')
             self.emit_log(f'Navigation deferred: {detail}')
+            self.emit_navigation_event(
+                'enable_rejected', waypoint, request_id=request_id, detail=str(detail))
             return
         if not self.navigate_client.server_is_ready():
             self.emit_log('Navigation failed: Nav2 NavigateToPose action is not ready.')
+            self.emit_navigation_event(
+                'action_unavailable', waypoint, request_id=request_id)
             return
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -206,22 +246,37 @@ class OperatorNode(Node):
         self.emit_log(
             f'Navigate to {waypoint.name}: x={waypoint.x:.3f}, '
             f'y={waypoint.y:.3f}, yaw={math.degrees(waypoint.yaw):.1f} deg')
+        self.emit_navigation_event('requested', waypoint, request_id=request_id)
         future = self.navigate_client.send_goal_async(goal, feedback_callback=self._on_feedback)
-        future.add_done_callback(self._on_goal_response)
+        future.add_done_callback(
+            lambda completed, target=waypoint, identifier=request_id:
+            self._on_goal_response(completed, target, identifier))
 
-    def _on_goal_response(self, future):
+    def _on_goal_response(self, future, waypoint, request_id):
         try:
-            self.goal_handle = future.result()
+            goal_handle = future.result()
         except Exception as exc:
             self.emit_log(f'Failed to send Nav2 goal: {exc}')
+            self.emit_navigation_event(
+                'send_error', waypoint, request_id=request_id, detail=str(exc))
             return
-        if self.goal_handle is None or not self.goal_handle.accepted:
+        if goal_handle is None or not goal_handle.accepted:
             self.emit_log('Nav2 rejected the goal.')
-            self.goal_handle = None
+            self.emit_navigation_event('rejected', waypoint, request_id=request_id)
             return
-        self.emit_log('Nav2 accepted the goal.')
-        result = self.goal_handle.get_result_async()
-        result.add_done_callback(self._on_goal_result)
+        goal_id = bytes(goal_handle.goal_id.uuid).hex()
+        self.emit_log(f'Nav2 accepted the goal (id={goal_id}).')
+        self.emit_navigation_event(
+            'accepted', waypoint, request_id=request_id, goal_id=goal_id)
+        self.goal_handles[request_id] = goal_handle
+        if request_id == self.latest_navigation_request_id:
+            self.goal_handle = goal_handle
+        result = goal_handle.get_result_async()
+        result.add_done_callback(
+            lambda completed, target=waypoint, accepted=goal_handle,
+            action_identifier=goal_id, request_identifier=request_id:
+            self._on_goal_result(
+                completed, target, accepted, action_identifier, request_identifier))
 
     def _on_feedback(self, message):
         now = time.monotonic()
@@ -233,13 +288,23 @@ class OperatorNode(Node):
         if math.isfinite(float(remaining)):
             self.emit_log(f'Distance remaining: {float(remaining):.2f} m')
 
-    def _on_goal_result(self, future):
+    def _on_goal_result(self, future, waypoint, goal_handle, goal_id, request_id):
         try:
             wrapped = future.result()
-            self.emit_log(f'Nav2 goal finished (status={wrapped.status}).')
+            status = int(wrapped.status)
+            status_name = GOAL_STATUS_NAMES.get(status, 'UNRECOGNIZED')
+            self.emit_log(f'Nav2 goal finished (status={status} {status_name}, id={goal_id}).')
+            self.emit_navigation_event(
+                'finished', waypoint, request_id=request_id, goal_id=goal_id,
+                status=status, status_name=status_name)
         except Exception as exc:
             self.emit_log(f'Nav2 result error: {exc}')
-        self.goal_handle = None
+            self.emit_navigation_event(
+                'result_error', waypoint, request_id=request_id,
+                goal_id=goal_id, detail=str(exc))
+        self.goal_handles.pop(request_id, None)
+        if self.goal_handle is goal_handle:
+            self.goal_handle = None
 
     def emergency_stop(self):
         self.stop_manual()

@@ -118,6 +118,7 @@ def _launch(context):
                 'scan_topic': LaunchConfiguration('scan_topic'),
                 'use_scan': LaunchConfiguration('use_scan'),
                 'start_gate': 'true',
+                'nav2_log_level': LaunchConfiguration('nav2_log_level'),
             }.items(),
         ))
 
@@ -160,6 +161,9 @@ def generate_launch_description():
         DeclareLaunchArgument('use_scan', default_value='false',
                               description='false means Nav2 has no obstacle sensing/avoidance.'),
         DeclareLaunchArgument('scan_topic', default_value='/scan'),
+        DeclareLaunchArgument(
+            'nav2_log_level', default_value='info',
+            description='planner/controller/bt_navigator log level'),
         DeclareLaunchArgument('waypoints_file',
                               default_value=str(default_waypoints_path(share))),
         DeclareLaunchArgument('publish_mount_tf', default_value='true'),

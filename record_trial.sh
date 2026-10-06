@@ -3,6 +3,7 @@
 set -Eeo pipefail
 ROLE=''; RUN_ID=''; OUTPUT="${HOME}/rby1_trials"; DOMAIN=''; WAYPOINTS=''; PORT=7447
 FULL_BAG=false
+NAV2_DEBUG=false
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 die() { echo "[record] $*" >&2; exit 2; }
 usage() {
@@ -13,6 +14,7 @@ Usage: bash record_trial.sh --role upc|lab --run-id NAME [options]
   --waypoints FILE  Also copy a custom waypoint YAML at start/end (UPC)
   --port PORT       VSLAM TCP port for socket snapshots (default: 7447)
   --full-bag        Record every topic, including raw images (high overhead)
+  --nav2-debug      Add scan/costmaps/footprints for a short Nav2 trial
 By default only low-bandwidth state/pose/TF/action topics are bagged.
 Timing metadata and an automatic local bottleneck report are also saved.
 Start BEFORE the operator stack. Stop robot via UI, then Ctrl+C here to finalize.
@@ -24,6 +26,7 @@ while (($#)); do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --full-bag) FULL_BAG=true; shift ;;
+    --nav2-debug) NAV2_DEBUG=true; shift ;;
     --role|--run-id|--output|--domain|--waypoints|--port)
       [[ $# -ge 2 && -n "$2" ]] || die "Missing value: $1"
       case "$1" in
@@ -35,6 +38,7 @@ while (($#)); do
   esac
 done
 [[ "$ROLE" == upc || "$ROLE" == lab ]] || die '--role upc|lab required'
+[[ "$NAV2_DEBUG" == false || "$ROLE" == upc ]] || die '--nav2-debug is UPC-only'
 [[ "$RUN_ID" =~ ^[a-zA-Z0-9_-]+$ ]] || die '--run-id requires letters/digits/_/-'
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || die 'Invalid port'
 if [[ "$ROLE" == upc ]]; then
@@ -76,6 +80,7 @@ fi
     "$RUN_ID" "$ROLE" "$DOMAIN" "${ROS_DISTRO:-unset}" "$WAYPOINTS"
   printf 'capture_id=%s\nVSLAM_TCP_PORT=%s\n' "$CAPTURE_ID" "$PORT"
   printf 'full_bag=%s\n' "$FULL_BAG"
+  printf 'nav2_debug=%s\n' "$NAV2_DEBUG"
   git -C "$ROOT" rev-parse HEAD 2>/dev/null || true
   git -C "$ROOT" status --short 2>/dev/null || true
   date -u; uname -a; df -h "$RUN_DIR"
@@ -83,8 +88,9 @@ fi
   if command -v timedatectl >/dev/null; then timeout 2 timedatectl timesync-status || true; fi
 } > "$RUN_DIR/environment.txt" 2>&1
 snapshot() {
-  local phase="$1" node
-  timeout 5 ros2 topic list -t > "$RUN_DIR/topics_${phase}.txt" 2>&1 || true
+  local phase="$1" node prefix waypoint_value
+  timeout 5 ros2 topic list -t --include-hidden-topics \
+    > "$RUN_DIR/topics_${phase}.txt" 2>&1 || true
   timeout 5 ros2 node list > "$RUN_DIR/nodes_${phase}.txt" 2>&1 || true
   mkdir -p "$RUN_DIR/params_${phase}"
   while IFS= read -r node; do
@@ -94,8 +100,55 @@ snapshot() {
   if [[ -n "$WAYPOINTS" && -f "$WAYPOINTS" ]]; then
     cp -- "$WAYPOINTS" "$RUN_DIR/waypoints_${phase}.yaml"
   fi
+  if [[ "$ROLE" == upc ]]; then
+    timeout 3 ros2 param get /rby1/vslam/waypoint_ui waypoints_file \
+      > "$RUN_DIR/waypoints_parameter_${phase}.txt" 2>&1 || true
+    waypoint_value="$(sed -n 's/^String value is: //p' \
+      "$RUN_DIR/waypoints_parameter_${phase}.txt" | head -n 1)"
+    if [[ "$waypoint_value" == /* && -f "$waypoint_value" ]]; then
+      cp -- "$waypoint_value" "$RUN_DIR/waypoints_runtime_${phase}.yaml"
+    fi
+    prefix="$(timeout 3 ros2 pkg prefix rby1_vslam 2>/dev/null || true)"
+    if [[ "$prefix" == /* && -d "$prefix/share/rby1_vslam/config" ]]; then
+      mkdir -p "$RUN_DIR/runtime_config_${phase}"
+      for name in navigation.yaml navigate_to_pose.xml navigate_through_poses.xml; do
+        if [[ -f "$prefix/share/rby1_vslam/config/$name" ]]; then
+          cp -- "$prefix/share/rby1_vslam/config/$name" \
+            "$RUN_DIR/runtime_config_${phase}/$name"
+        fi
+      done
+    fi
+  fi
 }
-BAG_PID=''; OBSERVER_PID=''; SAMPLE_PID=''; SNAPSHOT_PID=''
+ready_snapshot() {
+  local attempt nodes
+  for ((attempt=0; attempt<60; attempt++)); do
+    nodes="$(timeout 3 ros2 node list 2>/dev/null || true)"
+    if grep -qx '/rby1/vslam/nav2/planner_server' <<< "$nodes" \
+        && grep -qx '/rby1/vslam/nav2/controller_server' <<< "$nodes"; then
+      snapshot ready
+      : > "$RUN_DIR/params_ready_complete"
+      echo '[record] Nav2 ready parameter snapshot complete; the goal may be sent.'
+      return
+    fi
+    sleep 1
+  done
+  echo 'Nav2 planner/controller did not appear within 60 seconds.' \
+    > "$RUN_DIR/params_ready_unavailable.txt"
+}
+BAG_PID=''; OBSERVER_PID=''; SAMPLE_PID=''; SNAPSHOT_PID=''; READY_PID=''
+wait_bounded() {
+  local pid="$1" seconds="$2" label="$3"
+  [[ -n "$pid" ]] || return
+  if ! timeout "${seconds}s" tail --pid="$pid" -f /dev/null >/dev/null 2>&1; then
+    echo "[record] WARNING: $label did not exit within ${seconds}s; terminating it." >&2
+    kill -TERM "$pid" 2>/dev/null || true
+    if ! timeout 5s tail --pid="$pid" -f /dev/null >/dev/null 2>&1; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  wait "$pid" 2>/dev/null || true
+}
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
@@ -104,11 +157,28 @@ cleanup() {
   [[ -z "$BAG_PID" ]] || kill -INT "$BAG_PID" 2>/dev/null
   [[ -z "$OBSERVER_PID" ]] || kill -INT "$OBSERVER_PID" 2>/dev/null
   [[ -z "$SAMPLE_PID" ]] || kill -TERM "$SAMPLE_PID" 2>/dev/null
-  [[ -z "$SNAPSHOT_PID" ]] || wait "$SNAPSHOT_PID"
-  [[ -z "$BAG_PID" ]] || wait "$BAG_PID"
-  [[ -z "$OBSERVER_PID" ]] || wait "$OBSERVER_PID"
-  [[ -z "$SAMPLE_PID" ]] || wait "$SAMPLE_PID"
+  [[ -z "$READY_PID" ]] || kill -TERM "$READY_PID" 2>/dev/null
+  [[ -z "$SNAPSHOT_PID" ]] || kill -TERM "$SNAPSHOT_PID" 2>/dev/null
+  wait_bounded "$BAG_PID" 30 'rosbag recorder'
+  wait_bounded "$OBSERVER_PID" 10 'timing observer'
+  wait_bounded "$SAMPLE_PID" 5 'system sampler'
+  wait_bounded "$READY_PID" 5 'ready parameter snapshot'
+  wait_bounded "$SNAPSHOT_PID" 5 'start parameter snapshot'
   snapshot end
+  if [[ -f "$RUN_DIR/params_ready_complete" ]]; then
+    diff -ru "$RUN_DIR/params_ready" "$RUN_DIR/params_end" \
+      > "$RUN_DIR/params_ready_to_end.diff" 2>&1 || true
+  elif [[ -f "$RUN_DIR/params_start_complete" ]]; then
+    if [[ -d "$RUN_DIR/params_ready" ]]; then
+      echo 'Ready snapshot was interrupted; using the start snapshot as the diff baseline.' \
+        > "$RUN_DIR/params_ready_incomplete.txt"
+    fi
+    diff -ru "$RUN_DIR/params_start" "$RUN_DIR/params_end" \
+      > "$RUN_DIR/params_start_to_end.diff" 2>&1 || true
+  else
+    echo 'Both initial parameter snapshots were interrupted; inspect params_end directly.' \
+      > "$RUN_DIR/params_baseline_unavailable.txt"
+  fi
   timeout 15 ros2 bag info "$RUN_DIR/bag" > "$RUN_DIR/bag_info.txt" 2>&1 || true
   if python3 "$TIMING_ANALYZER" "$RUN_DIR" --output-dir "$RUN_DIR" \
       > "$RUN_DIR/analysis.log" 2>&1; then
@@ -131,6 +201,7 @@ if [[ "$FULL_BAG" == true ]]; then
 else
   BAG_ARGS+=(
     /rosout /tf /tf_static /diagnostics
+    /parameter_events
     /rby1/vslam/bridge_status /rby1/vslam/timing
     /rby1/vslam/camera_odometry /rby1/vslam/camera_slam_odometry
   )
@@ -140,10 +211,30 @@ else
       /rby1/odom /rby1/robot_state
       /rby1/control/command /rby1/control/event
       /rby1/vslam/localization_status /rby1/vslam/navigation_status
+      /rby1/vslam/navigation_event
       /rby1/vslam/nav2_cmd_vel /rby1/cmd_raw /rby1/cmd_vel
+      /rby1/vslam/nav2/cmd_vel_nav
       /rby1/vslam/nav2/navigate_to_pose/_action/status
       /rby1/vslam/nav2/navigate_to_pose/_action/feedback
+      /rby1/vslam/nav2/navigate_through_poses/_action/status
+      /rby1/vslam/nav2/navigate_through_poses/_action/feedback
     )
+    if [[ "$NAV2_DEBUG" == true ]]; then
+      BAG_ARGS+=(
+        /scan
+        /rby1/vslam/nav2/compute_path_to_pose/_action/status
+        /rby1/vslam/nav2/follow_path/_action/status
+        /rby1/vslam/nav2/follow_path/_action/feedback
+        /rby1/vslam/nav2/plan
+        /rby1/vslam/nav2/received_global_plan
+        /rby1/vslam/nav2/transformed_global_plan
+        /rby1/vslam/nav2/local_plan
+        /rby1/vslam/nav2/local_costmap/costmap_raw
+        /rby1/vslam/nav2/global_costmap/costmap_raw
+        /rby1/vslam/nav2/local_costmap/published_footprint
+        /rby1/vslam/nav2/global_costmap/published_footprint
+      )
+    fi
   else
     BAG_ARGS+=(/visual_slam/status)
   fi
@@ -151,11 +242,17 @@ fi
 python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1],sys.argv[1:])' \
   ros2 bag record "${BAG_ARGS[@]}" > "$RUN_DIR/recorder.log" 2>&1 &
 BAG_PID=$!
+OBSERVER_ARGS=(--role "$ROLE" --output "$RUN_DIR/events.jsonl" --capture-id "$CAPTURE_ID")
+if [[ "$NAV2_DEBUG" == true ]]; then
+  OBSERVER_ARGS+=(--nav2-debug)
+fi
 python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1],sys.argv[1:])' \
-  python3 "$TIMING_OBSERVER" --role "$ROLE" --output "$RUN_DIR/events.jsonl" \
-  --capture-id "$CAPTURE_ID" > "$RUN_DIR/observer.log" 2>&1 &
+  python3 "$TIMING_OBSERVER" "${OBSERVER_ARGS[@]}" > "$RUN_DIR/observer.log" 2>&1 &
 OBSERVER_PID=$!
-snapshot start & SNAPSHOT_PID=$!
+(snapshot start; : > "$RUN_DIR/params_start_complete") & SNAPSHOT_PID=$!
+if [[ "$ROLE" == upc ]]; then
+  ready_snapshot & READY_PID=$!
+fi
 (
   while true; do
     python3 -c 'import json,time; print(json.dumps({"wall_ns":time.time_ns(),"monotonic_ns":time.monotonic_ns()}))'

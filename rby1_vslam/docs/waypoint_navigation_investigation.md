@@ -1,7 +1,7 @@
 # 초기 웨이포인트 좌표와 Nav2 중간 정지 조사
 
-조사일: 2026-10-01 (KST). 기준 코드: `84d510c` 및 저장된 `data/rby1_vslam_waypoints.yaml`.
-사용자 관측: mapping 시작 직후 Point 1 저장, 이동 후 Point 2 저장, Navigate goal accepted 이후 state/status 5와 중간 정지.
+최초 조사일: 2026-10-01 (KST). 현재 포인트/MPPI 설정 업데이트: 2026-10-06.
+사용자 관측: Navigate goal accepted 이후 status 5 또는 state/status 6과 중간 정지.
 
 이 문서는 저장 파일과 코드 및 ROS 2 Humble 공식 소스를 조사한 결과다. 어제의 rosbag/노드 로그는 이 작업 폴더에서 발견하지 못했다. 따라서 어느 센서가 어느 시점에 실패했는지는 확정하지 않는다. 로봇 실행이나 timeout·안전 조건 변경은 수행하지 않았다.
 
@@ -9,10 +9,13 @@
 
 | 포인트 | x [m] | y [m] | yaw [rad] | yaw [deg] |
 |---|---:|---:|---:|---:|
-| Point 1 | -0.147006 | -0.024010 | 0.002064 | 0.1183 |
-| Point 2 | 0.371060 | 0.365657 | 0.246847 | 14.1433 |
+| Point 1 | -0.108110 | -0.004857 | -0.003806 | -0.2180 |
+| Point 2 | 1.076058 | 0.049006 | -0.011037 | -0.6324 |
 
-두 점 사이의 평면 거리는 약 **0.6483 m**, 자세 차이는 약 **14.025°**다. 저장된 yaw는 rad이며 UI는 deg로 표시한다. 파일에 NaN이나 frame_id 오타 같은 명백한 형식 문제는 보이지 않는다. 이는 당시 추정 정확도나 현재 지도의 일치까지 증명하지는 않는다.
+두 점 사이의 평면 거리는 약 **1.1854 m**, 직선 방위는 약 **2.604°**, 자세 차이는 약
+**0.414°**다. 저장된 yaw는 rad이며 UI는 deg로 표시한다. 파일에 NaN이나 frame_id 오타
+같은 명백한 형식 문제는 보이지 않는다. 이는 추정 정확도나 현재 지도의 일치까지
+증명하지는 않는다.
 
 ## 왜 Point 1은 0,0,0이 아닌가
 
@@ -24,11 +27,11 @@
 4. `OperatorNode.current_pose()`는 TF의 `vslam_map→base`를 조회한다.
 5. `_save_current()`는 그 x/y/yaw를 그대로 저장한다. 첫 저장점을 원점으로 만드는 연산은 없다.
 
-즉 카메라 시작 위치가 지도 원점 부근이어도, 카메라 뒤쪽에 있는 로봇 base의 x는 음수가 될 수 있다. Point 1의 x=-14.7 cm는 이 설명과 일관된다. 다만 당시 전체 `base→link_head_2→d435_camera_center→d435_link` TF와 최초 카메라 포즈가 없으므로 -14.7 cm 전부가 장착 오프셋이라고 단정할 수는 없다. 설정의 mount_x=0.0464 하나만 전체 카메라-base 거리를 뜻하지도 않는다.
+즉 카메라 시작 위치가 지도 원점 부근이어도, 카메라 뒤쪽에 있는 로봇 base의 x는 음수가 될 수 있다. Point 1의 x=-10.8 cm는 이 설명과 일관된다. 다만 당시 전체 `base→link_head_2→d435_camera_center→d435_link` TF와 최초 카메라 포즈가 없으므로 -10.8 cm 전부가 장착 오프셋이라고 단정할 수는 없다. 설정의 mount_x=0.0464 하나만 전체 카메라-base 거리를 뜻하지도 않는다.
 
 [NVIDIA의 frame 정의](https://nvidia-isaac-ros.github.io/v/release-4.1/repositories_and_packages/isaac_ros_visual_slam/isaac_ros_visual_slam/index.html)에서도 추정 포즈는 설정된 base_frame의 위치다. 프로젝트가 LAB에서 설정한 base_frame과 UPC가 웨이포인트에 사용하는 base_frame을 구분해야 한다.
 
-초기 yaw 0.118°에는 초기 추정·장착 변환·저장 시점의 움직임 등의 영향이 있을 수 있다. UI를 띄운 순간이 cuVSLAM 초기화 순간과 같다는 보장도 없다. loop closure는 mapping 중 기존 추정 좌표를 보정할 수 있다.
+초기 yaw -0.218°에는 초기 추정·장착 변환·저장 시점의 움직임 등의 영향이 있을 수 있다. UI를 띄운 순간이 cuVSLAM 초기화 순간과 같다는 보장도 없다. loop closure는 mapping 중 기존 추정 좌표를 보정할 수 있다.
 
 ### 확인 명령
 
@@ -89,7 +92,7 @@ flowchart TD
 
 launch 인자나 ROS 파라미터로 바뀔 수 있으므로 실제 노드 값을 dump해야 한다. tracking이 한 번 false가 되거나 localization healthy가 false가 되어도 활성 게이트는 fault를 latch한다. 센서가 회복되어도 자동 주행 재개는 하지 않으며 취소 완료 후 명시적 enable과 새 goal이 필요하다.
 
-평면 경로 전체 길이 0.648 m가 0.5 m보다 크다는 사실은 pose jump 오류를 의미하지 않는다. jump 검사는 연속 측정 사이의 불연속 변화에 적용된다. mapping loop closure 또는 잘못된 TF로 갑자기 좌표가 바뀌는 경우를 별도로 조사한다.
+평면 경로 전체 길이 1.185 m가 0.5 m보다 크다는 사실은 pose jump 오류를 의미하지 않는다. jump 검사는 연속 측정 사이의 불연속 변화에 적용된다. mapping loop closure 또는 잘못된 TF로 갑자기 좌표가 바뀌는 경우를 별도로 조사한다.
 
 ### “오래된 위치”의 구분
 
@@ -107,9 +110,17 @@ launch 인자나 ROS 파라미터로 바뀔 수 있으므로 실제 노드 값�
 
 ### 추가 구분: Nav2 planner/controller 실패와 최종 제어 차단
 
-Nav2의 SimpleProgressChecker는 현재 설정으로 15초 안에 baseline에서 0.1 m 초과 평면 이동이 있어야 진행으로 본다. Humble 구현은 yaw 변화만을 진행 거리로 세지 않는다. 목표 주변 방향 정렬 지연이나 최종 cmd_vel 차단으로 움직이지 못하면 progress failure의 후보가 된다. 이것만으로 status=5의 원인을 설명할 수는 없으며 보통 서버 실패 상태 6과 구분해서 조사한다. [Humble 구현](https://github.com/ros-navigation/navigation2/blob/humble/nav2_controller/plugins/simple_progress_checker.cpp)
+현재 설정은 `PoseProgressChecker`로 30초 안에 baseline에서 0.03 m를 이동하거나 3°를
+회전하면 progress로 본다. 이전 `SimpleProgressChecker` 0.1 m/15초는 회전만 하는 구간을
+진행으로 세지 않아 status 6의 후보였다. threshold가 정지 VSLAM jitter보다 큰지는 새
+로그의 p95/max로 확인한다. [Humble 구현](https://github.com/ros-navigation/navigation2/blob/humble/nav2_controller/plugins/pose_progress_checker.cpp)
 
-목표 판정에는 x/y뿐 아니라 저장 yaw도 사용한다. 현재 허용 오차는 위치 0.01 m, yaw 0.0174533 rad(1°). 두 점 yaw 차이는 약 14°이므로 위치에 접근한 뒤 회전 단계가 필요할 수 있다. DWB의 RotateToGoal은 목표 근처에서 감속/회전 제약을 적용한다. 실제 controller 로그에 trajectory/progress 오류가 있는지 확인한다. [Humble RotateToGoal](https://github.com/ros-navigation/navigation2/blob/humble/nav2_dwb_controller/dwb_critics/src/rotate_to_goal.cpp)
+목표 판정에는 x/y뿐 아니라 저장 yaw와 odometry 속도도 사용한다. `StoppedGoalChecker`의
+허용 오차는 위치 0.01 m, yaw 0.0174533 rad(1°), 평면/회전 정지 속도 0.02 m/s와
+0.02 rad/s이며 `stateful: false`라 모두 동시에 만족해야 한다. 두 점 yaw 차이는 이미
+1° 이내다. MPPI는 `GoalCritic`과 `GoalAngleCritic`으로 마지막 0.4/0.3 m
+구간을 수렴시키며 `TwirlingCritic`으로 불필요한 회전을 억제한다. 단, Theta* `/plan`
+끝점이 요청 goal과 다르면 MPPI도 그 좌표를 복구하지 못한다.
 
 `rby1_control`도 별도 안전 상태를 검사해 최종 속도를 0으로 만들 수 있다. `/rby1/vslam/nav2_cmd_vel`, `/rby1/cmd_raw`, `/rby1/cmd_vel`을 함께 기록하면 어느 단계에서 막혔는지 구분할 수 있다. Nav2 goal 결과만으로 최종 드라이버가 속도를 받았는지 알 수 없다.
 
@@ -140,19 +151,27 @@ navigation_status에서 state, detail, input_guard, cancel_pending, session_id�
 
 ### 2. 실제 데이터와 최종 속도를 같이 남긴다
 
-이번 조사에서 [capture_navigation_debug.sh](../scripts/capture_navigation_debug.sh)를 추가했다. 상태/포즈/TF/속도/ROS 로그/action 상태를 읽어 기록하며 로봇 이동·enable·cancel 서비스를 호출하지 않는다.
+현재 [capture_navigation_debug.sh](../scripts/capture_navigation_debug.sh)는 공통
+`record_trial.sh --nav2-debug` 수집기를 호출한다. 상태/포즈/TF/속도/ROS 로그,
+parent/child action, global/local path, costmap, parameter event를 읽어 기록하며 로봇
+이동·enable·cancel 서비스나 parameter 변경을 호출하지 않는다. 새 근거리 목표와 status 6
+분석 절차는 [근거리 Nav2 진단/컨트롤러 검토](nav2_close_goal_review.md)를 따른다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/rby1_ros2_ws/install/setup.bash
 # 로봇 stack과 같은 ROS_DOMAIN_ID를 이 터미널에도 적용한다.
-cd ~/rby1_ros2_ws/src/rby1-project/rby1_vslam
-bash scripts/capture_navigation_debug.sh
+cd ~/rby1_ros2_ws/src/rby1-project
+bash rby1_vslam/scripts/capture_navigation_debug.sh
 ```
 
 파라미터 snapshot 수집 후 rosbag recorder가 구독을 시작한 것을 확인하고 Point 1→2를 시도한다. 같은 실행 세션에서, 수동 버튼을 누르지 않고 하나의 goal이 status 4로 완료된 뒤 반대 point를 선택한다. 결과가 5이면 원인 상태를 기록하고 센서/취소 장벽이 회복된 뒤 새 goal을 보낸다. UI에는 자동 왕복 반복 기능이 구현되어 있지 않다.
 
-기록은 Ctrl+C로 종료한다. 결과는 기본 `~/rby1_debug/vslam_<시간>_<고유값>/` 아래에 있으며, `bag`, node parameter dumps, cmd_raw 발행자 목록, 토픽 목록을 포함한다. 이미지 스트림은 기록하지 않는다. `source_waypoints.yaml`은 스크립트 옆 소스 패키지의 기본 파일 복사본이며 경로를 override한 UI 파일과 다를 수 있으므로 waypoint_ui parameter dump도 확인한다.
+기록은 UI에서 로봇을 먼저 정지한 뒤 10초 정도 더 기다리고 Ctrl+C로 종료한다. 결과는
+기본 `~/rby1_debug/nav2_debug_upc_<시간>_<고유값>/` 아래에 있으며 `timing_report.txt`,
+`bag`, 시작/ready/종료 node parameter dumps와 diff, 실제 runtime waypoint/config 사본,
+토픽 목록을 포함한다. 이미지 스트림과 MPPI 후보 `trajectories` 시각화 stream은 기록하지
+않는다. `visualize: false`를 유지해야 controller timing 자체를 바꾸지 않는다.
 
 ### 3. 시계·TF·주기를 확인한다
 

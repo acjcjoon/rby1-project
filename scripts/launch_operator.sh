@@ -9,6 +9,7 @@ if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
 Mode: $MODE / UPC-local Qt UI. Run on UPC; choose only one operator launcher.
 Arguments: name:=value (standard ROS launch arguments).
 VSLAM requires lab_host:=<LAB-IP> and a running LAB VSLAM server.
+VSLAM Nav2 requires the Humble nav2_mppi_controller package on the UPC.
 VSLAM uses IMU by default; enable_imu:=false opts out on UPC (match LAB).
 VSLAM forces the RSUSB librealsense build under ~/librealsense-rsusb-2.58.4.
 Mobile starts only driver, safe control and UI (no TCP/camera/Nav2).
@@ -43,6 +44,8 @@ source "$WORKSPACE_SETUP"
 set -u
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 if [[ "$MODE" == vslam ]]; then
+  ros2 pkg prefix nav2_mppi_controller >/dev/null 2>&1 || \
+    die 'Missing nav2_mppi_controller; install ros-humble-nav2-mppi-controller and rebuild'
   RSUSB_LIB_DIR="${RBY1_RSUSB_LIB_DIR:-${HOME}/librealsense-rsusb-2.58.4/build-rsusb/Release}"
   [[ -r "$RSUSB_LIB_DIR/librealsense2.so.2.58" ]] || \
     die "Missing RSUSB librealsense: $RSUSB_LIB_DIR/librealsense2.so.2.58"

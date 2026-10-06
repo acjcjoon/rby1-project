@@ -20,11 +20,15 @@ UPC/LAB 지연을 정량적으로 기록하려면 **[양쪽 시간 계측 가이
 참고한다. 실행 로직을 바꾸지 않고 JSONL·rosbag 및 선택적 TCP pcap을 수집하여 오프라인
 CSV/그래프 분석에 사용한다.
 
+근거리 waypoint의 Theta* path, MPPI 제어, status 6, localization 보정 점프와 실행 중
+Nav2 parameter를 함께 조사할 때는 **[근거리 Nav2 진단/MPPI 적용](docs/nav2_close_goal_review.md)**를
+따른다. UPC에서 `bash rby1_vslam/scripts/capture_navigation_debug.sh`를 실행하면 된다.
+
 RBY1의 Jetson(Ubuntu 22.04 / ROS 2 Humble)에서 D435i를 읽고, LAB PC의 Ubuntu 24.04 / ROS 2 Jazzy / Isaac ROS 4.5로 TCP 전송해 VSLAM을 계산한다. 결과를 Jetson으로 돌려받아 로봇 베이스 위치로 변환하고, **Jetson의 Nav2**에서 경로를 계산한 뒤 기존 **`/rby1/cmd_raw` (`geometry_msgs/Twist`)**에 발행한다.
 
 이 패키지만 양쪽에 복사해 빌드한다. **Jetson에는 Isaac ROS를 설치하지 않는다.** LAB PC만 Isaac ROS를 실행한다. 실물 전체 절차와 명령은 **[Jetson 실물 실행 가이드](docs/jetson_physical.md)**에 정리되어 있다.
 
-**Nav2와 지도:** `navigation.launch.py`는 Theta* 경로계획 + holonomic DWB 제어 + velocity smoother를 실행한다. 목표 허용오차는 위치 0.01 m, yaw 1°다. cuVSLAM 특징점 지도와 Nav2의 occupancy map은 다른 데이터다. 실물 launch 기본값 `use_scan:=false`에서는 장애물 layer가 제거되며 회피 기능이 없다. LiDAR를 연결한 뒤 `use_scan:=true`로 실행하면 `/scan`으로 local/global obstacle layer를 사용한다. 같은 `vslam_map` 좌표로 정렬된 occupancy map이 있다면 `occupancy_map:=/절대경로/map.yaml` 옵션으로 map_server/static layer를 사용한다.
+**Nav2와 지도:** `navigation.launch.py`는 Theta* 경로계획 + MPPI `Omni` 메카넘 제어 + velocity smoother를 실행한다. 목표 허용오차는 위치 0.01 m, yaw 1°이며 두 조건과 정지 속도(0.02 m/s, 0.02 rad/s)를 동시에 판정한다. 코스트맵은 0.05 m 해상도이고 MPPI는 20 Hz, 0.05 s model step, 2.8 s 예측 지평선을 사용한다. cuVSLAM 특징점 지도와 Nav2의 occupancy map은 다른 데이터다. 실물 launch 기본값 `use_scan:=false`에서는 장애물 layer가 제거되며 회피 기능이 없다. LiDAR를 연결한 뒤 `use_scan:=true`로 실행하면 `/scan`으로 local/global obstacle layer를 사용한다. 같은 `vslam_map` 좌표로 정렬된 occupancy map이 있다면 `occupancy_map:=/절대경로/map.yaml` 옵션으로 map_server/static layer를 사용한다.
 
 ## 담당 범위
 
@@ -317,6 +321,7 @@ cuVGL을 추가하며, 오늘의 pose-hint 절차와 Jetson에는 필요하지 �
 | `/rby1/vslam/odom`, `/rby1/vslam/slam_odom` | `nav_msgs/Odometry` | UPC에서 `base` 위치로 변환 |
 | `/rby1/vslam/bridge_status` | `std_msgs/String` | 각 PC의 로컬 브릿지 JSON 상태 |
 | `/rby1/vslam/timing` | `std_msgs/String` | recorder 구독 중에만 발행되는 session/stamp 내부 경계 이벤트 |
+| `/rby1/vslam/navigation_event` | `std_msgs/String` | 요청 goal 좌표·UUID·최종 action 상태 진단 이벤트 |
 | `/rby1/vslam/nav2_cmd_vel` | `geometry_msgs/Twist` | UPC Nav2 → cmd_raw 게이트 |
 | `/rby1/cmd_raw` | `geometry_msgs/Twist` | UPC 출력, 기존 control 입력 |
 | `/scan` | `sensor_msgs/LaserScan` | UPC Nav2 장애물 costmap 입력 |

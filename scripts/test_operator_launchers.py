@@ -66,6 +66,15 @@ class Launchers(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Missing RSUSB librealsense', result.stderr)
 
+    def test_vslam_rejects_missing_mppi_controller(self):
+        self.ros2.write_text(
+            self.ros2.read_text().splitlines()[0] + '\n'
+            '[[ "$*" == "pkg prefix nav2_mppi_controller" ]] && exit 1\n',
+            encoding='utf-8')
+        result = self.run_script('run_vslam_upc.sh', 'lab_host:=192.0.2.1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing nav2_mppi_controller', result.stderr)
+
     def test_imu_opt_out_is_forwarded_after_default(self):
         result = self.run_script('run_vslam_upc.sh', 'lab_host:=192.0.2.1', 'enable_imu:=false')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -78,7 +87,8 @@ class Launchers(unittest.TestCase):
 
     def test_help_needs_no_ros(self):
         self.env['RBY1_ROS_SETUP'] = '/nonexistent'
-        for script in ('run_mobile_base_upc.sh', 'run_vslam_upc.sh', 'record_trial.sh'):
+        for script in ('run_mobile_base_upc.sh', 'run_vslam_upc.sh', 'record_trial.sh',
+                       'rby1_vslam/scripts/capture_navigation_debug.sh'):
             self.assertEqual(self.run_script(script, '--help').returncode, 0)
 
     def test_qt_requires_desktop(self):
@@ -124,9 +134,25 @@ timeout() { shift; "$@"; }
 
     def test_shell_syntax(self):
         for script in ('scripts/launch_operator.sh', 'run_mobile_base_upc.sh',
-                       'run_vslam_upc.sh', 'record_trial.sh'):
+                       'run_vslam_upc.sh', 'record_trial.sh',
+                       'rby1_vslam/scripts/capture_navigation_debug.sh'):
             result = subprocess.run([BASH, '-n', str(ROOT / script)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_nav2_debug_capture_is_passive_and_complete(self):
+        source = (ROOT / 'record_trial.sh').read_text(encoding='utf-8')
+        for topic in (
+                '/rosout', '/parameter_events', '/tf', '/rby1/vslam/slam_odom',
+                '/rby1/odom', '/rby1/vslam/localization_status',
+                '/rby1/vslam/navigation_status', '/rby1/vslam/navigation_event',
+                '/rby1/vslam/nav2/navigate_to_pose/_action/status',
+                '/rby1/vslam/nav2/compute_path_to_pose/_action/status',
+                '/rby1/vslam/nav2/follow_path/_action/status',
+                '/rby1/vslam/nav2/plan', '/rby1/vslam/nav2/local_plan',
+                '/rby1/vslam/nav2/local_costmap/costmap_raw'):
+            self.assertIn(topic, source)
+        self.assertNotIn('ros2 service call', source)
+        self.assertNotIn('ros2 action send_goal', source)
 
 
 class MobileStop(unittest.TestCase):

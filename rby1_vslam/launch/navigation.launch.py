@@ -86,6 +86,7 @@ def _launch(context):
     for name, package in server_packages.items():
         extra_params = []
         remaps = []
+        arguments = []
         if name == 'map_server':
             extra_params = [{'yaml_filename': occupancy_map, 'frame_id': 'vslam_map',
                              'topic_name': 'map', 'use_sim_time': False}]
@@ -99,10 +100,13 @@ def _launch(context):
                 'default_nav_to_pose_bt_xml': str(share / 'config/navigate_to_pose.xml'),
                 'default_nav_through_poses_bt_xml': str(share / 'config/navigate_through_poses.xml'),
             }]
+        if name in ('planner_server', 'controller_server', 'bt_navigator'):
+            arguments = ['--ros-args', '--log-level', LaunchConfiguration('nav2_log_level')]
         # Existing robot TF is global. Do not move /tf into the Nav2 namespace.
         nodes.append(Node(
             package=package, executable=name, name=name, namespace=namespace,
-            parameters=[params] + extra_params, remappings=remaps, output='screen',
+            parameters=[params] + extra_params, remappings=remaps,
+            arguments=arguments, output='screen',
         ))
     nodes.append(Node(
         package='nav2_lifecycle_manager', executable='lifecycle_manager',
@@ -146,5 +150,8 @@ def generate_launch_description():
         DeclareLaunchArgument('scan_topic', default_value='/scan'),
         DeclareLaunchArgument('use_scan', default_value='true'),
         DeclareLaunchArgument('start_gate', default_value='true'),
+        DeclareLaunchArgument(
+            'nav2_log_level', default_value='info',
+            description='planner/controller/bt_navigator log level (debug|info|warn|error|fatal)'),
         OpaqueFunction(function=_launch),
     ])

@@ -203,7 +203,7 @@ ros2 action send_goal /rby1/vslam/nav2/navigate_to_pose nav2_msgs/action/Navigat
 
 RViz에서는 Fixed Frame=`vslam_map`, `/rby1/vslam/nav2/global_costmap/costmap`, `/rby1/vslam/nav2/local_costmap/costmap`, `/rby1/vslam/nav2/plan`, `/scan`, TF를 표시한다. Nav2 panel의 namespace를 `/rby1/vslam/nav2`로 맞춘 경우 GUI 목표도 사용할 수 있다. CLI action이 namespace 확인에 가장 직접적이다.
 
-현재 설정은 holonomic DWB이며 최대 평면 속도 0.15 m/s, 회전 0.35 rad/s부터 시작한다. 실제 로봇 외곽/접은 팔까지 반영해 `config/navigation.yaml`의 `robot_radius` 또는 footprint와 inflation을 조정한다. 기본 0.45 m radius는 실측값이 아니다. 팔을 뻗은 상태의 충돌 형상을 반영하지 않는다.
+현재 설정은 메카넘 베이스용 MPPI `Omni`이며 `vx/vy/wz` 한도는 0.12/0.08/0.35, 후진 `vx` 한도는 -0.10이다. 대각 합성 속도도 기존 0.15 m/s 평면 한도를 넘지 않는다. controller/model은 20 Hz/0.05 s, 예측 지평선은 2.8 s다. costmap footprint는 베이스 실측 외곽인 전후 0.695 m × 좌우 0.600 m(`base` 기준 x=±0.3475 m, y=±0.3000 m)에 0.05 m padding을 적용하며 MPPI가 polygon 전체로 충돌을 검사한다. 이 polygon은 접은 팔이나 뻗은 팔의 외곽까지 나타내지 않으므로 팔 자세에 따른 추가 충돌 여유는 별도로 검증해야 한다.
 
 정지 및 현재 Nav2 목표 취소:
 

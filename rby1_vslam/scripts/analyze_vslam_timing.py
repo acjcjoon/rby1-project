@@ -29,8 +29,18 @@ SELECTED_TOPICS = (
 RELEVANT_LOG_TERMS = (
     'tracking is lost', 'failed to track', 'failed to get slam pose',
     'stale', 'future clock', 'queue overflow', 'heartbeat timed out',
-    'rejected tcp', 'tcp bridge', 'cancel',
+    'rejected tcp', 'tcp bridge', 'cancel', 'failed to make progress',
+    'progress checker', 'controller patience exceeded', 'no valid trajectories',
+    'optimizer fail to compute path', 'control loop missed its desired rate',
+    'no valid path', 'failed to create plan', 'failed to transform',
+    'could not transform', 'transform timeout', 'transform data too old',
+    'outside map', 'occupied', 'abort',
 )
+
+GOAL_STATUS_NAMES = {
+    0: 'UNKNOWN', 1: 'ACCEPTED', 2: 'EXECUTING', 3: 'CANCELING',
+    4: 'SUCCEEDED', 5: 'CANCELED', 6: 'ABORTED',
+}
 
 EXPECTED_TOPICS = {
     'upc': (
@@ -621,12 +631,17 @@ def goal_status_summary(records):
             value = status.get('status')
             if goal and isinstance(value, int) and last.get(goal) != value:
                 transitions.append({'observed_wall_ns': record.get('observed_wall_ns'),
-                                    'goal_id': goal, 'status': value})
+                                    'observed_monotonic_ns': record.get('observed_monotonic_ns'),
+                                    'goal_id': goal, 'status': value,
+                                    'status_name': GOAL_STATUS_NAMES.get(value, str(value))})
                 last[goal] = value
+    final_names = Counter(GOAL_STATUS_NAMES.get(value, str(value)) for value in last.values())
     return {
         'goals': len(last),
         'final_status_counts': dict(Counter(str(value) for value in last.values())),
+        'final_status_names': dict(final_names),
         'status_5_canceled_goals': sum(value == 5 for value in last.values()),
+        'status_6_aborted_goals': sum(value == 6 for value in last.values()),
         'transitions': transitions,
     }
 
@@ -638,17 +653,457 @@ def relevant_logs(records):
         message = str(record.get('log_message', ''))
         lowered = message.lower()
         terms = [term for term in RELEVANT_LOG_TERMS if term in lowered]
-        if not terms:
+        name = str(record.get('log_name', '')).lower()
+        nav_warning = (int(record.get('log_level', 0)) >= 30 and any(
+            term in name for term in (
+                'nav2', 'controller_server', 'planner_server', 'bt_navigator',
+                'costmap', 'localization_tf', 'nav2_gate', 'waypoint_ui')))
+        if not terms and not nav_warning:
             continue
+        if nav_warning and not terms:
+            terms = ['nav2 warning/error']
         for term in terms:
             counts[term] += 1
         if len(matched) < 100:
             matched.append({
                 'observed_wall_ns': record.get('observed_wall_ns'),
+                'observed_monotonic_ns': record.get('observed_monotonic_ns'),
                 'name': record.get('log_name'), 'level': record.get('log_level'),
                 'message': message,
             })
     return {'counts': dict(counts), 'samples': matched, 'truncated': sum(counts.values()) > 100}
+
+
+def _angle_delta(right, left):
+    return math.atan2(math.sin(right - left), math.cos(right - left))
+
+
+def localization_correction_summary(records, odom_records=(),
+                                    jump_m=0.05, jump_rad=math.radians(5.0),
+                                    goal_tolerance_m=0.01,
+                                    goal_tolerance_rad=math.radians(1.0),
+                                    stopped_linear_mps=0.02,
+                                    stopped_angular_rps=0.02,
+                                    velocity_match_sec=0.25):
+    """Measure vslam_map->odom correction changes, not normal robot motion."""
+    broadcasts = []
+    for record in sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        for transform in record.get('transforms', []):
+            if (transform.get('parent_frame'), transform.get('child_frame')) != (
+                    'vslam_map', 'odom'):
+                continue
+            translation = transform.get('translation')
+            yaw_value = transform.get('yaw')
+            observed = record.get('observed_monotonic_ns')
+            if (not isinstance(translation, list) or len(translation) < 2
+                    or not isinstance(yaw_value, (int, float))
+                    or not isinstance(observed, int)
+                    or not all(math.isfinite(float(value))
+                               for value in (translation[0], translation[1], yaw_value))):
+                continue
+            broadcasts.append({
+                'observed_monotonic_ns': observed,
+                'observed_wall_ns': record.get('observed_wall_ns'),
+                'session_id': str(record.get('bridge_session_id') or ''),
+                'x': float(translation[0]), 'y': float(translation[1]),
+                'yaw': float(yaw_value),
+            })
+    distinct = []
+    for sample in broadcasts:
+        if (distinct and sample['session_id'] == distinct[-1]['session_id']
+                and all(abs(sample[name] - distinct[-1][name]) <= 1e-12
+                        for name in ('x', 'y', 'yaw'))):
+            continue
+        distinct.append(sample)
+    odom_samples = []
+    for record in sorted(odom_records,
+                         key=lambda item: item.get('observed_monotonic_ns', 0)):
+        observed = record.get('observed_monotonic_ns')
+        velocity = record.get('velocity')
+        if (not isinstance(observed, int) or not isinstance(velocity, list)
+                or len(velocity) < 3
+                or not all(isinstance(value, (int, float)) and math.isfinite(value)
+                           for value in velocity[:3])):
+            continue
+        odom_samples.append((observed, [float(value) for value in velocity[:3]]))
+    odom_index = 0
+    match_ns = int(velocity_match_sec * 1e9)
+    for sample in distinct:
+        while (odom_index + 1 < len(odom_samples)
+               and odom_samples[odom_index + 1][0] <= sample['observed_monotonic_ns']):
+            odom_index += 1
+        candidates = odom_samples[odom_index:odom_index + 2] if odom_samples else []
+        nearest = (min(candidates, key=lambda item: abs(
+            item[0] - sample['observed_monotonic_ns'])) if candidates else None)
+        sample['stationary'] = None
+        if nearest is not None and abs(nearest[0] - sample['observed_monotonic_ns']) <= match_ns:
+            vx, vy, wz = nearest[1]
+            sample['stationary'] = (
+                math.hypot(vx, vy) <= stopped_linear_mps
+                and abs(wz) <= stopped_angular_rps)
+            sample['wheel_velocity'] = nearest[1]
+            sample['wheel_velocity_age_ms'] = (
+                sample['observed_monotonic_ns'] - nearest[0]) / 1e6
+    translation_steps = []
+    yaw_steps = []
+    stationary_translation_steps = []
+    stationary_yaw_steps = []
+    stationary_tolerance_exceedances = []
+    jumps = []
+    tolerance_exceedances = []
+    segments = 0
+    previous = None
+    for sample in distinct:
+        if previous is None or sample['session_id'] != previous['session_id']:
+            segments += 1
+            previous = sample
+            continue
+        translation = math.hypot(sample['x'] - previous['x'], sample['y'] - previous['y'])
+        yaw_change = abs(_angle_delta(sample['yaw'], previous['yaw']))
+        translation_steps.append(translation)
+        yaw_steps.append(yaw_change)
+        stationary_step = sample.get('stationary') is True and previous.get('stationary') is True
+        if stationary_step:
+            stationary_translation_steps.append(translation)
+            stationary_yaw_steps.append(yaw_change)
+            if translation > goal_tolerance_m or yaw_change > goal_tolerance_rad:
+                stationary_tolerance_exceedances.append({
+                    'observed_wall_ns': sample['observed_wall_ns'],
+                    'session_id': sample['session_id'],
+                    'translation_m': translation,
+                    'yaw_rad': yaw_change,
+                    'yaw_deg': math.degrees(yaw_change),
+                    'wheel_velocity': sample.get('wheel_velocity'),
+                    'wheel_velocity_age_ms': sample.get('wheel_velocity_age_ms'),
+                })
+        if translation > goal_tolerance_m or yaw_change > goal_tolerance_rad:
+            tolerance_exceedances.append({
+                'observed_wall_ns': sample['observed_wall_ns'],
+                'session_id': sample['session_id'],
+                'translation_m': translation,
+                'yaw_rad': yaw_change,
+                'yaw_deg': math.degrees(yaw_change),
+            })
+        if translation > jump_m or yaw_change > jump_rad:
+            jumps.append({
+                'observed_wall_ns': sample['observed_wall_ns'],
+                'session_id': sample['session_id'],
+                'translation_m': translation,
+                'yaw_rad': yaw_change,
+                'yaw_deg': math.degrees(yaw_change),
+                'from': [previous['x'], previous['y'], previous['yaw']],
+                'to': [sample['x'], sample['y'], sample['yaw']],
+            })
+        previous = sample
+    def session_gaps(samples):
+        return [right['observed_monotonic_ns'] - left['observed_monotonic_ns']
+                for left, right in zip(samples, samples[1:])
+                if right['session_id'] == left['session_id']
+                and right['observed_monotonic_ns'] > left['observed_monotonic_ns']]
+
+    broadcast_gaps = session_gaps(broadcasts)
+    update_gaps = session_gaps(distinct)
+    return {
+        'broadcasts': len(broadcasts), 'distinct_updates': len(distinct),
+        'segments': segments, 'jump_threshold_m': jump_m,
+        'jump_threshold_rad': jump_rad,
+        'goal_tolerance_m': goal_tolerance_m,
+        'goal_tolerance_rad': goal_tolerance_rad,
+        'stopped_linear_mps': stopped_linear_mps,
+        'stopped_angular_rps': stopped_angular_rps,
+        'velocity_match_sec': velocity_match_sec,
+        'translation_step_m': numeric_stats(translation_steps),
+        'yaw_step_rad': numeric_stats(yaw_steps),
+        'stationary_translation_step_m': numeric_stats(stationary_translation_steps),
+        'stationary_yaw_step_rad': numeric_stats(stationary_yaw_steps),
+        'stationary_matched_steps': len(stationary_translation_steps),
+        'stationary_goal_tolerance_exceedance_count': len(
+            stationary_tolerance_exceedances),
+        'stationary_goal_tolerance_exceedances': stationary_tolerance_exceedances[:100],
+        'broadcast_gap_ms': ns_stats_ms(broadcast_gaps),
+        'update_gap_ms': ns_stats_ms(update_gaps),
+        'goal_tolerance_exceedance_count': len(tolerance_exceedances),
+        'goal_tolerance_exceedances': tolerance_exceedances[:100],
+        'jumps': jumps[:100], 'jump_count': len(jumps),
+    }
+
+
+def parameter_event_summary(records):
+    events = []
+    state = {}
+    relevant_prefixes = ('/rby1/vslam/nav2/', '/rby1/vslam/localization_tf',
+                         '/rby1/vslam/nav2_gate')
+    for record in sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        node = str(record.get('parameter_node') or '')
+        if not node.startswith(relevant_prefixes):
+            continue
+        for operation, field in (('new', 'new_parameters'), ('changed', 'changed_parameters')):
+            for parameter in record.get(field, []):
+                name = str(parameter.get('name') or '')
+                value = parameter.get('value')
+                state[(node, name)] = value
+                events.append({'observed_wall_ns': record.get('observed_wall_ns'),
+                               'node': node, 'name': name,
+                               'operation': operation, 'value': value})
+        for name in record.get('deleted_parameters', []):
+            state.pop((node, str(name)), None)
+            events.append({'observed_wall_ns': record.get('observed_wall_ns'),
+                           'node': node, 'name': str(name),
+                           'operation': 'deleted', 'value': None})
+    return {
+        # Declarations normally arrive first. Keep the tail so an initialization
+        # burst cannot hide the runtime changed/deleted events under diagnosis.
+        'messages': len(records), 'events': events[-500:],
+        'event_count': len(events), 'tracked_parameters': len(state),
+        'operation_counts': dict(Counter(item['operation'] for item in events)),
+        'truncated': len(events) > 500,
+        'discarded_initial_events': max(0, len(events) - 500),
+    }
+
+
+def path_quality_summary(records, rosout_records, navigation_event_records=()):
+    import re
+    goal_pattern = re.compile(
+        r'Navigate to (?P<name>.*?): x=(?P<x>[-+0-9.eE]+), '
+        r'y=(?P<y>[-+0-9.eE]+), yaw=(?P<yaw>[-+0-9.eE]+) deg')
+    goals_by_request = {}
+    goal_order = []
+
+    def finite_goal(state):
+        goal = state.get('goal') if isinstance(state, dict) else None
+        if not isinstance(goal, dict):
+            return None
+        values = (goal.get('x'), goal.get('y'), goal.get('yaw'))
+        if not all(isinstance(value, (int, float)) and math.isfinite(value)
+                   for value in values):
+            return None
+        return {
+            'name': str(goal.get('name') or ''),
+            'x': float(values[0]), 'y': float(values[1]), 'yaw': float(values[2]),
+        }
+
+    for record in sorted(navigation_event_records,
+                         key=lambda item: item.get('observed_monotonic_ns', 0)):
+        state = record.get('state')
+        observed = record.get('observed_monotonic_ns')
+        if not isinstance(state, dict) or not isinstance(observed, int):
+            continue
+        event = str(state.get('event') or '')
+        request_id = str(state.get('request_id') or '')
+        goal_values = finite_goal(state)
+        if event == 'requested' and goal_values is not None:
+            # New captures carry a request ID. A unique legacy ID lets us retain
+            # the event for reporting without treating it as accepted.
+            request_id = request_id or f'legacy-{observed}-{len(goal_order)}'
+            entry = {
+                **goal_values, 'request_id': request_id,
+                'requested_ns': observed, 'accepted_ns': None,
+                'terminal_ns': None, 'terminal_event': None,
+                'goal_id': None, 'source': 'navigation_event',
+            }
+            goals_by_request[request_id] = entry
+            goal_order.append(entry)
+            continue
+        entry = goals_by_request.get(request_id) if request_id else None
+        if entry is None and not request_id:
+            # Compatibility for the first schema revision, which emitted the
+            # same goal but no request ID on accepted/terminal events.
+            candidates = [item for item in goal_order
+                          if item['terminal_ns'] is None and
+                          (goal_values is None or (
+                              item['name'] == goal_values['name']
+                              and item['x'] == goal_values['x']
+                              and item['y'] == goal_values['y']
+                              and item['yaw'] == goal_values['yaw']))]
+            entry = candidates[-1] if candidates else None
+        if entry is None:
+            continue
+        if event == 'accepted':
+            entry['accepted_ns'] = observed
+            entry['goal_id'] = str(state.get('goal_id') or '') or None
+        elif event in ('finished', 'rejected', 'send_error', 'result_error'):
+            entry['terminal_ns'] = observed
+            entry['terminal_event'] = event
+
+    structured_goals = [item for item in goal_order
+                        if isinstance(item.get('accepted_ns'), int)
+                        and item.get('terminal_event') not in ('rejected', 'send_error')]
+    fallback_goals = []
+    for record in sorted(rosout_records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        match = goal_pattern.search(str(record.get('log_message', '')))
+        observed = record.get('observed_monotonic_ns')
+        # Structured navigation_event is exact and preferred. The regex keeps
+        # older captures analyzable, but do not duplicate the same request.
+        if match and isinstance(observed, int) and not any(
+                abs(item['requested_ns'] - observed) < 100_000_000
+                for item in goal_order):
+            fallback_goals.append({
+                'requested_ns': observed, 'accepted_ns': observed,
+                'terminal_ns': None, 'terminal_event': None,
+                'request_id': None, 'goal_id': None, 'source': 'rosout',
+                'name': match.group('name'), 'x': float(match.group('x')),
+                'y': float(match.group('y')),
+                'yaw': math.radians(float(match.group('yaw'))),
+            })
+    fallback_goals.sort(key=lambda item: item['accepted_ns'])
+    for left, right in zip(fallback_goals, fallback_goals[1:]):
+        left['terminal_ns'] = right['accepted_ns']
+
+    samples = []
+    sorted_records = sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0))
+    for record in sorted_records:
+        observed = record.get('observed_monotonic_ns')
+        if not isinstance(observed, int):
+            continue
+        sample = {
+            'observed_wall_ns': record.get('observed_wall_ns'),
+            'pose_count': record.get('pose_count'),
+            'path_length_m': record.get('path_length_m'),
+            'direct_distance_m': record.get('direct_distance_m'),
+            'max_step_m': record.get('max_step_m'),
+            'end_pose': record.get('end_pose'),
+        }
+        candidates = [goal for goal in structured_goals
+                      if goal['accepted_ns'] <= observed
+                      and (goal['terminal_ns'] is None or observed <= goal['terminal_ns'])]
+        if not candidates:
+            candidates = [goal for goal in fallback_goals
+                          if goal['accepted_ns'] <= observed
+                          and (goal['terminal_ns'] is None or observed <= goal['terminal_ns'])]
+        goal = max(candidates, key=lambda item: item['accepted_ns']) if candidates else None
+        end = record.get('end_pose')
+        valid_end = (isinstance(end, list) and len(end) >= 3
+                     and all(isinstance(value, (int, float)) and math.isfinite(value)
+                             for value in end[:3]))
+        if goal is not None and valid_end:
+            sample.update(
+                request_id=goal['request_id'], goal_id=goal['goal_id'],
+                goal_source=goal['source'],
+                goal_name=goal['name'], requested_goal=[goal['x'], goal['y'], goal['yaw']],
+                endpoint_error_m=math.hypot(end[0] - goal['x'], end[1] - goal['y']),
+                endpoint_yaw_error_rad=abs(_angle_delta(end[2], goal['yaw'])),
+            )
+        samples.append(sample)
+    lengths = [item['path_length_m'] for item in samples
+               if isinstance(item.get('path_length_m'), (int, float))]
+    endpoint_errors = [item['endpoint_error_m'] for item in samples
+                       if isinstance(item.get('endpoint_error_m'), (int, float))]
+    endpoint_yaw_errors = [item['endpoint_yaw_error_rad'] for item in samples
+                           if isinstance(item.get('endpoint_yaw_error_rad'), (int, float))]
+    return {
+        'plans': len(samples), 'requested_goals_seen': len(goal_order) + len(fallback_goals),
+        'accepted_goals_seen': len(structured_goals) + len(fallback_goals),
+        'matched_plans': len(endpoint_errors),
+        'path_length_m': numeric_stats(lengths),
+        'endpoint_error_m': numeric_stats(endpoint_errors),
+        'endpoint_yaw_error_rad': numeric_stats(endpoint_yaw_errors),
+        'empty_paths': sum(item.get('pose_count') == 0 for item in samples),
+        'single_pose_paths': sum(item.get('pose_count') == 1 for item in samples),
+        'samples': samples[:200], 'truncated': len(samples) > 200,
+    }
+
+
+def state_transition_summary(records):
+    transitions = []
+    previous = object()
+    unhealthy = 0
+    for record in sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        state = record.get('state')
+        if not isinstance(state, dict):
+            continue
+        if state.get('healthy') is False or state.get('state') == 'fault':
+            unhealthy += 1
+        signature = (
+            state.get('healthy'), state.get('enabled'), state.get('state'),
+            state.get('detail'), state.get('session_id'), state.get('tracking_ok'),
+        )
+        if signature == previous:
+            continue
+        transitions.append({
+            'observed_wall_ns': record.get('observed_wall_ns'),
+            'observed_monotonic_ns': record.get('observed_monotonic_ns'),
+            'state': state,
+        })
+        previous = signature
+    return {'samples': len(records), 'unhealthy_samples': unhealthy,
+            'transitions': transitions[:200], 'truncated': len(transitions) > 200}
+
+
+def abort_evidence(goal_summary, messages, child_summaries=None):
+    result = []
+    child_summaries = child_summaries or {}
+    status_topics = (
+        '/rby1/vslam/localization_status', '/rby1/vslam/navigation_status',
+        '/rby1/vslam/bridge_status',
+    )
+    rosout = messages.get('/rosout', [])
+    for transition in goal_summary.get('transitions', []):
+        if transition.get('status') != 6:
+            continue
+        when = transition.get('observed_monotonic_ns')
+        if not isinstance(when, int):
+            continue
+        same_goal_times = [item.get('observed_monotonic_ns')
+                           for item in goal_summary.get('transitions', [])
+                           if item.get('goal_id') == transition.get('goal_id')
+                           and isinstance(item.get('observed_monotonic_ns'), int)
+                           and item['observed_monotonic_ns'] <= when]
+        window_start = min(same_goal_times) if same_goal_times else when - 5_000_000_000
+        warning_logs = []
+        diagnostic_logs = []
+        for record in rosout:
+            observed = record.get('observed_monotonic_ns')
+            if (not isinstance(observed, int)
+                    or not window_start <= observed <= when + 2_000_000_000):
+                continue
+            item = {
+                'observed_monotonic_ns': observed,
+                'offset_sec': (observed - when) / 1e9,
+                'name': record.get('log_name'), 'level': record.get('log_level'),
+                'message': record.get('log_message'),
+            }
+            if int(record.get('log_level', 0)) >= 30:
+                warning_logs.append(item)
+            elif any(term in str(record.get('log_message', '')).lower()
+                     for term in RELEVANT_LOG_TERMS):
+                diagnostic_logs.append(item)
+        selected_logs = warning_logs[-40:] + diagnostic_logs[-15:]
+        selected_logs.sort(key=lambda item: item['observed_monotonic_ns'])
+        for item in selected_logs:
+            item.pop('observed_monotonic_ns', None)
+        child_terminals = {}
+        for action, summary in child_summaries.items():
+            selected = [item for item in summary.get('transitions', [])
+                        if item.get('status') in (4, 5, 6)
+                        and isinstance(item.get('observed_monotonic_ns'), int)
+                        and window_start <= item['observed_monotonic_ns']
+                        <= when + 2_000_000_000]
+            if selected:
+                child_terminals[action] = selected[-20:]
+        latest_states = {}
+        for topic in status_topics:
+            candidates = [record for record in messages.get(topic, [])
+                          if isinstance(record.get('observed_monotonic_ns'), int)
+                          and record['observed_monotonic_ns'] <= when
+                          and isinstance(record.get('state'), dict)]
+            if candidates:
+                record = max(candidates, key=lambda item: item['observed_monotonic_ns'])
+                latest_states[topic] = {
+                    'age_sec': (when - record['observed_monotonic_ns']) / 1e9,
+                    'state': record['state'],
+                }
+        result.append({
+            'goal_id': transition.get('goal_id'),
+            'observed_wall_ns': transition.get('observed_wall_ns'),
+            'observed_monotonic_ns': when,
+            'goal_window_sec': (when - window_start) / 1e9,
+            'nearby_logs': selected_logs, 'latest_states': latest_states,
+            'warning_error_log_count': len(warning_logs),
+            'diagnostic_log_count': len(diagnostic_logs),
+            'logs_truncated': (len(warning_logs) > 40 or len(diagnostic_logs) > 15),
+            'child_terminal_transitions': child_terminals,
+        })
+    return result
 
 
 def pose_adapter_drop_summary(records):
@@ -686,8 +1141,14 @@ def build_report(captures, stale_ms):
     bridge = {}
     visual_status = {}
     goals = {}
+    child_goals = {}
     logs = {}
     adapter_drops = {}
+    corrections = {}
+    parameter_events = {}
+    path_quality = {}
+    status_timelines = {}
+    aborts = {}
     for capture in captures:
         role = capture['role']
         topic_stats[role] = {
@@ -700,9 +1161,34 @@ def build_report(captures, stale_ms):
             capture['messages'].get('/visual_slam/status', []))
         goals[role] = goal_status_summary(capture['messages'].get(
             '/rby1/vslam/nav2/navigate_to_pose/_action/status', []))
+        child_goals[role] = {
+            'compute_path_to_pose': goal_status_summary(capture['messages'].get(
+                '/rby1/vslam/nav2/compute_path_to_pose/_action/status', [])),
+            'follow_path': goal_status_summary(capture['messages'].get(
+                '/rby1/vslam/nav2/follow_path/_action/status', [])),
+        }
         logs[role] = relevant_logs(capture['messages'].get('/rosout', []))
         adapter_drops[role] = pose_adapter_drop_summary(
             capture['messages'].get('/rby1/vslam/timing', []))
+        corrections[role] = localization_correction_summary(
+            capture['messages'].get('/tf', []),
+            capture['messages'].get('/rby1/odom', []))
+        parameter_events[role] = parameter_event_summary(
+            capture['messages'].get('/parameter_events', []))
+        path_quality[role] = path_quality_summary(
+            capture['messages'].get('/rby1/vslam/nav2/plan', []),
+            capture['messages'].get('/rosout', []),
+            capture['messages'].get('/rby1/vslam/navigation_event', []))
+        status_timelines[role] = {
+            name: state_transition_summary(capture['messages'].get(topic, []))
+            for name, topic in (
+                ('localization', '/rby1/vslam/localization_status'),
+                ('navigation', '/rby1/vslam/navigation_status'),
+                ('bridge', '/rby1/vslam/bridge_status'),
+            )
+        }
+        aborts[role] = abort_evidence(
+            goals[role], capture['messages'], child_goals[role])
 
     end_to_end = build_end_to_end(captures, stale_ms)
 
@@ -824,6 +1310,46 @@ def build_report(captures, stale_ms):
     canceled = goals.get('upc', {}).get('status_5_canceled_goals', 0)
     if canceled:
         findings.append(f'UPC recorded {canceled} NavigateToPose goals ending in status 5 (canceled).')
+    aborted = goals.get('upc', {}).get('status_6_aborted_goals', 0)
+    if aborted:
+        findings.append(
+            f'UPC recorded {aborted} NavigateToPose goals ending in status 6 (ABORTED); '
+            'inspect the correlated Nav2 logs and child action states below.')
+    upc_correction = corrections.get('upc', {})
+    if upc_correction.get('goal_tolerance_exceedance_count'):
+        findings.append(
+            f'UPC vslam_map->odom changed by more than the 1 cm / 1 deg goal tolerance '
+            f'{upc_correction["goal_tolerance_exceedance_count"]} times; inspect whether '
+            'these updates occurred while the base was stationary or converging on the goal.')
+    if upc_correction.get('stationary_goal_tolerance_exceedance_count'):
+        findings.append(
+            f'UPC vslam_map->odom exceeded 1 cm / 1 deg while wheel odometry classified '
+            f'the base as stationary '
+            f'{upc_correction["stationary_goal_tolerance_exceedance_count"]} times; '
+            'this is directly large enough to disturb the requested goal tolerance.')
+    if upc_correction.get('jump_count'):
+        largest = (upc_correction.get('translation_step_m') or {}).get('max')
+        largest_yaw = (upc_correction.get('yaw_step_rad') or {}).get('max')
+        findings.append(
+            f'UPC vslam_map->odom correction exceeded the diagnostic jump threshold '
+            f'{upc_correction["jump_count"]} times '
+            f'(max {largest:.4f} m, {math.degrees(largest_yaw):.2f} deg).')
+    upc_paths = path_quality.get('upc', {})
+    endpoint_max = (upc_paths.get('endpoint_error_m') or {}).get('max')
+    if isinstance(endpoint_max, (int, float)) and endpoint_max > 0.01:
+        findings.append(
+            f'UPC global plan endpoint differs from the requested waypoint by as much as '
+            f'{endpoint_max:.4f} m, above the 0.01 m goal tolerance.')
+    endpoint_yaw_max = (upc_paths.get('endpoint_yaw_error_rad') or {}).get('max')
+    if (isinstance(endpoint_yaw_max, (int, float))
+            and endpoint_yaw_max > math.radians(1.0)):
+        findings.append(
+            f'UPC global plan endpoint yaw differs from the requested waypoint by as much as '
+            f'{math.degrees(endpoint_yaw_max):.2f} deg, above the 1 deg goal tolerance.')
+    if upc_paths.get('single_pose_paths'):
+        findings.append(
+            f'UPC planner emitted {upc_paths["single_pose_paths"]} single-pose global paths; '
+            'check whether close start/goal poses quantized to the same costmap cell.')
     upc_adapter_drops = adapter_drops.get('upc', {})
     if upc_adapter_drops.get('samples'):
         findings.append(
@@ -871,6 +1397,24 @@ def build_report(captures, stale_ms):
     for capture in captures:
         if capture['malformed_lines']:
             warnings.append(f'{capture["role"]}: ignored {capture["malformed_lines"]} malformed JSONL lines.')
+        if capture['role'] == 'upc' and not parameter_events.get('upc', {}).get('messages'):
+            warnings.append(
+                'UPC did not observe /parameter_events; do not infer that Nav2 parameters '
+                'were unchanged. Compare params_start/params_end snapshots.')
+        if capture['role'] == 'upc' and not corrections.get('upc', {}).get('broadcasts'):
+            warnings.append(
+                'UPC did not observe vslam_map->odom on /tf; localization correction '
+                'jump analysis is unavailable.')
+        if capture['role'] == 'upc' and capture.get('start', {}).get('nav2_debug'):
+            quality = path_quality.get('upc', {})
+            if not quality.get('plans'):
+                warnings.append(
+                    'UPC Nav2 debug capture saw no /plan messages; either planning never '
+                    'succeeded or the plan publisher/subscription was unavailable.')
+            elif quality.get('accepted_goals_seen') and not quality.get('matched_plans'):
+                warnings.append(
+                    'UPC saw accepted navigation requests and plans but could not correlate '
+                    'their accepted-to-terminal lifetimes; inspect navigation_event delivery.')
     if len(captures) == 2 and not end_to_end['samples']:
         warnings.append(
             'No complete internal timing samples were matched. Rebuild both bridge nodes, '
@@ -896,8 +1440,14 @@ def build_report(captures, stale_ms):
         'bridge': bridge,
         'visual_slam_status': visual_status,
         'navigate_to_pose': goals,
+        'child_actions': child_goals,
         'relevant_logs': logs,
         'pose_adapter_drops': adapter_drops,
+        'localization_correction': corrections,
+        'parameter_events': parameter_events,
+        'path_quality': path_quality,
+        'status_timelines': status_timelines,
+        'aborted_goal_evidence': aborts,
         'findings': findings,
         'warnings': warnings,
     }
@@ -1006,7 +1556,126 @@ def render_text(report):
             lines.append(f'- {role} cuVSLAM vo_state counts: {state["vo_state_counts"]}')
     upc_goals = report['navigate_to_pose'].get('upc')
     if upc_goals:
-        lines.append(f'- UPC NavigateToPose final statuses: {upc_goals["final_status_counts"]}')
+        lines.append(f'- UPC NavigateToPose final statuses: {upc_goals["final_status_names"]}')
+    for action, summary in report.get('child_actions', {}).get('upc', {}).items():
+        if summary.get('goals'):
+            lines.append(f'- UPC {action} final statuses: {summary["final_status_names"]}')
+    correction = report.get('localization_correction', {}).get('upc', {})
+    if correction.get('broadcasts'):
+        translation = correction.get('translation_step_m') or {}
+        yaw_steps = correction.get('yaw_step_rad') or {}
+        stationary_translation = correction.get('stationary_translation_step_m') or {}
+        stationary_yaw = correction.get('stationary_yaw_step_rad') or {}
+        update_gaps = correction.get('update_gap_ms') or {}
+        lines.extend([
+            '', 'Localization correction (vslam_map -> odom)',
+            f'- broadcasts={correction["broadcasts"]}, distinct_updates={correction["distinct_updates"]}, '
+            f'segments={correction["segments"]}, '
+            f'over_1cm_or_1deg={correction["goal_tolerance_exceedance_count"]}, '
+            f'over_5cm_or_5deg={correction["jump_count"]}',
+            f'- distinct update gap: p50={format_number(update_gaps.get("p50"), 2)} ms, '
+            f'p95={format_number(update_gaps.get("p95"), 2)} ms, '
+            f'p99={format_number(update_gaps.get("p99"), 2)} ms, '
+            f'max={format_number(update_gaps.get("max"), 2)} ms',
+            f'- translation step: p50={format_number(translation.get("p50"), 4)} m, '
+            f'p95={format_number(translation.get("p95"), 4)} m, '
+            f'p99={format_number(translation.get("p99"), 4)} m, '
+            f'max={format_number(translation.get("max"), 4)} m',
+            f'- yaw step: p50={format_number(None if yaw_steps.get("p50") is None else math.degrees(yaw_steps["p50"]), 3)} deg, '
+            f'p95={format_number(None if yaw_steps.get("p95") is None else math.degrees(yaw_steps["p95"]), 3)} deg, '
+            f'p99={format_number(None if yaw_steps.get("p99") is None else math.degrees(yaw_steps["p99"]), 3)} deg, '
+            f'max={format_number(None if yaw_steps.get("max") is None else math.degrees(yaw_steps["max"]), 3)} deg',
+            f'- stationary-matched steps={correction.get("stationary_matched_steps", 0)}, '
+            f'over_1cm_or_1deg={correction.get("stationary_goal_tolerance_exceedance_count", 0)} '
+            f'(stopped <= {correction.get("stopped_linear_mps", 0):.3f} m/s, '
+            f'{correction.get("stopped_angular_rps", 0):.3f} rad/s)',
+            f'- stationary translation step: '
+            f'p95={format_number(stationary_translation.get("p95"), 4)} m, '
+            f'p99={format_number(stationary_translation.get("p99"), 4)} m, '
+            f'max={format_number(stationary_translation.get("max"), 4)} m',
+            f'- stationary yaw step: '
+            f'p95={format_number(None if stationary_yaw.get("p95") is None else math.degrees(stationary_yaw["p95"]), 3)} deg, '
+            f'p99={format_number(None if stationary_yaw.get("p99") is None else math.degrees(stationary_yaw["p99"]), 3)} deg, '
+            f'max={format_number(None if stationary_yaw.get("max") is None else math.degrees(stationary_yaw["max"]), 3)} deg',
+        ])
+        for step in correction.get('stationary_goal_tolerance_exceedances', [])[:10]:
+            lines.append(
+                f'  stationary over tolerance wall_ns={step.get("observed_wall_ns")}: '
+                f'{step["translation_m"]:.4f} m, {step["yaw_deg"]:.2f} deg, '
+                f'wheel={step.get("wheel_velocity")}')
+        for step in correction.get('goal_tolerance_exceedances', [])[:10]:
+            lines.append(
+                f'  over tolerance wall_ns={step.get("observed_wall_ns")}: '
+                f'{step["translation_m"]:.4f} m, {step["yaw_deg"]:.2f} deg')
+        for jump in correction.get('jumps', [])[:10]:
+            lines.append(
+                f'  jump wall_ns={jump.get("observed_wall_ns")}: '
+                f'{jump["translation_m"]:.4f} m, {jump["yaw_deg"]:.2f} deg')
+    paths = report.get('path_quality', {}).get('upc', {})
+    if paths.get('plans'):
+        endpoint = paths.get('endpoint_error_m') or {}
+        endpoint_yaw = paths.get('endpoint_yaw_error_rad') or {}
+        lengths = paths.get('path_length_m') or {}
+        lines.extend([
+            '', 'Global path quality',
+            f'- plans={paths["plans"]}, requested_goals_seen={paths["requested_goals_seen"]}, '
+            f'accepted_goals_seen={paths.get("accepted_goals_seen", 0)}, '
+            f'matched_plans={paths.get("matched_plans", 0)}, '
+            f'empty={paths["empty_paths"]}, single_pose={paths["single_pose_paths"]}',
+            f'- path length: p50={format_number(lengths.get("p50"), 3)} m, '
+            f'max={format_number(lengths.get("max"), 3)} m',
+            f'- requested goal -> plan endpoint error: '
+            f'p50={format_number(endpoint.get("p50"), 4)} m, '
+            f'p95={format_number(endpoint.get("p95"), 4)} m, '
+            f'max={format_number(endpoint.get("max"), 4)} m',
+            f'- requested yaw -> plan endpoint yaw error: '
+            f'p50={format_number(None if endpoint_yaw.get("p50") is None else math.degrees(endpoint_yaw["p50"]), 3)} deg, '
+            f'p95={format_number(None if endpoint_yaw.get("p95") is None else math.degrees(endpoint_yaw["p95"]), 3)} deg, '
+            f'max={format_number(None if endpoint_yaw.get("max") is None else math.degrees(endpoint_yaw["max"]), 3)} deg',
+        ])
+    params = report.get('parameter_events', {}).get('upc', {})
+    lines.extend([
+        '', 'Nav2/localization parameter events',
+        f'- parameter-event messages={params.get("messages", 0)}, '
+        f'relevant events={params.get("event_count", 0)}, '
+        f'tracked parameters={params.get("tracked_parameters", 0)}, '
+        f'operations={params.get("operation_counts", {})}',
+    ])
+    for event in params.get('events', [])[-30:]:
+        lines.append(
+            f'  {event["operation"]}: {event["node"]}.{event["name"]}={event["value"]!r}')
+    aborts = report.get('aborted_goal_evidence', {}).get('upc', [])
+    if aborts:
+        lines.extend(['', 'ABORTED (status 6) evidence windows'])
+        for abort in aborts:
+            lines.append(
+                f'- goal={str(abort.get("goal_id") or "")[:12]} '
+                f'wall_ns={abort.get("observed_wall_ns")} '
+                f'window={abort.get("goal_window_sec", 0):.2f}s '
+                f'warn/error={abort.get("warning_error_log_count", 0)} '
+                f'diagnostic={abort.get("diagnostic_log_count", 0)}')
+            for topic, state in abort.get('latest_states', {}).items():
+                payload = state.get('state', {})
+                lines.append(
+                    f'  latest {topic} ({state.get("age_sec", 0):.3f}s old): '
+                    f'{payload.get("state", payload.get("healthy"))} / '
+                    f'{payload.get("detail", payload.get("reason", ""))}')
+            for action, transitions in abort.get('child_terminal_transitions', {}).items():
+                for transition in transitions:
+                    child_when = transition.get('observed_monotonic_ns')
+                    parent_when = abort.get('observed_monotonic_ns')
+                    offset = ((child_when - parent_when) / 1e9
+                              if isinstance(child_when, int) and isinstance(parent_when, int)
+                              else None)
+                    offset_text = '' if offset is None else f' ({offset:+.3f}s)'
+                    lines.append(
+                        f'  child {action}: goal={str(transition.get("goal_id") or "")[:12]} '
+                        f'{transition.get("status_name", transition.get("status"))}'
+                        f'{offset_text}')
+            for log in abort.get('nearby_logs', []):
+                lines.append(
+                    f'  rosout {log["offset_sec"]:+.3f}s [{log.get("name")}] '
+                    f'{log.get("message")}')
     for role, log_summary in sorted(report['relevant_logs'].items()):
         if log_summary['counts']:
             lines.append(f'- {role} relevant log counts: {log_summary["counts"]}')
