@@ -11,6 +11,7 @@ from std_msgs.msg import String
 from .data_source import JsonDataSource
 from .lab_config import load_lab_config
 from .planner_client import MockPlannerClient
+from .ros_planner_client import RosPlannerClient
 from .runtime_engine import RuntimeEngine
 from .simulation import ScheduleSimulator
 
@@ -23,6 +24,8 @@ class SchedulerNode(Node):
         self.declare_parameter('scheduler_output_path', str(mock / 'scheduler_output.json'))
         self.declare_parameter('scheduler_events_path', str(mock / 'scheduler_events.jsonl'))
         self.declare_parameter('lab_config_path', str(share / 'config' / 'lab.yaml'))
+        self.declare_parameter('planner_mode', 'ros')
+        self.declare_parameter('planner_action_name', 'planner/execute_transfer')
         self.declare_parameter('mock_planner_duration_sec', 4.0)
         #서버 읽기 어댑터 -> HttpDataSource(server_url)로 교체 예정
         self.source = JsonDataSource(
@@ -30,7 +33,23 @@ class SchedulerNode(Node):
             self.get_parameter('scheduler_output_path').value,
             self.get_parameter('scheduler_events_path').value,
         )
-        self.engine = RuntimeEngine(MockPlannerClient(float(self.get_parameter('mock_planner_duration_sec').value)))
+        self.planner_mode = str(
+            self.get_parameter('planner_mode').value
+        ).strip().lower()
+        if self.planner_mode == 'ros':
+            planner = RosPlannerClient(
+                self,
+                str(self.get_parameter('planner_action_name').value),
+            )
+        elif self.planner_mode == 'mock':
+            planner = MockPlannerClient(float(
+                self.get_parameter('mock_planner_duration_sec').value
+            ))
+        else:
+            raise ValueError(
+                "planner_mode must be either 'ros' or 'mock'"
+            )
+        self.engine = RuntimeEngine(planner)
         self.lab_config_path = str(self.get_parameter('lab_config_path').value)
         self.lab = load_lab_config(self.lab_config_path)
         self.simulator = ScheduleSimulator(self.lab)
@@ -43,7 +62,10 @@ class SchedulerNode(Node):
         self._last_output = 0.0
         self._force_reload = True
         self.timer = self.create_timer(0.2, self._tick)
-        self.get_logger().info('Scheduler ready with JSON mock server and mock planner.')
+        self.get_logger().info(
+            f'Scheduler ready with JSON data source and {self.planner_mode} '
+            'planner client.'
+        )
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -62,7 +84,12 @@ class SchedulerNode(Node):
             for event in events:
                 self.event_pub.publish(String(data=json.dumps(event, ensure_ascii=False)))
         state = self.engine.snapshot()
-        ui_state = {**state, 'simulation': self.simulation, 'environment': self.lab.summary(), 'planner_mode': 'mock'}
+        ui_state = {
+            **state,
+            'simulation': self.simulation,
+            'environment': self.lab.summary(),
+            'planner_mode': self.planner_mode,
+        }
         self.state_pub.publish(String(data=json.dumps(ui_state, ensure_ascii=False)))
         if events or now - self._last_output >= 1.0:
             self._last_output = now

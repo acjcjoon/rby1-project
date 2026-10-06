@@ -2,3 +2,84 @@
 {"sequence":1,"timestamp":"2026-09-29T11:05:42.264735+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
 {"sequence":2,"timestamp":"2026-09-29T11:16:15.260419+00:00","type":"task_promoted","task_id":"B002.T01","reason":"PyQt operator"}
 {"sequence":3,"timestamp":"2026-09-29T11:16:23.867340+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":1,"timestamp":"2026-10-06T05:14:46.294698+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":1,"timestamp":"2026-10-06T06:19:59.383035+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":1,"timestamp":"2026-10-06T06:52:52.241032+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T06:53:19.936464+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"STORE"}
+{"sequence":3,"timestamp":"2026-10-06T06:53:19.937883+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-0b9aa9859df7"}
+{"sequence":4,"timestamp":"2026-10-06T06:53:32.439728+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-0b9aa9859df7","reason":"motion command did not complete: gripper command timed out before reaching its target"}
+{"sequence":5,"timestamp":"2026-10-06T06:53:48.286902+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"STORE"}
+{"sequence":6,"timestamp":"2026-10-06T06:53:48.288410+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-374fb1800092"}
+{"sequence":7,"timestamp":"2026-10-06T06:53:57.239380+00:00","type":"task_failed","task_id":"MANUAL.T002","mission_id":"mission-374fb1800092","reason":"motion command did not complete: gripper command timed out before reaching its target"}
+{"sequence":8,"timestamp":"2026-10-06T07:17:50.484866+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T003","source":"INBOX","destination":"STORE"}
+{"sequence":9,"timestamp":"2026-10-06T07:17:50.486034+00:00","type":"task_started","task_id":"MANUAL.T003","mission_id":"mission-5af20e7a62e4"}
+{"sequence":10,"timestamp":"2026-10-06T07:17:55.639301+00:00","type":"task_failed","task_id":"MANUAL.T003","mission_id":"mission-5af20e7a62e4","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (1168.471s)"}
+{"sequence":11,"timestamp":"2026-10-06T07:18:01.245005+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T004","source":"INBOX","destination":"STORE"}
+{"sequence":12,"timestamp":"2026-10-06T07:18:01.246118+00:00","type":"task_started","task_id":"MANUAL.T004","mission_id":"mission-d2dcdeccefcb"}
+{"sequence":13,"timestamp":"2026-10-06T07:18:06.439302+00:00","type":"task_failed","task_id":"MANUAL.T004","mission_id":"mission-d2dcdeccefcb","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (1179.221s)"}
+{"sequence":14,"timestamp":"2026-10-06T07:25:03.874740+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T005","source":"INBOX","destination":"STORE"}
+{"sequence":15,"timestamp":"2026-10-06T07:25:03.875880+00:00","type":"task_started","task_id":"MANUAL.T005","mission_id":"mission-e62a8d05b731"}
+{"sequence":16,"timestamp":"2026-10-06T07:25:09.039310+00:00","type":"task_failed","task_id":"MANUAL.T005","mission_id":"mission-e62a8d05b731","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (3.073s)"}
+{"sequence":17,"timestamp":"2026-10-06T07:25:14.872399+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T006","source":"INBOX","destination":"STORE"}
+{"sequence":18,"timestamp":"2026-10-06T07:25:14.873475+00:00","type":"task_started","task_id":"MANUAL.T006","mission_id":"mission-99fc3d294f7e"}
+{"sequence":19,"timestamp":"2026-10-06T07:25:20.039287+00:00","type":"task_failed","task_id":"MANUAL.T006","mission_id":"mission-99fc3d294f7e","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (4.665s)"}
+{"sequence":20,"timestamp":"2026-10-06T07:25:28.733217+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T007","source":"INBOX","destination":"STORE"}
+{"sequence":21,"timestamp":"2026-10-06T07:25:28.734268+00:00","type":"task_started","task_id":"MANUAL.T007","mission_id":"mission-d0cac3aef857"}
+{"sequence":22,"timestamp":"2026-10-06T07:25:33.840501+00:00","type":"task_failed","task_id":"MANUAL.T007","mission_id":"mission-d0cac3aef857","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (3.772s)"}
+{"sequence":1,"timestamp":"2026-10-06T07:26:15.514780+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T07:26:19.249000+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"STORE"}
+{"sequence":3,"timestamp":"2026-10-06T07:26:19.249919+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-ce1a1368482f"}
+{"sequence":4,"timestamp":"2026-10-06T07:26:21.113771+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-ce1a1368482f","reason":"motion command did not complete: gripper state is unavailable or stale; check the driver"}
+{"sequence":5,"timestamp":"2026-10-06T07:31:04.450121+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"STORE"}
+{"sequence":6,"timestamp":"2026-10-06T07:31:04.451194+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-ea7d9ead6545"}
+{"sequence":7,"timestamp":"2026-10-06T07:31:09.513125+00:00","type":"task_failed","task_id":"MANUAL.T002","mission_id":"mission-ea7d9ead6545","reason":"camera [d435] detection timed out for 'tag_2' after 5.000s: object 'tag_2' observation is stale (3.373s)"}
+{"sequence":1,"timestamp":"2026-10-06T07:42:59.865468+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T07:44:06.392949+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"INBOX"}
+{"sequence":3,"timestamp":"2026-10-06T07:44:06.394096+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-31b3ee7884ac"}
+{"sequence":4,"timestamp":"2026-10-06T07:44:06.463336+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-31b3ee7884ac","reason":"Planner rejected the transfer goal"}
+{"sequence":5,"timestamp":"2026-10-06T07:44:44.520791+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"INBOX"}
+{"sequence":6,"timestamp":"2026-10-06T07:44:44.521792+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-fa16160a550a"}
+{"sequence":7,"timestamp":"2026-10-06T07:44:44.664001+00:00","type":"task_failed","task_id":"MANUAL.T002","mission_id":"mission-fa16160a550a","reason":"Planner rejected the transfer goal"}
+{"sequence":8,"timestamp":"2026-10-06T07:44:49.606115+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T003","source":"INBOX","destination":"INBOX"}
+{"sequence":9,"timestamp":"2026-10-06T07:44:49.607083+00:00","type":"task_started","task_id":"MANUAL.T003","mission_id":"mission-158f4fa0350e"}
+{"sequence":10,"timestamp":"2026-10-06T07:44:49.662141+00:00","type":"task_failed","task_id":"MANUAL.T003","mission_id":"mission-158f4fa0350e","reason":"Planner rejected the transfer goal"}
+{"sequence":11,"timestamp":"2026-10-06T07:44:51.666549+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T004","source":"INBOX","destination":"INBOX"}
+{"sequence":12,"timestamp":"2026-10-06T07:44:51.667473+00:00","type":"task_started","task_id":"MANUAL.T004","mission_id":"mission-d83552d49099"}
+{"sequence":13,"timestamp":"2026-10-06T07:44:51.862097+00:00","type":"task_failed","task_id":"MANUAL.T004","mission_id":"mission-d83552d49099","reason":"Planner rejected the transfer goal"}
+{"sequence":14,"timestamp":"2026-10-06T07:44:52.987805+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T005","source":"INBOX","destination":"INBOX"}
+{"sequence":15,"timestamp":"2026-10-06T07:44:52.988785+00:00","type":"task_started","task_id":"MANUAL.T005","mission_id":"mission-7e14f6cd5eac"}
+{"sequence":16,"timestamp":"2026-10-06T07:44:53.062100+00:00","type":"task_failed","task_id":"MANUAL.T005","mission_id":"mission-7e14f6cd5eac","reason":"Planner rejected the transfer goal"}
+{"sequence":17,"timestamp":"2026-10-06T07:44:54.053610+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T006","source":"INBOX","destination":"INBOX"}
+{"sequence":18,"timestamp":"2026-10-06T07:44:54.054571+00:00","type":"task_started","task_id":"MANUAL.T006","mission_id":"mission-35e27b23901a"}
+{"sequence":19,"timestamp":"2026-10-06T07:44:54.062111+00:00","type":"task_failed","task_id":"MANUAL.T006","mission_id":"mission-35e27b23901a","reason":"Planner rejected the transfer goal"}
+{"sequence":20,"timestamp":"2026-10-06T07:44:55.429611+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T007","source":"INBOX","destination":"INBOX"}
+{"sequence":21,"timestamp":"2026-10-06T07:44:55.430570+00:00","type":"task_started","task_id":"MANUAL.T007","mission_id":"mission-bac318590618"}
+{"sequence":22,"timestamp":"2026-10-06T07:44:55.462121+00:00","type":"task_failed","task_id":"MANUAL.T007","mission_id":"mission-bac318590618","reason":"Planner rejected the transfer goal"}
+{"sequence":23,"timestamp":"2026-10-06T07:46:38.294401+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T008","source":"INBOX","destination":"STORE"}
+{"sequence":24,"timestamp":"2026-10-06T07:46:38.295379+00:00","type":"task_started","task_id":"MANUAL.T008","mission_id":"mission-59c2c314a68f"}
+{"sequence":25,"timestamp":"2026-10-06T07:46:44.662104+00:00","type":"task_failed","task_id":"MANUAL.T008","mission_id":"mission-59c2c314a68f","reason":"another manipulation motion is active"}
+{"sequence":26,"timestamp":"2026-10-06T07:48:25.432996+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T009","source":"INBOX","destination":"STORE"}
+{"sequence":27,"timestamp":"2026-10-06T07:48:25.434033+00:00","type":"task_started","task_id":"MANUAL.T009","mission_id":"mission-de8b8d4cb258"}
+{"sequence":28,"timestamp":"2026-10-06T07:48:30.862165+00:00","type":"task_failed","task_id":"MANUAL.T009","mission_id":"mission-de8b8d4cb258","reason":"motion command did not complete: Part 3 already being controlled"}
+{"sequence":29,"timestamp":"2026-10-06T07:48:58.070118+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T010","source":"INBOX","destination":"STORE"}
+{"sequence":30,"timestamp":"2026-10-06T07:48:58.071479+00:00","type":"task_started","task_id":"MANUAL.T010","mission_id":"mission-574294495a8f"}
+{"sequence":31,"timestamp":"2026-10-06T07:49:03.862108+00:00","type":"task_failed","task_id":"MANUAL.T010","mission_id":"mission-574294495a8f","reason":"motion command did not complete: kCanceled"}
+{"sequence":1,"timestamp":"2026-10-06T07:53:55.726131+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T07:54:03.662608+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"STORE"}
+{"sequence":3,"timestamp":"2026-10-06T07:54:03.663757+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-77e782135dc8"}
+{"sequence":4,"timestamp":"2026-10-06T07:54:10.724609+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-77e782135dc8","reason":"motion command did not complete: kCanceled"}
+{"sequence":5,"timestamp":"2026-10-06T07:57:00.801875+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"STORE"}
+{"sequence":6,"timestamp":"2026-10-06T07:57:00.802836+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-2e80706fdbaf"}
+{"sequence":7,"timestamp":"2026-10-06T07:57:06.726518+00:00","type":"task_failed","task_id":"MANUAL.T002","mission_id":"mission-2e80706fdbaf","reason":"motion command did not complete: kCanceled"}
+{"sequence":1,"timestamp":"2026-10-06T07:58:41.488471+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T07:59:01.927348+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"STORE"}
+{"sequence":3,"timestamp":"2026-10-06T07:59:01.928454+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-fc82f65effcb"}
+{"sequence":4,"timestamp":"2026-10-06T07:59:08.886951+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-fc82f65effcb","reason":"motion command did not complete: kCanceled"}
+{"sequence":1,"timestamp":"2026-10-06T08:06:59.604104+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}
+{"sequence":2,"timestamp":"2026-10-06T08:07:14.555647+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T001","source":"INBOX","destination":"STORE"}
+{"sequence":3,"timestamp":"2026-10-06T08:07:14.556700+00:00","type":"task_started","task_id":"MANUAL.T001","mission_id":"mission-c9db33b8079e"}
+{"sequence":4,"timestamp":"2026-10-06T08:07:50.359614+00:00","type":"task_cancel_requested","task_id":"MANUAL.T001"}
+{"sequence":5,"timestamp":"2026-10-06T08:07:50.402329+00:00","type":"task_failed","task_id":"MANUAL.T001","mission_id":"mission-c9db33b8079e","reason":"Transfer canceled by scheduler"}
+{"sequence":6,"timestamp":"2026-10-06T08:09:27.152546+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"STORE"}
+{"sequence":7,"timestamp":"2026-10-06T08:09:27.153440+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-3624ea7127ae"}
+{"sequence":8,"timestamp":"2026-10-06T08:10:22.802375+00:00","type":"task_completed","task_id":"MANUAL.T002","mission_id":"mission-3624ea7127ae"}

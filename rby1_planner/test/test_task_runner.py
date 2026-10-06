@@ -12,6 +12,7 @@ from rby1_planner.navigation_protocol import (
     NavigationCommandStatus,
 )
 from rby1_planner.task_commands import Task
+from rby1_planner.task_lifecycle import TaskRunStatus
 from rby1_planner.task_runner import PlannerTaskRunner
 
 
@@ -169,10 +170,14 @@ def test_runner_uses_ros_timer_and_resolves_relative_joint_command():
     node = FakeNode()
     backend = FakeBackend()
     messages = []
+    progress = []
+    results = []
     runner = PlannerTaskRunner(
         node,
         backend,
         on_status=messages.append,
+        on_progress=progress.append,
+        on_finished=results.append,
         clock=lambda: backend.now,
     )
     assert not node.timer.active
@@ -190,6 +195,11 @@ def test_runner_uses_ros_timer_and_resolves_relative_joint_command():
     assert not runner.active
     assert not node.timer.active
     assert messages[-1] == 'Task completed: relative'
+    assert progress[0].phase == 'starting'
+    assert progress[1].phase == 'joint_relative'
+    assert progress[-1].phase == 'joint_relative'
+    assert progress[-1].progress == 1.0
+    assert results[-1].status is TaskRunStatus.SUCCEEDED
 
 
 def test_runner_rewinds_for_requested_total_run_count():
@@ -573,10 +583,12 @@ def test_stop_finishes_runner_when_cancellation_raises():
     backend = FakeBackend()
     backend.cancel_error = RuntimeError('cancel transport unavailable')
     messages = []
+    results = []
     runner = PlannerTaskRunner(
         node,
         backend,
         on_status=messages.append,
+        on_finished=results.append,
         clock=lambda: backend.now,
     )
     runner.start(Task('delay').delay(1.0).build())
@@ -587,6 +599,7 @@ def test_stop_finishes_runner_when_cancellation_raises():
     assert not node.timer.active
     assert 'Task cancel warning: cancel transport unavailable' in messages
     assert messages[-1] == 'Task stopped'
+    assert results[-1].status is TaskRunStatus.CANCELED
 
 
 def test_camera_step_resolves_only_after_previous_motion_completes():
@@ -816,7 +829,7 @@ def test_camera_step_times_out_without_sending_a_motion():
 
     assert not runner.active
     assert backend.commands == []
-    assert 'camera detection timed out for \'tag_5\'' in messages[-1]
+    assert "camera [d405] detection timed out for 'tag_5'" in messages[-1]
     assert camera.reason in messages[-1]
 
 
@@ -920,7 +933,10 @@ def test_camera_step_averages_distinct_frames_and_discards_outlier():
     assert backend.commands[0].values == pytest.approx(
         (1.0, 2.0, 3.0, 0.0, 0.0, 0.0)
     )
-    assert "Camera average 'tag_0': collected=4, kept=3, discarded=1" in messages
+    assert (
+        "Camera average [d405] 'tag_0': collected=4, kept=3, discarded=1"
+        in messages
+    )
 
 
 def test_camera_step_logs_target_and_actual_tcp_after_motion_succeeds():
@@ -1049,7 +1065,7 @@ def test_camera_step_requires_an_injected_camera_client():
 
     assert not runner.active
     assert backend.commands == []
-    assert 'requires a camera client' in messages[-1]
+    assert "camera source 'd405' is unavailable" in messages[-1]
 
 
 def test_camera_step_does_not_reuse_wait_state_after_stop():

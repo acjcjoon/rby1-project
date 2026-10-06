@@ -9,7 +9,9 @@ from .camera import CameraClient
 from .control_client import ControlClient
 from .navigation_client import NavigationClient
 from .task_commands import RunnableTaskDefinition
+from .task_lifecycle import TaskProgress, TaskRunResult
 from .task_runner import PlannerTaskRunner
+from .transfer_action_server import TransferActionServer
 
 
 class PlannerNode(Node):
@@ -56,6 +58,10 @@ class PlannerNode(Node):
         self.declare_parameter(
             'navigation_state_topic',
             '/rby1/navigation/state',
+        )
+        self.declare_parameter(
+            'transfer_action_name',
+            'planner/execute_transfer',
         )
 
         shared_camera_options = {
@@ -119,6 +125,7 @@ class PlannerNode(Node):
                 self.get_parameter('navigation_state_topic').value
             ),
         )
+        self.transfer_action_server = None
         self.task_runner = PlannerTaskRunner(
             self,
             self.control,
@@ -126,6 +133,8 @@ class PlannerNode(Node):
             cameras=self.cameras,
             navigation=self.navigation_client,
             on_status=self._task_status,
+            on_progress=self._task_progress,
+            on_finished=self._task_finished,
             camera_average_enabled=bool(
                 self.get_parameter('object_pose_average_enabled').value
             ),
@@ -140,8 +149,13 @@ class PlannerNode(Node):
                 ).value
             ),
         )
+        self.transfer_action_server = TransferActionServer(
+            self,
+            self.task_runner,
+            str(self.get_parameter('transfer_action_name').value),
+        )
         self.get_logger().info(
-            'Planner is ready and idle; no automatic task is configured.'
+            'Planner is ready and idle; transfer Action server is available.'
         )
 
     def run_task(self, task: RunnableTaskDefinition) -> None:
@@ -158,6 +172,9 @@ class PlannerNode(Node):
         try:
             self.task_runner.close()
         finally:
+            if self.transfer_action_server is not None:
+                self.transfer_action_server.destroy()
+                self.transfer_action_server = None
             # This stops base/manipulator motion and turns Stream off, but does
             # not power off the robot or disable its servos.
             self.control.shutdown_safely(turn_stream_off=True)
@@ -175,6 +192,14 @@ class PlannerNode(Node):
 
     def _task_status(self, message: str) -> None:
         self.get_logger().info(message)
+
+    def _task_progress(self, progress: TaskProgress) -> None:
+        if self.transfer_action_server is not None:
+            self.transfer_action_server.on_progress(progress)
+
+    def _task_finished(self, result: TaskRunResult) -> None:
+        if self.transfer_action_server is not None:
+            self.transfer_action_server.on_finished(result)
 
 
 __all__ = ['PlannerNode']

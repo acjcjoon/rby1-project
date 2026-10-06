@@ -7,9 +7,8 @@ from .qt import (
 )
 
 LOCATIONS = [
-    ('INBOX', 'INBOX'), ('STORE', 'STORE'), ('HOLD', 'HOLD'),
-    ('LH1', 'LH1'), ('LH2', 'LH2'), ('Zeta', 'ZS'),
-    ('Micro', 'MPR'), ('Incubator', 'INC'), ('WASTE', 'WASTE'),
+    ('INBOX', 'INBOX'), ('STORE', 'STORE'),
+    ('LH1', 'LH1'), ('LH2', 'LH2'),
 ]
 
 class CommunicationTestTab(QWidget):

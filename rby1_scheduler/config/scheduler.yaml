@@ -1,3 +1,5 @@
 /**:
   ros__parameters:
+    planner_mode: ros
+    planner_action_name: planner/execute_transfer
     mock_planner_duration_sec: 4.0

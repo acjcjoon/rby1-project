@@ -1,20 +1,20 @@
 locations:
-  A:
+  INBOX:
     position: [0.0, 0.0]
     side: right
     tag_2:
       offset: [-0.05, 0.06250, -0.009]
-  B:
+  STORE:
     position: [ -0.50, 0.0]
     side: right
     tag_1:
       offset: [-0.05, 0.06250, -0.009]
-  C:
+  LH1:
     position: [0.0, 0.81]
     side: left
     tag_3:
       offset: [-0.05, 0.06250, -0.009]
-  D:
+  LH2:
     position: [0.60, 0.81]
     side: left
     tag_0:

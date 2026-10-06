@@ -11,6 +11,10 @@
     navigation_command_topic: /rby1/navigation/command
     navigation_state_topic: /rby1/navigation/state
 
+    # Scheduler-to-planner ROS Action endpoint. With namespace=rby1 this is
+    # exposed as /rby1/planner/execute_transfer.
+    transfer_action_name: planner/execute_transfer
+
     # Camera-specific AprilTag identity/freshness inputs. Processed poses come
     # from the corresponding TF prefix, not from the detection message.
     d405_object_pose_topic: /detections

@@ -7,6 +7,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/ExecuteTransfer.action"
   "msg/DetectedObjectPose.msg"
   DEPENDENCIES geometry_msgs std_msgs
 )

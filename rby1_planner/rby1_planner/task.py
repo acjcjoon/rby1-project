@@ -257,22 +257,26 @@ def pick_up_move_and_put_down_object2(
     start_point에 있다고 간주한다. YAML 파일 자체는 변경하지 않는다.
     """
     global current_position
+    previous_position = current_position
+    try:
+        locations = _load_move_locations()
+        _move_location(locations, start_point)
+        _move_location(locations, end_point)
+        current_point = current_position
+        if current_point is None:
+            current_point = _load_current_location()
+        if current_point is None:
+            current_point = start_point
+        _move_location(locations, current_point)
 
-    locations = _load_move_locations()
-    _move_location(locations, start_point)
-    _move_location(locations, end_point)
-    current_point = current_position
-    if current_point is None:
-        current_point = _load_current_location()
-    if current_point is None:
-        current_point = start_point
-    _move_location(locations, current_point)
-
-    task = Task('pick_up_move_and_put_down_object2')
-    if current_point != start_point:
-        task.extend(turn_and_move(current_point, start_point))
-    task.extend(pick_up_move_and_put_down_object(start_point, end_point))
-    definition = task.build()
+        task = Task('pick_up_move_and_put_down_object2')
+        if current_point != start_point:
+            task.extend(turn_and_move(current_point, start_point))
+        task.extend(pick_up_move_and_put_down_object(start_point, end_point))
+        definition = task.build()
+    except Exception:
+        current_position = previous_position
+        raise
 
     # 명령 생성이 성공한 경우에만 다음 호출의 출발 위치를 갱신한다.
     current_position = end_point
@@ -284,26 +288,26 @@ def object_handover_demo_final() -> RunnableTaskDefinition:
 
     task.extend(object_gripping_initial_pose_torso_right())
 
-    task.extend(pick_up_object_at('A'))
-    task.extend(turn_and_move('A', 'C'))
-    task.extend(put_down_object_at('C'))
+    task.extend(pick_up_object_at('INBOX'))
+    task.extend(turn_and_move('INBOX', 'LH1'))
+    task.extend(put_down_object_at('LH1'))
 
-    task.extend(turn_and_move('C', 'B'))
-    task.extend(pick_up_object_at('B'))
-    task.extend(turn_and_move('B', 'D'))
-    task.extend(put_down_object_at('D'))
+    task.extend(turn_and_move('LH1', 'STORE'))
+    task.extend(pick_up_object_at('STORE'))
+    task.extend(turn_and_move('STORE', 'LH2'))
+    task.extend(put_down_object_at('LH2'))
 
-    task.extend(turn_and_move('D', 'C'))
-    task.extend(pick_up_object_at('C'))
-    task.extend(turn_and_move('C', 'A'))
-    task.extend(put_down_object_at('A'))
+    task.extend(turn_and_move('LH2', 'LH1'))
+    task.extend(pick_up_object_at('LH1'))
+    task.extend(turn_and_move('LH1', 'INBOX'))
+    task.extend(put_down_object_at('INBOX'))
 
-    task.extend(turn_and_move('A', 'D'))
-    task.extend(pick_up_object_at('D'))
-    task.extend(turn_and_move('D', 'B'))
-    task.extend(put_down_object_at('B'))
+    task.extend(turn_and_move('INBOX', 'LH2'))
+    task.extend(pick_up_object_at('LH2'))
+    task.extend(turn_and_move('LH2', 'STORE'))
+    task.extend(put_down_object_at('STORE'))
 
-    task.extend(turn_and_move('B', 'A'))
+    task.extend(turn_and_move('STORE', 'INBOX'))
 
     return task.build()
 
@@ -313,15 +317,15 @@ def object_handover_demo_final_tmp() -> RunnableTaskDefinition:
 
     task.extend(object_gripping_initial_pose_torso_right())
 
-    task.extend(pick_up_move_and_put_down_object2('A', 'C'))
+    task.extend(pick_up_move_and_put_down_object2('INBOX', 'LH1'))
 
-    task.extend(pick_up_move_and_put_down_object2('B', 'D'))
+    task.extend(pick_up_move_and_put_down_object2('STORE', 'LH2'))
 
-    task.extend(pick_up_move_and_put_down_object2('C', 'A'))
+    task.extend(pick_up_move_and_put_down_object2('LH1', 'INBOX'))
 
-    task.extend(pick_up_move_and_put_down_object2('D', 'B'))
+    task.extend(pick_up_move_and_put_down_object2('LH2', 'STORE'))
 
-    task.extend(turn_and_move('B', 'A'))
+    task.extend(turn_and_move('STORE', 'INBOX'))
 
     return task.build()
 
@@ -345,6 +349,7 @@ __all__ = [
     'object_gripping_initial_pose_torso_left',
     'pick_up_object_at',
     'put_down_object_at',
+    'pick_up_move_and_put_down_object',
     'pick_up_move_and_put_down_object2',
     'object_handover_demo_final',
 ]

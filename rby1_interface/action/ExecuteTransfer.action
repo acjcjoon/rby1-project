@@ -1,0 +1,23 @@
+uint16 PROTOCOL_VERSION=1
+
+uint16 protocol_version
+string task_id
+string plate_id
+string barcode
+string source
+string source_slot
+string destination
+string destination_slot
+---
+uint8 OK=0
+uint8 INVALID_GOAL=1
+uint8 BUSY=2
+uint8 EXECUTION_FAILED=3
+uint8 CANCELED=4
+
+uint8 error_code
+string message
+---
+string phase
+float32 progress
+string message

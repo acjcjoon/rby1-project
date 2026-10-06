@@ -36,6 +36,7 @@ from .task_commands import (
     TaskDefinition,
     list_sum,
 )
+from .task_lifecycle import TaskProgress, TaskRunResult, TaskRunStatus
 
 
 class PlannerTaskRunner:
@@ -59,6 +60,8 @@ class PlannerTaskRunner:
         navigation=None,
         on_status: Optional[Callable[[str], None]] = None,
         on_active_changed: Optional[Callable[[bool], None]] = None,
+        on_progress: Optional[Callable[[TaskProgress], None]] = None,
+        on_finished: Optional[Callable[[TaskRunResult], None]] = None,
         clock: Callable[[], float] = time.monotonic,
         period_sec: float = 0.05,
         camera_average_enabled: bool = False,
@@ -100,11 +103,14 @@ class PlannerTaskRunner:
         self.camera_average_outlier_count = int(camera_average_outlier_count)
         self.on_status = on_status or (lambda _message: None)
         self.on_active_changed = on_active_changed or (lambda _active: None)
+        self.on_progress = on_progress or (lambda _progress: None)
+        self.on_finished = on_finished or (lambda _result: None)
         self.clock = clock
         self._timer = node.create_timer(float(period_sec), self.tick)
         self._timer.cancel()
         self._task: Optional[RunnableTaskDefinition] = None
         self._index = 0
+        self._progress_step_index = -1
         self._command_id: Optional[str] = None
         self._active_command: Optional[TaskCommand] = None
         self._command_deadline = 0.0
@@ -147,6 +153,7 @@ class PlannerTaskRunner:
         self._require_safe_state(self.backend.task_state(), require_idle=True)
         self._task = task
         self._index = 0
+        self._progress_step_index = -1
         self._command_id = None
         self._active_command = None
         self._command_deadline = 0.0
@@ -172,12 +179,21 @@ class PlannerTaskRunner:
         self._run_number = 1
         self.on_active_changed(True)
         self.on_status(f'Task started: {task.name}')
+        self.on_progress(TaskProgress(
+            task_name=task.name,
+            phase='starting',
+            completed_steps=0,
+            total_steps=len(task.commands),
+            progress=0.0,
+            message=f'Task started: {task.name}',
+        ))
         self._timer.reset()
         self.tick()
 
     def stop(self, reason: str = 'Task stopped') -> None:
         if not self.active:
             return
+        name = self.task_name
         try:
             self._cancel_active_motion()
         except Exception as exc:
@@ -185,6 +201,11 @@ class PlannerTaskRunner:
         finally:
             self._finish()
         self.on_status(reason)
+        self.on_finished(TaskRunResult(
+            task_name=name,
+            status=TaskRunStatus.CANCELED,
+            message=reason,
+        ))
 
     def close(self) -> None:
         if self.active:
@@ -268,10 +289,29 @@ class PlannerTaskRunner:
             if self._index >= len(self._task.commands):
                 name = self._task.name
                 self._finish()
-                self.on_status(f'Task completed: {name}')
+                message = f'Task completed: {name}'
+                self.on_status(message)
+                self.on_finished(TaskRunResult(
+                    task_name=name,
+                    status=TaskRunStatus.SUCCEEDED,
+                    message=message,
+                ))
                 return
 
             command = self._task.commands[self._index]
+            if self._progress_step_index != self._index:
+                self._progress_step_index = self._index
+                total = len(self._task.commands)
+                self.on_progress(TaskProgress(
+                    task_name=self._task.name,
+                    phase=self._command_phase(command),
+                    completed_steps=self._index,
+                    total_steps=total,
+                    progress=self._index / total,
+                    message=(
+                        f'Task step {self._index + 1}/{total} started'
+                    ),
+                ))
 
             if isinstance(command, RewindStep):
                 self._rewind(command)
@@ -1006,6 +1046,7 @@ class PlannerTaskRunner:
 
         self._run_number += 1
         self._index = 0
+        self._progress_step_index = -1
         self._camera_marker_ns = None
         self._camera_deadline = None
         self._camera_observations = []
@@ -1024,6 +1065,12 @@ class PlannerTaskRunner:
         )
 
     def _complete_step(self) -> None:
+        task = self._task
+        command = (
+            task.commands[self._index]
+            if task is not None and self._index < len(task.commands)
+            else None
+        )
         self._camera_marker_ns = None
         self._camera_deadline = None
         self._camera_observations = []
@@ -1031,10 +1078,39 @@ class PlannerTaskRunner:
         self._camera_idle_deadline = None
         self._pending_camera_navigation_goal = None
         self._index += 1
-        if self._task is not None:
-            self.on_status(
-                f'Task step {self._index}/{len(self._task.commands)} completed'
-            )
+        if task is not None:
+            total = len(task.commands)
+            message = f'Task step {self._index}/{total} completed'
+            self.on_status(message)
+            self.on_progress(TaskProgress(
+                task_name=task.name,
+                phase=self._command_phase(command),
+                completed_steps=self._index,
+                total_steps=total,
+                progress=min(1.0, self._index / total),
+                message=message,
+            ))
+
+    @staticmethod
+    def _command_phase(command) -> str:
+        if command is None:
+            return 'running'
+        kind = getattr(command, 'kind', None)
+        if isinstance(kind, CommandKind):
+            return kind.value
+        if isinstance(command, CameraMoveToTagStep):
+            return 'align_to_tag'
+        if isinstance(command, CameraFrameLinearAbsoluteStep):
+            return 'camera_frame_linear_absolute'
+        if isinstance(command, CameraLinearAbsolutePrintStep):
+            return 'camera_linear_absolute_print'
+        if isinstance(command, CameraLinearAbsoluteStep):
+            return 'camera_linear_absolute'
+        if isinstance(command, MoveToStep):
+            return 'move_to'
+        if isinstance(command, RewindStep):
+            return 'rewind'
+        return type(command).__name__.removesuffix('Step').lower()
 
     def _cancel_active_motion(self) -> None:
         command_cancel_requested = False
@@ -1063,6 +1139,7 @@ class PlannerTaskRunner:
         self._timer.cancel()
         self._task = None
         self._index = 0
+        self._progress_step_index = -1
         self._command_id = None
         self._active_command = None
         self._command_deadline = 0.0
@@ -1096,7 +1173,13 @@ class PlannerTaskRunner:
         except Exception as exc:
             self.on_status(f'Task cancel warning: {exc}')
         self._finish()
-        self.on_status(f'Task failed ({name}): {message}')
+        status_message = f'Task failed ({name}): {message}'
+        self.on_status(status_message)
+        self.on_finished(TaskRunResult(
+            task_name=name,
+            status=TaskRunStatus.FAILED,
+            message=message,
+        ))
 
     def _resolve(
         self,
