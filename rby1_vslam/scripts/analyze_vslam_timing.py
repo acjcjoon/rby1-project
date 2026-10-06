@@ -296,6 +296,30 @@ def build_end_to_end(captures, stale_ms=500.0):
     def need_stamp(stage, kind, stamp, after=None):
         return _first_after(upc_stamp.get((stage, kind, stamp), []), after)
 
+    # Keep every raw tracking pose that made it back to UPC, including poses
+    # that PoseAdapter later rejects as stale.  The original end-to-end sample
+    # set intentionally contains only successful final base poses, which can
+    # otherwise make a threshold plot look healthy by hiding rejected tails.
+    raw_return_samples = []
+    raw_return_by_key = {}
+    for start in starts:
+        session = str(start['session_id'])
+        stamp = start['source_stamp_ns']
+        returned = need(
+            upc_session, 'upc_pose_published', 'tracking_odom',
+            session, stamp, start['monotonic_ns'])
+        if returned is None:
+            continue
+        latency_ms = (returned['monotonic_ns'] - start['monotonic_ns']) / 1_000_000.0
+        sample = {
+            'session_id': session, 'source_stamp_ns': stamp,
+            'upc_start_wall_ns': start['wall_ns'],
+            'latency_ms': latency_ms,
+            'over_threshold': latency_ms > stale_ms,
+        }
+        raw_return_samples.append(sample)
+        raw_return_by_key[(session, stamp)] = sample
+
     for start in starts:
         session = str(start['session_id'])
         stamp = start['source_stamp_ns']
@@ -403,14 +427,71 @@ def build_end_to_end(captures, stale_ms=500.0):
     by_session = defaultdict(list)
     for sample in samples:
         by_session[sample['session_id']].append(sample)
-    for session, values in sorted(
-            by_session.items(), key=lambda item: min(v['upc_start_wall_ns'] for v in item[1])):
+    starts_by_session = defaultdict(list)
+    for start in starts:
+        starts_by_session[str(start['session_id'])].append(start)
+    raw_by_session = defaultdict(list)
+    for sample in raw_return_samples:
+        raw_by_session[sample['session_id']].append(sample)
+
+    funnel_definitions = (
+        ('camera_enqueued', 'UPC camera frames enqueued'),
+        ('upc_socket_sent', 'UPC stereo socket sent'),
+        ('lab_published', 'LAB stereo delivered'),
+        ('lab_pose', 'cuVSLAM tracking pose'),
+        ('upc_socket_received', 'UPC pose socket received'),
+        ('upc_published', 'UPC pose DDS published'),
+        ('base_pose', 'Final base pose published'),
+    )
+
+    for session, session_starts in sorted(
+            starts_by_session.items(),
+            key=lambda item: min(v['wall_ns'] for v in item[1])):
+        values = by_session.get(session, [])
+        raw_values = raw_by_session.get(session, [])
+        start_count = len(session_starts)
+        stage_counts = Counter()
+        for start in session_starts:
+            stamp = start['source_stamp_ns']
+            after = start['monotonic_ns']
+            stage_counts['camera_enqueued'] += 1
+            stage_counts['upc_socket_sent'] += need(
+                upc_session, 'upc_stereo_socket_sent', 'stereo',
+                session, stamp, after) is not None
+            stage_counts['lab_published'] += need(
+                lab_session, 'lab_stereo_published', 'stereo',
+                session, stamp) is not None
+            stage_counts['lab_pose'] += need(
+                lab_session, 'lab_pose_enqueued', 'tracking_odom',
+                session, stamp) is not None
+            stage_counts['upc_socket_received'] += need(
+                upc_session, 'upc_pose_socket_received', 'tracking_odom',
+                session, stamp, after) is not None
+            stage_counts['upc_published'] += (session, stamp) in raw_return_by_key
+            stage_counts['base_pose'] += need_stamp(
+                'upc_pose_adapter_published', 'odom', stamp, after) is not None
+        funnel = []
+        previous = None
+        for key, label in funnel_definitions:
+            count = stage_counts[key]
+            funnel.append({
+                'key': key, 'label': label, 'count': count,
+                'fraction_of_started': count / start_count if start_count else None,
+                'fraction_of_previous': count / previous if previous else None,
+                'dropped_from_previous': (previous - count) if previous is not None else 0,
+            })
+            previous = count
         summary = {
             'session_id': session,
-            'started': started_by_session[session], 'complete': len(values),
-            'completion_fraction': (len(values) / started_by_session[session]
-                                    if started_by_session[session] else None),
+            'started': start_count, 'complete': len(values),
+            'completion_fraction': len(values) / start_count if start_count else None,
             'samples_over_threshold': sum(value['over_threshold'] for value in values),
+            'raw_returned': len(raw_values),
+            'raw_return_samples_over_threshold': sum(
+                value['over_threshold'] for value in raw_values),
+            'raw_return_pose_ms': numeric_stats([
+                value['latency_ms'] for value in raw_values]),
+            'funnel': funnel,
         }
         summary.update({field: numeric_stats([
             value[field] for value in values
@@ -424,11 +505,48 @@ def build_end_to_end(captures, stale_ms=500.0):
             value['forward_one_way_wall_ms'] >= 0
             and value['return_one_way_wall_ms'] >= 0 for value in values)
         sessions.append(summary)
+
+    # Ten-second delivery bins expose outages and rejection bursts that a
+    # successful-samples-only scatter plot cannot show.
+    delivery_bins = []
+    if starts:
+        first_wall_ns = min(start['wall_ns'] for start in starts)
+        bin_width_ns = 10_000_000_000
+        bins = defaultdict(lambda: {
+            'started': 0, 'raw_returned': 0, 'raw_over_threshold': 0,
+            'final': 0,
+        })
+        final_keys = {(sample['session_id'], sample['source_stamp_ns'])
+                      for sample in samples}
+        for start in starts:
+            key = (str(start['session_id']), start['source_stamp_ns'])
+            index = (start['wall_ns'] - first_wall_ns) // bin_width_ns
+            bucket = bins[int(index)]
+            bucket['started'] += 1
+            raw = raw_return_by_key.get(key)
+            if raw is not None:
+                bucket['raw_returned'] += 1
+                bucket['raw_over_threshold'] += raw['over_threshold']
+            bucket['final'] += key in final_keys
+        for index, bucket in sorted(bins.items()):
+            started_count = bucket['started']
+            bucket.update({
+                'elapsed_s': index * 10.0,
+                'raw_return_fraction': (bucket['raw_returned'] / started_count
+                                        if started_count else None),
+                'final_fraction': (bucket['final'] / started_count
+                                   if started_count else None),
+                'raw_over_threshold_fraction': (
+                    bucket['raw_over_threshold'] / bucket['raw_returned']
+                    if bucket['raw_returned'] else None),
+            })
+            delivery_bins.append(bucket)
     return {
         'started': len(starts), 'complete': len(samples),
         'completion_fraction': len(samples) / len(starts) if starts else None,
         'incomplete_reasons': dict(incomplete), 'sessions': sessions,
-        'samples': samples,
+        'samples': samples, 'raw_return_samples': raw_return_samples,
+        'delivery_bins': delivery_bins,
     }
 
 
@@ -458,7 +576,8 @@ def bridge_summary(records):
     mailboxes = {}
     for direction in ('tx_mailbox', 'rx_mailbox'):
         result = {}
-        for metric in ('enqueued', 'drained', 'replaced', 'expired'):
+        for metric in ('enqueued', 'drained', 'replaced', 'expired', 'dropped_oldest',
+                       'discarded_on_clear'):
             by_kind = defaultdict(list)
             for state in states:
                 values = state.get(direction, {}).get(metric, {})
@@ -532,6 +651,16 @@ def relevant_logs(records):
     return {'counts': dict(counts), 'samples': matched, 'truncated': sum(counts.values()) > 100}
 
 
+def pose_adapter_drop_summary(records):
+    reasons = Counter()
+    for record in records:
+        state = record.get('state')
+        if not isinstance(state, dict) or state.get('stage') != 'upc_pose_adapter_dropped':
+            continue
+        reasons[str(state.get('reason') or 'unknown')] += 1
+    return {'samples': sum(reasons.values()), 'reasons': dict(reasons)}
+
+
 def degraded(upstream, downstream, stale_ms):
     if not upstream or not downstream:
         return False
@@ -558,6 +687,7 @@ def build_report(captures, stale_ms):
     visual_status = {}
     goals = {}
     logs = {}
+    adapter_drops = {}
     for capture in captures:
         role = capture['role']
         topic_stats[role] = {
@@ -571,6 +701,8 @@ def build_report(captures, stale_ms):
         goals[role] = goal_status_summary(capture['messages'].get(
             '/rby1/vslam/nav2/navigate_to_pose/_action/status', []))
         logs[role] = relevant_logs(capture['messages'].get('/rosout', []))
+        adapter_drops[role] = pose_adapter_drop_summary(
+            capture['messages'].get('/rby1/vslam/timing', []))
 
     end_to_end = build_end_to_end(captures, stale_ms)
 
@@ -659,10 +791,25 @@ def build_report(captures, stale_ms):
         stereo_replaced = maximum_counter(state, 'tx_mailbox', 'replaced', 'stereo')
         if stereo_replaced:
             findings.append(f'{role.upper()} TX latest-only queue replaced {stereo_replaced} stereo packets before send.')
-        pose_replaced = sum(maximum_counter(state, 'tx_mailbox', 'replaced', kind)
-                            for kind in ('tracking_odom', 'slam_odom'))
-        if pose_replaced:
-            findings.append(f'{role.upper()} TX latest-only queue replaced {pose_replaced} pose packets before send.')
+        for direction, label in (('tx_mailbox', 'TX'), ('rx_mailbox', 'RX')):
+            pose_replaced = sum(maximum_counter(state, direction, 'replaced', kind)
+                                for kind in ('tracking_odom', 'slam_odom'))
+            if pose_replaced:
+                findings.append(
+                    f'{role.upper()} {label} latest-only queue replaced '
+                    f'{pose_replaced} pose packets.')
+            pose_dropped = sum(maximum_counter(state, direction, 'dropped_oldest', kind)
+                               for kind in ('tracking_odom', 'slam_odom'))
+            if pose_dropped:
+                findings.append(
+                    f'{role.upper()} {label} bounded pose FIFO dropped '
+                    f'{pose_dropped} oldest packets at capacity.')
+            pose_cleared = sum(maximum_counter(state, direction, 'discarded_on_clear', kind)
+                               for kind in ('tracking_odom', 'slam_odom'))
+            if pose_cleared:
+                findings.append(
+                    f'{role.upper()} {label} discarded {pose_cleared} queued pose '
+                    'packets during session reset/shutdown.')
 
     lab_vo = visual_status.get('lab', {}).get('vo_state_counts', {})
     unhealthy_vo = sum(count for value, count in lab_vo.items() if value != '1')
@@ -677,6 +824,11 @@ def build_report(captures, stale_ms):
     canceled = goals.get('upc', {}).get('status_5_canceled_goals', 0)
     if canceled:
         findings.append(f'UPC recorded {canceled} NavigateToPose goals ending in status 5 (canceled).')
+    upc_adapter_drops = adapter_drops.get('upc', {})
+    if upc_adapter_drops.get('samples'):
+        findings.append(
+            f'UPC PoseAdapter explicitly dropped {upc_adapter_drops["samples"]} poses: '
+            f'{upc_adapter_drops["reasons"]}.')
     component_labels = {
         'upc_tx_queue_socket_ms': 'UPC TX queue/socket',
         'network_roundtrip_residual_ms': 'TCP roundtrip residual',
@@ -687,6 +839,18 @@ def build_report(captures, stale_ms):
         'pose_adapter_ms': 'PoseAdapter',
     }
     for session in end_to_end.get('sessions', []):
+        completion = session.get('completion_fraction')
+        if isinstance(completion, (int, float)) and completion < 0.9:
+            findings.append(
+                f'Session {session["session_id"][:12]} published final base poses for only '
+                f'{session["complete"]}/{session["started"]} camera frames '
+                f'({100 * completion:.1f}%); inspect the delivery funnel and queue replacements.')
+        raw_over = session.get('raw_return_samples_over_threshold', 0)
+        if raw_over:
+            findings.append(
+                f'Session {session["session_id"][:12]} returned {raw_over}/'
+                f'{session.get("raw_returned", 0)} raw camera poses over {stale_ms:g} ms; '
+                'PoseAdapter rejection hides these from successful end-to-end samples.')
         if not session['samples_over_threshold']:
             continue
         means = {label: (session.get(field) or {}).get('mean')
@@ -733,6 +897,7 @@ def build_report(captures, stale_ms):
         'visual_slam_status': visual_status,
         'navigate_to_pose': goals,
         'relevant_logs': logs,
+        'pose_adapter_drops': adapter_drops,
         'findings': findings,
         'warnings': warnings,
     }
@@ -785,18 +950,23 @@ def render_text(report):
     end_to_end = report.get('end_to_end', {})
     lines.extend([
         '', 'Per-session internal timing',
-        f'session       complete/started  total_p50  total_p95  total_max  '
-        f'>{report["stale_threshold_ms"]:g}  '
+        f'session       complete/started  raw_p95  raw_max  raw>{report["stale_threshold_ms"]:g}  '
+        'total_p50  total_p95  total_max  '
+        f'final>{report["stale_threshold_ms"]:g}  '
         'tcp_resid_mean  vslam_mean  adapter_mean',
     ])
     for session in end_to_end.get('sessions', []):
         total = session.get('total_ms') or {}
+        raw = session.get('raw_return_pose_ms') or {}
         transport = session.get('network_roundtrip_residual_ms') or {}
         vslam = session.get('lab_vslam_ms') or {}
         adapter = session.get('pose_adapter_ms') or {}
         lines.append(
             f'{session["session_id"][:12]:<12}  '
             f'{session["complete"]:>7}/{session["started"]:<7}  '
+            f'{format_number(raw.get("p95")):>7}  '
+            f'{format_number(raw.get("max")):>7}  '
+            f'{session.get("raw_return_samples_over_threshold", 0):>7}  '
             f'{format_number(total.get("p50")):>9}  '
             f'{format_number(total.get("p95")):>9}  '
             f'{format_number(total.get("max")):>9}  '
@@ -806,6 +976,14 @@ def render_text(report):
             f'{format_number(adapter.get("mean")):>12}')
     if not end_to_end.get('sessions'):
         lines.append('(no complete UPC+LAB internal timing samples)')
+    for session in end_to_end.get('sessions', []):
+        lines.extend(['', f'Delivery funnel {session["session_id"][:12]}'])
+        for stage in session.get('funnel', []):
+            fraction = stage.get('fraction_of_started')
+            lines.append(
+                f'- {stage["label"]:<31} {stage["count"]:>7}  '
+                f'{format_number(None if fraction is None else 100 * fraction, 1):>5}% of input  '
+                f'dropped since previous={stage["dropped_from_previous"]}')
     lines.extend(['', 'Bridge summaries'])
     for role, state in sorted(report['bridge'].items()):
         if not state:
@@ -817,7 +995,11 @@ def render_text(report):
             f'dropped_stereo={state.get("dropped_stereo")}, sync_drops={state.get("sync_drops")}, '
             f'imu_overflows={state.get("imu_overflows")}, max_tracking_age_sec={state.get("max_tracking_age_sec")}')
         for direction, metrics in state.get('mailboxes', {}).items():
-            lines.append(f'  {direction}: replaced={metrics.get("replaced", {})}, expired={metrics.get("expired", {})}')
+            lines.append(
+                f'  {direction}: replaced={metrics.get("replaced", {})}, '
+                f'dropped_oldest={metrics.get("dropped_oldest", {})}, '
+                f'discarded_on_clear={metrics.get("discarded_on_clear", {})}, '
+                f'expired={metrics.get("expired", {})}')
     lines.extend(['', 'Status'])
     for role, state in sorted(report['visual_slam_status'].items()):
         if state['samples']:
@@ -828,6 +1010,9 @@ def render_text(report):
     for role, log_summary in sorted(report['relevant_logs'].items()):
         if log_summary['counts']:
             lines.append(f'- {role} relevant log counts: {log_summary["counts"]}')
+    for role, summary in sorted(report.get('pose_adapter_drops', {}).items()):
+        if summary.get('samples'):
+            lines.append(f'- {role} PoseAdapter drops: {summary["reasons"]}')
     lines.extend([
         '',
         'Interpretation order',

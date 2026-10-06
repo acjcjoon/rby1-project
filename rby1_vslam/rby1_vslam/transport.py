@@ -1,8 +1,7 @@
-"""ROS-free duplex transport with bounded queues and reconnect isolation."""
+"""ROS-free full-duplex transport with bounded queues and reconnect isolation."""
 
 from collections import Counter, deque
 from dataclasses import replace
-import select
 import socket
 import threading
 import time
@@ -14,6 +13,7 @@ from .wire import Packet, ProtocolError, encode_packet, read_packet
 UPC_KINDS = frozenset({'stereo', 'imu', 'static_tf'})
 LAB_KINDS = frozenset({'tracking_odom', 'slam_odom', 'tracking_status'})
 TRACE_KINDS = frozenset({'stereo', 'tracking_odom', 'slam_odom'})
+POSE_KINDS = frozenset({'tracking_odom', 'slam_odom'})
 
 
 class QueueOverflow(RuntimeError):
@@ -65,17 +65,25 @@ class StereoSynchronizer:
 
 
 class BoundedMailbox:
-    """Ordered IMU, latest-only other messages. All access is thread safe.
+    """Ordered IMU/poses and latest-only state/video. All access is thread safe.
 
     Stereo pairs are indivisible; replacing one never mixes left/right images.
     An IMU overflow invalidates the stream instead of silently hiding a gap.
+    Returned poses use a small per-kind FIFO so a receive burst cannot silently
+    collapse to one sample.  If that bounded FIFO fills, the oldest pose of the
+    same kind is discarded and reported explicitly in ``dropped_oldest``.
     """
 
-    def __init__(self, max_imu=512, stereo_max_age_sec=0.5):
+    def __init__(self, max_imu=512, stereo_max_age_sec=0.5, pose_queue_size=32):
+        if max_imu < 1 or pose_queue_size < 1:
+            raise ValueError('mailbox queue sizes must be positive')
         self._lock = threading.Lock()
         self._imu = deque()
+        self._poses = deque()
+        self._pose_counts = Counter()
         self._latest = {}
         self.max_imu = max_imu
+        self.pose_queue_size = pose_queue_size
         self.stereo_max_age_sec = stereo_max_age_sec
         self.dropped_stereo = 0
         self.imu_overflows = 0
@@ -86,15 +94,35 @@ class BoundedMailbox:
         self._drained = Counter()
         self._replaced = Counter()
         self._expired = Counter()
+        self._dropped_oldest = Counter()
+        self._discarded_on_clear = Counter()
+
+    def _drop_oldest_pose(self, kind):
+        for index, (packet, _) in enumerate(self._poses):
+            if packet.kind == kind:
+                del self._poses[index]
+                self._pose_counts[kind] -= 1
+                if not self._pose_counts[kind]:
+                    del self._pose_counts[kind]
+                self._dropped_oldest[kind] += 1
+                return
+        raise RuntimeError('pose queue accounting is inconsistent')
 
     def put(self, packet):
         with self._lock:
             if packet.kind == 'imu':
                 if len(self._imu) >= self.max_imu:
                     self.imu_overflows += 1
+                    self._discarded_on_clear.update(
+                        packet.kind for packet in self._imu)
                     self._imu.clear()
                     raise QueueOverflow('IMU queue overflow; session must reset')
                 self._imu.append(packet)
+            elif packet.kind in POSE_KINDS:
+                if self._pose_counts[packet.kind] >= self.pose_queue_size:
+                    self._drop_oldest_pose(packet.kind)
+                self._poses.append((packet, time.monotonic()))
+                self._pose_counts[packet.kind] += 1
             else:
                 if packet.kind in self._latest:
                     self._replaced[packet.kind] += 1
@@ -113,6 +141,13 @@ class BoundedMailbox:
             for _ in range(min(max_imu, len(self._imu))):
                 result.append(self._imu.popleft())
                 self._drained['imu'] += 1
+            while self._poses:
+                packet, _ = self._poses.popleft()
+                self._pose_counts[packet.kind] -= 1
+                if not self._pose_counts[packet.kind]:
+                    del self._pose_counts[packet.kind]
+                result.append(packet)
+                self._drained[packet.kind] += 1
             for kind, (packet, queued_at) in self._latest.items():
                 if kind == 'stereo' and time.monotonic() - queued_at > self.stereo_max_age_sec:
                     self.dropped_stereo += 1
@@ -125,45 +160,67 @@ class BoundedMailbox:
 
     def clear(self):
         with self._lock:
+            self._discarded_on_clear.update(packet.kind for packet in self._imu)
+            self._discarded_on_clear.update(
+                packet.kind for packet, _ in self._poses)
+            self._discarded_on_clear.update(self._latest.keys())
             self._imu.clear()
+            self._poses.clear()
+            self._pose_counts.clear()
             self._latest.clear()
+
+    def has_pending(self):
+        with self._lock:
+            return bool(self._imu or self._poses or self._latest)
 
     def metrics(self):
         """Return a JSON-safe snapshot without changing queue behavior."""
         with self._lock:
             queued = dict(Counter(packet.kind for packet in self._imu))
+            queued.update(self._pose_counts)
             queued.update({kind: 1 for kind in self._latest})
             return {
                 'enqueued': dict(self._enqueued),
                 'drained': dict(self._drained),
                 'replaced': dict(self._replaced),
                 'expired': dict(self._expired),
+                'dropped_oldest': dict(self._dropped_oldest),
+                'discarded_on_clear': dict(self._discarded_on_clear),
                 'queued': queued,
             }
 
 
 class SocketLink:
-    """One worker owns all sockets; ROS callbacks only enqueue/dequeue packets."""
+    """One writer and one reader share each full-duplex TCP session.
+
+    ROS callbacks only enqueue/dequeue packets.  Keeping socket writes and reads
+    on different threads prevents a large stereo ``sendall`` from starving the
+    small pose packets travelling in the opposite direction.
+    """
 
     def __init__(self, role, host='127.0.0.1', bind_host='0.0.0.0', port=7447,
                  timeout_sec=2.0, reconnect_delay_sec=1.0, max_imu=512,
-                 stereo_max_age_sec=0.5, trace_callback=None):
+                 stereo_max_age_sec=0.5, pose_queue_size=32,
+                 trace_callback=None, receive_callback=None):
         if role not in ('upc', 'lab'):
             raise ValueError('role must be upc or lab')
         if timeout_sec < 0.5 or reconnect_delay_sec < 0.01 or not 0 <= port <= 65535:
             raise ValueError('invalid socket timing or port')
         if max_imu < 1:
             raise ValueError('max_imu must be positive')
+        if pose_queue_size < 1:
+            raise ValueError('pose_queue_size must be positive')
         if stereo_max_age_sec <= 0:
             raise ValueError('stereo_max_age_sec must be positive')
         self.role = role
         self.host, self.bind_host, self.port = host, bind_host, port
         self.timeout_sec, self.reconnect_delay_sec = timeout_sec, reconnect_delay_sec
-        self.outbox = BoundedMailbox(max_imu, stereo_max_age_sec)
-        self.inbox = BoundedMailbox(max_imu, stereo_max_age_sec)
+        self.outbox = BoundedMailbox(max_imu, stereo_max_age_sec, pose_queue_size)
+        self.inbox = BoundedMailbox(max_imu, stereo_max_age_sec, pose_queue_size)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._reset = threading.Event()
+        self._outbox_ready = threading.Event()
         self._thread = None
         self._socket = None
         self._listener = None
@@ -171,6 +228,7 @@ class SocketLink:
         self._connection_count = 0
         self._state = {'connected': False, 'session_id': '', 'reason': 'starting'}
         self._trace_callback = trace_callback
+        self._receive_callback = receive_callback
 
     def _trace(self, event, packet, wall_ns, monotonic_ns, **fields):
         if self._trace_callback is None or packet.kind not in TRACE_KINDS:
@@ -184,6 +242,16 @@ class SocketLink:
             # Diagnostics must never reset or delay the transport session.
             pass
 
+    def _notify_receive(self):
+        if self._receive_callback is None:
+            return
+        try:
+            self._receive_callback()
+        except Exception:
+            # Waking the ROS executor is an optimization; its 10 ms fallback
+            # timer must continue to work if the notification itself fails.
+            pass
+
     def start(self):
         if self._thread is not None:
             raise RuntimeError('link already started')
@@ -193,6 +261,7 @@ class SocketLink:
     def close(self):
         self._stop.set()
         self._reset.set()
+        self._outbox_ready.set()
         with self._lock:
             sockets = [self._socket, self._listener]
         for sock in sockets:
@@ -220,6 +289,7 @@ class SocketLink:
             self.outbox.clear()
             self.inbox.clear()
             self._reset.set()
+            self._outbox_ready.set()
 
     def send(self, packet, persistent=False):
         allowed = UPC_KINDS if self.role == 'upc' else LAB_KINDS
@@ -237,6 +307,7 @@ class SocketLink:
             except QueueOverflow as exc:
                 self.invalidate(str(exc))
                 return False
+            self._outbox_ready.set()
             return True
 
     def receive(self):
@@ -255,6 +326,7 @@ class SocketLink:
             self._state.update(connected=True, session_id=session, reason='connected')
             for packet in self._persistent.values():
                 self.outbox.put(packet)
+            self._outbox_ready.set()
 
     def _configure(self, sock):
         sock.settimeout(self.timeout_sec)
@@ -279,15 +351,20 @@ class SocketLink:
         self._set_connected(session)
         return session
 
-    def _session(self, sock):
-        self._configure(sock)
-        session = self._handshake(sock)
-        allowed = LAB_KINDS if self.role == 'upc' else UPC_KINDS
-        last_receive = last_send = time.monotonic()
+    def _send_session(self, sock, session):
+        heartbeat_sec = min(0.5, self.timeout_sec / 3)
+        last_send = time.monotonic()
         while not self._stop.is_set() and not self._reset.is_set():
+            # Clear before draining so a concurrent producer cannot lose its
+            # wakeup between the drain and the following wait.
+            self._outbox_ready.clear()
+            # A reset may race with clear().  Recheck before doing any more
+            # work so that the consumed wakeup cannot delay reconnect/close.
+            if self._stop.is_set() or self._reset.is_set():
+                return
             for packet in self.outbox.drain():
                 if self._reset.is_set() or self._stop.is_set():
-                    break
+                    return
                 outbound = replace(packet, session_id=session)
                 encoded = encode_packet(outbound)
                 started_ns = time.monotonic_ns()
@@ -298,27 +375,79 @@ class SocketLink:
                             wire_bytes=len(encoded))
                 last_send = time.monotonic()
             now = time.monotonic()
-            if now - last_send >= min(0.5, self.timeout_sec / 3):
+            if now - last_send >= heartbeat_sec:
                 sock.sendall(encode_packet(Packet('ping', {}, session_id=session)))
                 last_send = now
-            readable, _, _ = select.select([sock], [], [], 0.005)
-            if readable:
-                packet = read_packet(sock, self.timeout_sec)
-                last_receive = time.monotonic()
-                if packet.session_id != session:
-                    raise ProtocolError('packet from another session')
-                if packet.kind == 'ping':
-                    if packet.payload:
-                        raise ProtocolError('invalid heartbeat')
-                    continue
-                if packet.kind not in allowed:
-                    raise ProtocolError('message kind is not allowed in this direction')
-                self._trace('socket_received', packet, time.time_ns(), time.monotonic_ns())
-                with self._lock:
-                    if not self._reset.is_set():
-                        self.inbox.put(packet)
-            if time.monotonic() - last_receive > self.timeout_sec:
-                raise TimeoutError('peer heartbeat timed out')
+            if self.outbox.has_pending():
+                continue
+            if self._stop.is_set() or self._reset.is_set():
+                return
+            self._outbox_ready.wait(max(0.0, heartbeat_sec - (time.monotonic() - last_send)))
+
+    def _receive_session(self, sock, session):
+        allowed = LAB_KINDS if self.role == 'upc' else UPC_KINDS
+        while not self._stop.is_set() and not self._reset.is_set():
+            packet = read_packet(sock, self.timeout_sec)
+            if packet.session_id != session:
+                raise ProtocolError('packet from another session')
+            if packet.kind == 'ping':
+                if packet.payload:
+                    raise ProtocolError('invalid heartbeat')
+                continue
+            if packet.kind not in allowed:
+                raise ProtocolError('message kind is not allowed in this direction')
+            self._trace('socket_received', packet, time.time_ns(), time.monotonic_ns())
+            queued = False
+            with self._lock:
+                if not self._reset.is_set():
+                    self.inbox.put(packet)
+                    queued = True
+            if queued:
+                # Never run an application callback while transport locks are held.
+                self._notify_receive()
+
+    def _session(self, sock):
+        self._configure(sock)
+        session = self._handshake(sock)
+        errors = []
+
+        def fail(exc):
+            with self._lock:
+                if self._reset.is_set() or self._stop.is_set():
+                    return
+                errors.append(exc)
+                self.invalidate(str(exc))
+            # Wake the opposite worker immediately if it is blocked in socket I/O.
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        def receive():
+            try:
+                self._receive_session(sock, session)
+            except (OSError, EOFError, ValueError, TimeoutError, QueueOverflow) as exc:
+                # An explicit invalidate/close owns its existing reason.  Only
+                # spontaneous I/O/protocol failures replace it.
+                fail(exc)
+
+        receiver = threading.Thread(
+            target=receive, name=f'rby1-vslam-{self.role}-rx', daemon=True)
+        receiver.start()
+        try:
+            self._send_session(sock, session)
+        except (OSError, EOFError, ValueError, TimeoutError, QueueOverflow) as exc:
+            fail(exc)
+        finally:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            receiver.join(timeout=self.timeout_sec + 1.0)
+        if receiver.is_alive():
+            raise TimeoutError('TCP receive worker did not stop')
+        if errors:
+            raise errors[0]
 
     def _run(self):
         while not self._stop.is_set():

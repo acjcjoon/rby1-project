@@ -31,6 +31,7 @@ def _launch(context):
             'require_localized': mode == 'localization',
             'use_sim_time': False,
             'enable_imu': use_imu,
+            'pose_queue_size': int(get('pose_queue_size')),
         }],
     )
     slam = ComposableNode(
@@ -68,6 +69,7 @@ def generate_launch_description():
         DeclareLaunchArgument('bind_host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='7447'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
+        DeclareLaunchArgument('pose_queue_size', default_value='32'),
         DeclareLaunchArgument('vslam_params_file', default_value=str(share / 'config/isaac_vslam.yaml')),
         OpaqueFunction(function=_launch),
     ])

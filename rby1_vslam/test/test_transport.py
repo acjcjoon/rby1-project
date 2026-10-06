@@ -117,6 +117,8 @@ def test_mailbox_latest_stereo_and_ordered_imu():
         'drained': {'imu': 3, 'stereo': 1},
         'replaced': {'stereo': 2},
         'expired': {},
+        'dropped_oldest': {},
+        'discarded_on_clear': {},
         'queued': {},
     }
 
@@ -130,6 +132,17 @@ def test_imu_overflow_is_explicit_and_clears_gap():
     assert mailbox.drain() == []
 
 
+def test_mailbox_reports_pending_items_left_by_bounded_imu_drain():
+    mailbox = BoundedMailbox(max_imu=3)
+    for index in range(3):
+        mailbox.put(Packet('imu', {'index': index}))
+    assert mailbox.has_pending()
+    assert [packet.payload['index'] for packet in mailbox.drain(max_imu=2)] == [0, 1]
+    assert mailbox.has_pending()
+    assert [packet.payload['index'] for packet in mailbox.drain()] == [2]
+    assert not mailbox.has_pending()
+
+
 def test_old_stereo_is_dropped_whole():
     mailbox = BoundedMailbox(stereo_max_age_sec=-1)
     mailbox.put(Packet('stereo', {'left': 'a', 'right': 'b'}))
@@ -138,13 +151,38 @@ def test_old_stereo_is_dropped_whole():
     assert mailbox.metrics()['expired'] == {'stereo': 1}
 
 
-def test_mailbox_counts_latest_pose_replacement_without_changing_delivery():
+def test_mailbox_preserves_pose_burst_in_arrival_order():
     mailbox = BoundedMailbox()
     mailbox.put(Packet('tracking_odom', {'index': 1}))
+    mailbox.put(Packet('slam_odom', {'index': 10}))
     mailbox.put(Packet('tracking_odom', {'index': 2}))
     drained = mailbox.drain()
-    assert [packet.payload['index'] for packet in drained] == [2]
-    assert mailbox.metrics()['replaced'] == {'tracking_odom': 1}
+    assert [(packet.kind, packet.payload['index']) for packet in drained] == [
+        ('tracking_odom', 1), ('slam_odom', 10), ('tracking_odom', 2)]
+    assert mailbox.metrics()['replaced'] == {}
+    assert mailbox.metrics()['dropped_oldest'] == {}
+
+
+def test_mailbox_pose_limit_drops_oldest_of_same_kind_explicitly():
+    mailbox = BoundedMailbox(pose_queue_size=2)
+    mailbox.put(Packet('tracking_odom', {'index': 1}))
+    mailbox.put(Packet('slam_odom', {'index': 10}))
+    mailbox.put(Packet('tracking_odom', {'index': 2}))
+    mailbox.put(Packet('tracking_odom', {'index': 3}))
+    assert mailbox.metrics()['queued'] == {'tracking_odom': 2, 'slam_odom': 1}
+    assert [(packet.kind, packet.payload['index']) for packet in mailbox.drain()] == [
+        ('slam_odom', 10), ('tracking_odom', 2), ('tracking_odom', 3)]
+    assert mailbox.metrics()['dropped_oldest'] == {'tracking_odom': 1}
+
+
+def test_mailbox_counts_packets_discarded_by_session_clear():
+    mailbox = BoundedMailbox()
+    mailbox.put(Packet('imu', {'index': 1}))
+    mailbox.put(Packet('tracking_odom', {'index': 2}))
+    mailbox.put(Packet('tracking_status', {'index': 3}))
+    mailbox.clear()
+    assert mailbox.metrics()['discarded_on_clear'] == {
+        'imu': 1, 'tracking_odom': 1, 'tracking_status': 1}
 
 
 def test_stereo_sync_preserves_matching_calibration_and_stamps():
@@ -161,6 +199,135 @@ def test_stereo_sync_preserves_matching_calibration_and_stamps():
     assert sync.dropped == 1
     sync.clear()
     assert all(not queue for queue in sync.queues.values())
+
+
+def test_session_runs_one_reader_and_one_writer_concurrently():
+    reader_started = threading.Event()
+    writer_started = threading.Event()
+
+    class ProbeSocket:
+        def shutdown(self, _):
+            pass
+
+    class ProbeLink(SocketLink):
+        def _configure(self, sock):
+            pass
+
+        def _handshake(self, sock):
+            self._set_connected('probe-session')
+            return 'probe-session'
+
+        def _receive_session(self, sock, session):
+            assert session == 'probe-session'
+            reader_started.set()
+            assert writer_started.wait(1.0)
+            self._reset.set()
+            self._outbox_ready.set()
+
+        def _send_session(self, sock, session):
+            assert session == 'probe-session'
+            writer_started.set()
+            assert reader_started.wait(1.0)
+            assert self._reset.wait(1.0)
+
+    link = ProbeLink('upc')
+    link._session(ProbeSocket())
+    assert reader_started.is_set()
+    assert writer_started.is_set()
+
+
+def test_receive_progresses_while_large_stereo_send_is_blocked():
+    """A blocked video write must not starve pose traffic in the other direction."""
+    send_started = threading.Event()
+    release_send = threading.Event()
+    pose_ready = threading.Event()
+    session_errors = []
+    session = 'full-duplex-session'
+    incoming, peer = socket.socketpair()
+
+    class BlockingSendSocket:
+        """Read from a real socket, but hold sendall until the test releases it."""
+
+        sent_bytes = 0
+
+        def fileno(self):
+            return incoming.fileno()
+
+        def recv(self, size):
+            return incoming.recv(size)
+
+        def sendall(self, data):
+            self.sent_bytes = len(data)
+            send_started.set()
+            if not release_send.wait(2.0):
+                raise TimeoutError('test did not release blocked send')
+
+        def shutdown(self, how):
+            release_send.set()
+            incoming.shutdown(how)
+
+    class ProbeLink(SocketLink):
+        def _configure(self, sock):
+            pass
+
+        def _handshake(self, sock):
+            self._set_connected(session)
+            return session
+
+    sock = BlockingSendSocket()
+    link = ProbeLink('upc', receive_callback=pose_ready.set)
+
+    def run_session():
+        try:
+            link._session(sock)
+        except Exception as exc:  # Preserve worker failures for the main test thread.
+            session_errors.append(exc)
+
+    worker = threading.Thread(target=run_session)
+    try:
+        worker.start()
+        eventually(lambda: link.state()['connected'])
+        blob = b'x' * (1024 * 1024)
+        stereo = Packet('stereo', {
+            'left': {'message': {}, 'offset': 0, 'length': len(blob) // 2},
+            'right': {
+                'message': {}, 'offset': len(blob) // 2,
+                'length': len(blob) - len(blob) // 2,
+            },
+            'left_info': {}, 'right_info': {},
+        }, blob)
+        assert link.send(stereo)
+        assert send_started.wait(1.0)
+        assert sock.sent_bytes > len(blob)
+
+        peer.sendall(encode_packet(Packet(
+            'tracking_odom', {'sequence': 7}, session_id=session)))
+        assert pose_ready.wait(1.0)
+        eventually(lambda: link.state()['rx_mailbox']['enqueued'].get(
+            'tracking_odom', 0) == 1)
+
+        # The writer remains inside sendall, yet the independent reader has
+        # already decoded, queued, and notified the pose packet.
+        assert worker.is_alive()
+        assert not release_send.is_set()
+        received = link.receive()
+        assert [packet.payload['sequence'] for packet in received] == [7]
+    finally:
+        link.invalidate('test complete')
+        release_send.set()
+        worker.join(timeout=2.0)
+        peer.close()
+        incoming.close()
+    assert not worker.is_alive()
+    assert session_errors == []
+
+
+def test_receive_notification_failure_is_isolated_from_transport():
+    def fail():
+        raise RuntimeError('guard condition unavailable')
+
+    link = SocketLink('upc', receive_callback=fail)
+    link._notify_receive()
 
 
 def test_duplex_reconnect_replays_static_only_and_rejects_commands():
@@ -209,6 +376,37 @@ def test_duplex_reconnect_replays_static_only_and_rejects_commands():
         assert len(replay) == 1 and replay[0].kind == 'static_tf'
         assert replay[0].session_id == second_session
         assert upc.receive() == []
+    finally:
+        if upc is not None:
+            upc.close()
+        lab.close()
+
+
+def test_duplex_pose_burst_is_delivered_without_latest_only_replacement():
+    lab_trace = []
+    pose_ready = threading.Event()
+    lab = SocketLink('lab', bind_host='127.0.0.1', port=0, reconnect_delay_sec=0.02,
+                     pose_queue_size=64, trace_callback=lab_trace.append)
+    lab.start()
+    upc = None
+    try:
+        port = eventually(lambda: lab.port)
+        upc = SocketLink('upc', host='127.0.0.1', port=port, reconnect_delay_sec=0.02,
+                         pose_queue_size=64, receive_callback=pose_ready.set)
+        upc.start()
+        eventually(lambda: lab.state()['connected'] and upc.state()['connected'])
+        for sequence in range(50):
+            assert lab.send(Packet('tracking_odom', {'sequence': sequence}))
+        eventually(lambda: sum(
+            trace['event'] == 'socket_sent' and trace['packet'].kind == 'tracking_odom'
+            for trace in lab_trace) == 50)
+        assert pose_ready.wait(1.0)
+        eventually(lambda: upc.state()['rx_mailbox']['enqueued'].get(
+            'tracking_odom', 0) == 50)
+        received = upc.receive()
+        assert [packet.payload['sequence'] for packet in received] == list(range(50))
+        assert lab.state()['tx_mailbox']['dropped_oldest'] == {}
+        assert upc.state()['rx_mailbox']['dropped_oldest'] == {}
     finally:
         if upc is not None:
             upc.close()

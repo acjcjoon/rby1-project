@@ -50,6 +50,16 @@ def safe_json(value):
     return value
 
 
+def integer_scalar(value):
+    """Normalize ROS uint8 scalars across Humble/Jazzy Python bindings."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        data = bytes(value)
+        if len(data) != 1:
+            raise ValueError(f'expected one-byte integer scalar, got {len(data)} bytes')
+        return data[0]
+    return int(value)
+
+
 def message_metadata(message, message_type):
     """Keep stamps and small state, never serialize image pixels."""
     fields = {}
@@ -95,7 +105,7 @@ def message_metadata(message, message_type):
     elif message_type == 'diagnostic_msgs/msg/DiagnosticArray':
         fields['diagnostics'] = [{
             'name': str(status.name), 'hardware_id': str(status.hardware_id),
-            'level': int(status.level), 'message': str(status.message),
+            'level': integer_scalar(status.level), 'message': str(status.message),
             'values': {str(item.key): str(item.value) for item in status.values},
         } for status in message.status]
     elif message_type == 'rcl_interfaces/msg/Log':

@@ -32,7 +32,7 @@ def capture(role, topics):
     }
 
 
-def timing_message(role, stage, kind, session, stamp, mono_ms, wall_ms=None):
+def timing_message(role, stage, kind, session, stamp, mono_ms, wall_ms=None, **fields):
     wall_ms = mono_ms if wall_ms is None else wall_ms
     state = {
         'schema_version': 1, 'stage': stage, 'role': role,
@@ -40,6 +40,7 @@ def timing_message(role, stage, kind, session, stamp, mono_ms, wall_ms=None):
         'monotonic_ns': int(mono_ms * 1_000_000),
         'wall_ns': int(wall_ms * 1_000_000),
     }
+    state.update(fields)
     return {
         'event': 'message', 'role': role, 'topic': '/rby1/vslam/timing',
         'state': state, 'source_stamp_ns': stamp,
@@ -72,6 +73,40 @@ def test_exact_stamp_matching_does_not_invent_nearest_latency():
     result = analysis.match_latency(left, right, 'observed_monotonic_ns', 500.0)
     assert result['matched'] == 1
     assert result['left_match_fraction'] == 0.5
+
+
+def test_bridge_summary_preserves_bounded_pose_fifo_drop_counter():
+    result = analysis.bridge_summary([{
+        'state': {
+            'connected': True, 'session_id': 'session-a', 'reason': 'connected',
+            'tx_mailbox': {'dropped_oldest': {'tracking_odom': 2},
+                           'discarded_on_clear': {'slam_odom': 1}},
+            'rx_mailbox': {'dropped_oldest': {'slam_odom': 3}},
+        },
+    }])
+    assert result['mailboxes']['tx_mailbox']['dropped_oldest'] == {
+        'tracking_odom': 2}
+    assert result['mailboxes']['rx_mailbox']['dropped_oldest'] == {
+        'slam_odom': 3}
+    assert result['mailboxes']['tx_mailbox']['discarded_on_clear'] == {
+        'slam_odom': 1}
+
+
+def test_report_counts_explicit_pose_adapter_drop_reasons():
+    timing = [
+        timing_message('upc', 'upc_pose_adapter_dropped', 'odom', '', 100, 1,
+                       reason='stale'),
+        timing_message('upc', 'upc_pose_adapter_dropped', 'odom', '', 200, 2,
+                       reason='tf_timeout'),
+        timing_message('upc', 'upc_pose_adapter_dropped', 'odom', '', 300, 3,
+                       reason='stale'),
+    ]
+    report = analysis.build_report([
+        capture('upc', {'/rby1/vslam/timing': timing})], stale_ms=500.0)
+    assert report['pose_adapter_drops']['upc'] == {
+        'samples': 3, 'reasons': {'stale': 2, 'tf_timeout': 1}}
+    assert any('PoseAdapter explicitly dropped 3 poses' in item
+               for item in report['findings'])
 
 
 def test_report_flags_cuvslam_when_images_continue_but_pose_stalls():
@@ -117,6 +152,10 @@ def test_internal_events_form_clock_independent_stacked_sample():
         capture('lab', {'/rby1/vslam/timing': lab}),
     ])
     assert result['complete'] == 1
+    assert result['raw_return_samples'][0]['latency_ms'] == 72.0
+    assert result['sessions'][0]['raw_returned'] == 1
+    assert result['sessions'][0]['funnel'][-1]['count'] == 1
+    assert result['delivery_bins'][0]['final_fraction'] == 1.0
     sample = result['samples'][0]
     assert sample['total_ms'] == 80.0
     assert sample['lab_bridge_publish_ms'] == 2.0

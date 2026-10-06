@@ -25,6 +25,7 @@ from .wire import Packet, ProtocolError
 DEFAULTS = {
     'role': 'upc', 'lab_host': '127.0.0.1', 'bind_host': '0.0.0.0', 'port': 7447,
     'socket_timeout_sec': 2.0, 'reconnect_delay_sec': 1.0, 'max_imu_queue': 512,
+    'pose_queue_size': 32,
     'stereo_slop_ms': 5.0, 'stereo_queue_size': 8, 'stereo_max_age_sec': 0.5,
     'max_image_age_sec': 0.5, 'max_future_image_sec': 0.05,
     'enable_imu': True,
@@ -203,6 +204,8 @@ class BridgeNode(Node):
             int(self.cfg['stereo_slop_ms'] * 1_000_000), self.cfg['stereo_queue_size'])
         if self.cfg['tracking_timeout_sec'] <= 0:
             raise ValueError('tracking_timeout_sec must be positive')
+        if self.cfg['pose_queue_size'] < 1:
+            raise ValueError('pose_queue_size must be positive')
         if (not math.isfinite(self.cfg['localization_timeout_sec'])
                 or self.cfg['localization_timeout_sec'] <= 0):
             raise ValueError('localization_timeout_sec must be positive and finite')
@@ -211,18 +214,27 @@ class BridgeNode(Node):
                 raise ValueError(key + ' must be nonnegative and finite')
         if not self.cfg['camera_root_frame'] or not self.cfg['camera_frame_prefix']:
             raise ValueError('camera frame root and prefix must be nonempty')
+        # The transport thread only triggers this guard. All ROS publication
+        # stays in the executor callback, with the steady timer as a fallback.
+        self._receive_guard = self.create_guard_condition(self._drain_received)
         self.link = SocketLink(
             self.role, host=self.cfg['lab_host'], bind_host=self.cfg['bind_host'],
             port=self.cfg['port'], timeout_sec=self.cfg['socket_timeout_sec'],
             reconnect_delay_sec=self.cfg['reconnect_delay_sec'],
             max_imu=self.cfg['max_imu_queue'],
             stereo_max_age_sec=self.cfg['stereo_max_age_sec'],
-            trace_callback=self._on_transport_timing)
+            pose_queue_size=self.cfg['pose_queue_size'],
+            trace_callback=self._on_transport_timing,
+            receive_callback=self._receive_guard.trigger)
         self._status_pub = self.create_publisher(String, self.cfg['status_topic'], 5)
         # This publisher is effectively free during normal operation: timing
         # JSON is only constructed while a recorder is subscribed.
         self._timing_pub = self.create_publisher(String, self.cfg['timing_topic'], 100)
         sensor_qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.BEST_EFFORT)
+        pose_qos = QoSProfile(
+            depth=self.cfg['pose_queue_size'], reliability=ReliabilityPolicy.RELIABLE)
+        vslam_pose_qos = QoSProfile(
+            depth=self.cfg['pose_queue_size'], reliability=ReliabilityPolicy.BEST_EFFORT)
         static_qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         if self.role == 'upc':
@@ -242,7 +254,8 @@ class BridgeNode(Node):
                 TFMessage, '/tf_static', self._on_static_tf, static_qos))
             for kind, param in (('tracking_odom', 'upc_tracking_odom_topic'),
                                 ('slam_odom', 'upc_slam_odom_topic')):
-                self._bridge_publishers[kind] = self.create_publisher(Odometry, self.cfg[param], 5)
+                self._bridge_publishers[kind] = self.create_publisher(
+                    Odometry, self.cfg[param], pose_qos)
         else:
             for name, msg_type, param in (
                 ('left', Image, 'left_image_topic'), ('right', Image, 'right_image_topic'),
@@ -255,7 +268,7 @@ class BridgeNode(Node):
                                 ('slam_odom', 'slam_odom_topic')):
                 self._bridge_subscriptions.append(self.create_subscription(
                     Odometry, self.cfg[param],
-                    lambda msg, kind=kind: self._on_odometry(kind, msg), sensor_qos))
+                    lambda msg, kind=kind: self._on_odometry(kind, msg), vslam_pose_qos))
             # UPC installs no Isaac ROS packages. This import only occurs on LAB.
             try:
                 from isaac_ros_visual_slam_interfaces.msg import VisualSlamStatus
@@ -270,6 +283,11 @@ class BridgeNode(Node):
         self._timer = self.create_timer(
             0.01, self._tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self._last_status_at = 0.0
+        # A receive guard may consume a reconnect transition before the next
+        # timer callback observes it.  Keep that transition latched so the
+        # next tick publishes the reset/session state without waiting for the
+        # normal 100 ms status interval.
+        self._status_dirty = False
         self.link.start()
 
     def _timing(self, stage, kind, source_stamp_ns, session_id='',
@@ -521,10 +539,7 @@ class BridgeNode(Node):
                 self._timing('upc_pose_published', packet.kind, source_stamp_ns,
                              packet.session_id)
 
-    def _tick(self):
-        self._timing_active = self._timing_pub.get_subscription_count() > 0
-        self._publish_transport_timing()
-        state = self.link.state()
+    def _sync_link_state(self, state):
         changed = (state['connected'], state['session_id']) != self._previous_state
         if changed:
             self._synchronizer.clear()
@@ -539,13 +554,28 @@ class BridgeNode(Node):
             self._lab_first_image_stamp = None
             self._session = state['session_id']
             self._previous_state = (state['connected'], state['session_id'])
+            self._status_dirty = True
             self.get_logger().info('TCP bridge: ' + state['reason'])
+        return changed
+
+    def _tick(self):
+        self._timing_active = self._timing_pub.get_subscription_count() > 0
+        self._publish_transport_timing()
+        state = self.link.state()
+        self._sync_link_state(state)
         now = time.monotonic()
-        if changed or now - self._last_status_at >= 0.1:
+        if self._status_dirty or now - self._last_status_at >= 0.1:
             state.update(self._tracking_fields(now, state['connected']))
             state['sync_drops'] = self._synchronizer.dropped
             self._status_pub.publish(String(data=json.dumps(state, allow_nan=False)))
             self._last_status_at = now
+            self._status_dirty = False
+        self._drain_received()
+
+    def _drain_received(self):
+        # A guard condition can run before the next status timer tick. Apply a
+        # reconnect transition before publishing the first packet of a session.
+        self._sync_link_state(self.link.state())
         for packet in self.link.receive():
             # Invalidation can occur while the worker is blocked in an I/O call.
             current = self.link.state()

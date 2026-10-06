@@ -53,30 +53,83 @@ def load_report(args, parser):
     return build_report(captures, args.threshold_ms)
 
 
-def plot_total_timeline(plt, samples, sessions, threshold_ms, output):
-    first_wall = min(sample['upc_start_wall_ns'] for sample in samples)
-    colors = plt.get_cmap('tab10')
-    fig, ax = plt.subplots(figsize=(13, 6.5))
-    for index, session in enumerate(sessions):
-        session_id = session['session_id']
-        values = [sample for sample in samples if sample['session_id'] == session_id]
-        x = [(sample['upc_start_wall_ns'] - first_wall) / 1e9 for sample in values]
-        y = [sample['total_ms'] for sample in values]
-        ax.scatter(x, y, s=10, alpha=0.65, color=colors(index % 10),
-                   label=f'S{index + 1} {session_id[:8]} (n={len(values)})')
-    ax.axhline(threshold_ms, color='red', linestyle='--', linewidth=1.5,
+def plot_total_timeline(
+        plt, samples, raw_samples, delivery_bins, sessions, threshold_ms, output):
+    if not raw_samples:
+        raw_samples = [{
+            'session_id': sample['session_id'],
+            'upc_start_wall_ns': sample['upc_start_wall_ns'],
+            'latency_ms': sample.get('returned_pose_ms', sample['total_ms']),
+            'over_threshold': sample.get('returned_pose_ms', sample['total_ms']) > threshold_ms,
+        } for sample in samples]
+    first_wall = min(sample['upc_start_wall_ns']
+                     for sample in raw_samples + samples)
+    fig, (ax, health) = plt.subplots(
+        2, 1, figsize=(13, 8.5), sharex=True,
+        gridspec_kw={'height_ratios': [2.15, 1.0]})
+    normal_raw = [sample for sample in raw_samples if not sample['over_threshold']]
+    stale_raw = [sample for sample in raw_samples if sample['over_threshold']]
+
+    def elapsed(values):
+        return [(sample['upc_start_wall_ns'] - first_wall) / 1e9 for sample in values]
+
+    ax.scatter(elapsed(normal_raw), [sample['latency_ms'] for sample in normal_raw],
+               s=8, alpha=0.28, color='#7f7f7f', label='Raw returned camera pose')
+    if stale_raw:
+        ax.scatter(elapsed(stale_raw), [sample['latency_ms'] for sample in stale_raw],
+                   s=18, alpha=0.8, color='#d62728', marker='x', linewidths=0.8,
+                   label=f'Raw returned pose > {threshold_ms:g} ms (n={len(stale_raw)})')
+    ax.scatter(elapsed(samples), [sample['total_ms'] for sample in samples],
+               s=8, alpha=0.42, color='#1f77b4', label='Final base pose (accepted)')
+    ax.axhline(threshold_ms, color='red', linestyle='--', linewidth=1.4,
                label=f'{threshold_ms:g} ms threshold')
-    ax.set(title='UPC camera enqueue to base pose, by TCP session',
-           xlabel='Elapsed UPC wall time (s)', ylabel='End-to-end latency (ms)')
-    ax.grid(True, alpha=0.25)
+    maximum = max([sample['latency_ms'] for sample in raw_samples]
+                  + [sample['total_ms'] for sample in samples])
+    if maximum > threshold_ms * 2:
+        ax.set_yscale('log')
+        ax.set_ylabel('Latency (ms, log scale)')
+    else:
+        ax.set_ylabel('Latency (ms)')
+    completion = sum(session.get('complete', 0) for session in sessions)
+    started = sum(session.get('started', 0) for session in sessions)
+    ax.set_title(
+        'Raw return latency and accepted final poses '
+        f'(final delivery {completion}/{started} = '
+        f'{100 * completion / started:.1f}%)' if started else
+        'Raw return latency and accepted final poses')
+    ax.grid(True, alpha=0.25, which='both')
     ax.legend(loc='best', fontsize=8, ncols=2)
+
+    if delivery_bins:
+        x = [item['elapsed_s'] + 5.0 for item in delivery_bins]
+        final = [100.0 * item['final_fraction'] for item in delivery_bins]
+        returned = [100.0 * item['raw_return_fraction'] for item in delivery_bins]
+        stale = [100.0 * (item['raw_over_threshold_fraction'] or 0.0)
+                 for item in delivery_bins]
+        health.bar(x, final, width=8.5, color='#4c78a8', alpha=0.55,
+                   label='Final base poses / camera frames')
+        health.plot(x, returned, color='#f58518', marker='o', markersize=3,
+                    linewidth=1.3, label='Raw returned poses / camera frames')
+        health.plot(x, stale, color='#d62728', marker='x', markersize=4,
+                    linewidth=1.0, label='Raw returns over threshold / raw returns')
+        health.set_ylim(0, 105)
+        health.set_ylabel('Delivery / stale (%)')
+        health.legend(loc='best', fontsize=8, ncols=3)
+    else:
+        health.text(0.5, 0.5, 'Delivery bins unavailable; regenerate timing_report.json',
+                    transform=health.transAxes, ha='center', va='center')
+        health.set_ylabel('Delivery (%)')
+    health.set_xlabel('Elapsed UPC wall time (s)')
+    health.set_title('10-second delivery health (drops and stale rejection are visible here)')
+    health.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(output, dpi=170)
     plt.close(fig)
 
 
 def plot_session_breakdown(plt, sessions, threshold_ms, output):
-    labels = [f'S{index + 1}\n{session["session_id"][:8]}'
+    labels = [f'S{index + 1} {session["session_id"][:8]}\n'
+              f'final {100 * (session.get("completion_fraction") or 0):.1f}%'
               for index, session in enumerate(sessions)]
     fig_height = max(4.5, 0.58 * len(labels) + 2.2)
     fig, ax = plt.subplots(figsize=(13, fig_height))
@@ -103,13 +156,93 @@ def plot_session_breakdown(plt, sessions, threshold_ms, output):
                    marker='D', s=28, color='black', label='Total p95', zorder=5)
     ax.axvline(threshold_ms, color='red', linestyle='--', linewidth=1.5,
                label=f'{threshold_ms:g} ms threshold')
-    ax.set(title='Mean end-to-end latency composition per TCP session',
+    ax.set(title='Successful final poses only: mean latency composition per TCP session',
            xlabel='Latency (ms)', ylabel='Session')
     ax.grid(True, axis='x', alpha=0.25)
     ax.legend(loc='best', fontsize=8, ncols=2)
     fig.tight_layout()
     fig.savefig(output, dpi=170)
     plt.close(fig)
+
+
+def plot_delivery_funnel(plt, sessions, output):
+    rows = []
+    for index, session in enumerate(sessions):
+        for stage in session.get('funnel', []):
+            rows.append((index, session, stage))
+    if not rows:
+        return False
+    labels = [f'S{index + 1}  {stage["label"]}'
+              for index, _, stage in rows]
+    fractions = [100.0 * (stage.get('fraction_of_started') or 0.0)
+                 for _, _, stage in rows]
+    fig, ax = plt.subplots(figsize=(13, max(5.0, 0.48 * len(rows) + 1.8)))
+    colors = [plt.get_cmap('RdYlGn')(fraction / 100.0) for fraction in fractions]
+    bars = ax.barh(labels, fractions, color=colors, edgecolor='white')
+    for bar, (_, _, stage), fraction in zip(bars, rows, fractions):
+        dropped = stage.get('dropped_from_previous', 0)
+        suffix = '' if not dropped else f', -{dropped:,} from previous'
+        ax.text(min(fraction + 1.0, 98.0), bar.get_y() + bar.get_height() / 2,
+                f'{stage["count"]:,} ({fraction:.1f}%{suffix})',
+                va='center', fontsize=8)
+    ax.set_xlim(0, 108)
+    ax.invert_yaxis()
+    ax.set(title='Pipeline delivery funnel (percentage of camera frames enqueued)',
+           xlabel='Frames reaching stage (%)', ylabel='Stage')
+    ax.grid(True, axis='x', alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(output, dpi=170)
+    plt.close(fig)
+    return True
+
+
+def plot_latency_tails(plt, sessions, threshold_ms, output):
+    fields = (
+        ('raw_return_pose_ms', 'Raw returned camera pose'),
+        ('total_ms', 'Final base pose (accepted)'),
+        ('upc_tx_queue_socket_ms', 'UPC TX queue/socket'),
+        ('network_roundtrip_residual_ms', 'TCP roundtrip residual'),
+        ('lab_input_delivery_ms', 'LAB receive + publish'),
+        ('lab_vslam_ms', 'cuVSLAM'),
+        ('lab_tx_queue_socket_ms', 'LAB TX queue/socket'),
+        ('upc_return_delivery_ms', 'UPC receive + DDS'),
+        ('pose_adapter_ms', 'PoseAdapter'),
+    )
+    rows = []
+    for index, session in enumerate(sessions):
+        for field, label in fields:
+            stats = session.get(field)
+            if stats and all(isinstance(stats.get(key), (int, float))
+                             for key in ('p50', 'p95', 'p99', 'max')):
+                rows.append((index, label, stats))
+    if not rows:
+        return False
+    y = list(range(len(rows)))
+    labels = [f'S{index + 1}  {label}' for index, label, _ in rows]
+    fig, ax = plt.subplots(figsize=(13, max(6.0, 0.48 * len(rows) + 2.0)))
+    for position, (_, _, stats) in zip(y, rows):
+        ax.hlines(position, stats['p50'], stats['p99'], color='#9e9e9e', linewidth=2)
+    ax.scatter([stats['p50'] for _, _, stats in rows], y, marker='o', s=34,
+               color='#4c78a8', label='p50', zorder=3)
+    ax.scatter([stats['p95'] for _, _, stats in rows], y, marker='D', s=34,
+               color='#f58518', label='p95', zorder=3)
+    ax.scatter([stats['p99'] for _, _, stats in rows], y, marker='^', s=38,
+               color='#e45756', label='p99', zorder=3)
+    ax.scatter([stats['max'] for _, _, stats in rows], y, marker='x', s=42,
+               color='black', label='max', zorder=3)
+    ax.axvline(threshold_ms, color='red', linestyle='--', linewidth=1.4,
+               label=f'{threshold_ms:g} ms threshold')
+    ax.set_xscale('log')
+    ax.set_yticks(y, labels)
+    ax.invert_yaxis()
+    ax.set(title='Latency tails by stage (raw return includes poses later rejected)',
+           xlabel='Latency (ms, log scale)', ylabel='Stage')
+    ax.grid(True, axis='x', alpha=0.25, which='both')
+    ax.legend(loc='best', fontsize=8, ncols=5)
+    fig.tight_layout()
+    fig.savefig(output, dpi=170)
+    plt.close(fig)
+    return True
 
 
 def plot_one_way_diagnostic(plt, samples, sessions, output):
@@ -156,6 +289,8 @@ def main(argv=None):
     report = load_report(args, parser)
     end_to_end = report.get('end_to_end') or {}
     samples = end_to_end.get('samples') or []
+    raw_samples = end_to_end.get('raw_return_samples') or []
+    delivery_bins = end_to_end.get('delivery_bins') or []
     sessions = end_to_end.get('sessions') or []
     if not samples or not sessions:
         parser.error('report has no complete internal timing samples')
@@ -165,11 +300,17 @@ def main(argv=None):
     outputs = (
         output_dir / 'total_latency_by_session.png',
         output_dir / 'session_stage_breakdown.png',
+        output_dir / 'pipeline_delivery_funnel.png',
+        output_dir / 'latency_tail_by_stage.png',
         output_dir / 'one_way_wall_clock_diagnostic.png',
     )
-    plot_total_timeline(plt, samples, sessions, args.threshold_ms, outputs[0])
+    plot_total_timeline(
+        plt, samples, raw_samples, delivery_bins, sessions,
+        args.threshold_ms, outputs[0])
     plot_session_breakdown(plt, sessions, args.threshold_ms, outputs[1])
-    plot_one_way_diagnostic(plt, samples, sessions, outputs[2])
+    plot_delivery_funnel(plt, sessions, outputs[2])
+    plot_latency_tails(plt, sessions, args.threshold_ms, outputs[3])
+    plot_one_way_diagnostic(plt, samples, sessions, outputs[4])
     for path in outputs:
         print(path)
     return 0

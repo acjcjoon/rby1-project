@@ -25,6 +25,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_depth', default_value='false'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
         DeclareLaunchArgument('tracking_timeout_sec', default_value='0.5'),
+        DeclareLaunchArgument('pose_queue_size', default_value='32'),
         DeclareLaunchArgument('base_frame', default_value='base'),
         DeclareLaunchArgument('publish_odom_tf', default_value='false'),
         DeclareLaunchArgument('publish_mount_tf', default_value='true',
@@ -51,6 +52,7 @@ def generate_launch_description():
             'enable_imu': value('enable_imu', bool),
             'use_sim_time': False,
             'tracking_timeout_sec': value('tracking_timeout_sec', float),
+            'pose_queue_size': value('pose_queue_size', int),
         }],
     )
     adapter = Node(
@@ -63,6 +65,7 @@ def generate_launch_description():
             'output_odom_topic': '/rby1/vslam/odom',
             'output_slam_odom_topic': '/rby1/vslam/slam_odom',
             'publish_odom_tf': value('publish_odom_tf', bool),
+            'pose_queue_size': value('pose_queue_size', int),
         }],
     )
     # Same provisional mount as rby1_camera/config/camera_system.yaml. No import

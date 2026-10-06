@@ -13,7 +13,8 @@ LAB PC / ROS 2 Jazzy / Isaac ROS 4.5
 ```
 
 두 PC의 ROS 배포판과 `ROS_DOMAIN_ID`는 달라도 된다. 데이터는 DDS가 아니라 TCP
-bridge로 전달된다.
+bridge로 전달된다. TCP 포트는 하나지만 session 내부의 송신과 수신은 독립 worker가
+담당하고, 반환 pose burst는 bounded FIFO로 보존한다.
 
 ## 0. 전제와 안전
 

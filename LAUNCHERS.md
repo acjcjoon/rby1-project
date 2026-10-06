@@ -49,6 +49,9 @@ bash scripts/run_vslam_lab.sh --mode mapping --domain 85 --no-rviz
 위 경로는 컨테이너의 `rby1_vslam` 패키지 폴더 기준이다. 기존 localization 모드도
 `--mode localization --map-path /절대경로/지도`로 선택 가능하다.
 UPC/LAB의 도메인은 서로 같을 필요가 없고 데이터는 TCP로 전달된다.
+하나의 TCP 연결을 유지하되 영상/IMU 송신 worker와 pose/status 수신 worker는 독립적으로
+동작한다. 반환 pose는 종류별 32개 bounded FIFO를 사용하며 overflow는 bridge 상태에
+`dropped_oldest`로 기록된다.
 
 VSLAM 일반 런처와 LAB/UPC/mapping 보조 런처는 모두 **IMU 사용이 기본값**이다.
 UPC는 D435i의 gyro/accel을 통합한 `/d435/d435/imu`를 TCP로 전달하고,
@@ -123,10 +126,12 @@ py rby1_vslam\scripts\plot_vslam_timing.py `
   --report timing_report.json --output-dir timing_plots --threshold-ms 500
 ```
 
-`total_latency_by_session.png`은 세션별 프레임 지연과 500 ms 빨간 점선,
-`session_stage_breakdown.png`은 세션별 평균 총시간을 TX/TCP/LAB/cuVSLAM/UPC/PoseAdapter
-구간으로 나눈 누적 막대다. `one_way_wall_clock_diagnostic.png`은 NTP 상태를 확인한 경우에만
-편도 지연으로 해석한다.
+`total_latency_by_session.png`은 폐기 전 raw pose 지연과 최종 pose, 10초별 전달률을 함께
+보여준다. `pipeline_delivery_funnel.png`은 각 경계의 프레임 손실,
+`latency_tail_by_stage.png`은 구간별 p50/p95/p99/max를 보여준다.
+`session_stage_breakdown.png`은 성공한 최종 pose의 평균 총시간을
+TX/TCP/LAB/cuVSLAM/UPC/PoseAdapter 구간으로 나눈 누적 막대다.
+`one_way_wall_clock_diagnostic.png`은 NTP 상태를 확인한 경우에만 편도 지연으로 해석한다.
 
 ## 기존 보조 스크립트
 

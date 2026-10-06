@@ -248,6 +248,6 @@ LiDAR가 costmap을 다시 채운 것을 확인하고 re-enable 후 새 목표�
 | Nav2가 path를 못 찾음 | goal이 rolling window 안인지, LiDAR가 free space를 관측했는지, footprint/inflation |
 | cmd_raw는 나오는데 로봇 정지 | 기존 control의 상태 gate, driver 전원·서보·stream 준비 |
 
-image raw data는 binary로 보내고 메타데이터만 JSON으로 보낸다. 일반 ROS 메시지는 명시적인 schema로 복원하며 pickle/CDR 배포판 호환성에 기대지 않는다. stereo는 쌍 단위로 처리하고 누적 지연을 제한한다. 재연결 시 새 session과 calibration/static TF를 전달한다. TCP 재전송/혼잡으로 원본 timestamp가 오래되면 주행용 입력으로 사용하지 않는다.
+image raw data는 binary로 보내고 메타데이터만 JSON으로 보낸다. 일반 ROS 메시지는 명시적인 schema로 복원하며 pickle/CDR 배포판 호환성에 기대지 않는다. 하나의 TCP session에서 writer와 reader를 분리해 큰 stereo `sendall`이 반대 방향 pose 수신을 막지 않게 한다. stereo는 쌍 단위 latest-only, pose는 종류별 32개 bounded FIFO로 처리하고 FIFO overflow는 `dropped_oldest`로 기록한다. 재연결 시 새 session과 calibration/static TF를 전달한다. 원본 timestamp가 오래된 pose는 주행용 입력으로 사용하지 않는다.
 
 유선 1 Gbps에서 먼저 확인한다. 기본 영상만 약 18.4 MB/s이며 UPC USB/CPU와 네트워크 부하도 관찰한다. `config/isaac_vslam.yaml`의 IMU noise는 NVIDIA 예제값이므로 정밀 성능 비교 전에 실제 IMU 보정을 진행한다.

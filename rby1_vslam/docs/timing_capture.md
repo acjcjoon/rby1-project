@@ -1,6 +1,6 @@
 # UPC / LAB 양쪽 시간 계측
 
-주행·VSLAM timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. `/rby1/vslam/timing`에는 UPC stereo enqueue, LAB receive/publish, cuVSLAM pose callback, UPC pose receive/publish, PoseAdapter receive/publish 경계가 원본 stamp와 TCP session ID로 기록된다. bridge 상태에는 송·수신 latest-only mailbox의 enqueue/drain/replace/expire 누적 카운터도 포함된다.
+주행·VSLAM timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. `/rby1/vslam/timing`에는 UPC stereo enqueue, LAB receive/publish, cuVSLAM pose callback, UPC pose receive/publish, PoseAdapter receive/publish/drop 경계가 원본 stamp와 TCP session ID로 기록된다. bridge 상태에는 latest-only stereo/state와 bounded pose FIFO의 enqueue/drain/replace/expire/drop 누적 카운터도 포함된다.
 
 ## 실행
 
@@ -62,7 +62,7 @@ python3 scripts/analyze_vslam_timing.py \
   --output-dir ~/rby1_timing/point1_point2_01_combined
 ```
 
-`timing_report.txt`의 첫 `Likely bottlenecks / events` 절에 500 ms 초과 gap, cuVSLAM non-tracking, TCP 재연결, stereo sync drop, TX mailbox 영상/pose 교체, Nav2 status 5를 우선 표시한다. 이어지는 표는 입력 영상→LAB 영상→LAB pose→UPC 반환 pose→PoseAdapter 결과 순서의 rate와 최대 gap, exact source stamp 매칭 지연을 보여준다. 임계값을 바꿔 비교하려면 `--stale-ms 750`처럼 지정한다.
+`timing_report.txt`의 첫 `Likely bottlenecks / events` 절에 500 ms 초과 gap, cuVSLAM non-tracking, TCP 재연결, stereo sync drop, latest-only 교체, pose FIFO capacity drop, Nav2 status 5를 우선 표시한다. 이어지는 표는 입력 영상→LAB 영상→LAB pose→UPC 반환 pose→PoseAdapter 결과 순서의 rate와 최대 gap, exact source stamp 매칭 지연을 보여준다. 임계값을 바꿔 비교하려면 `--stale-ms 750`처럼 지정한다.
 
 세션별 그래프는 합친 보고서에서 오프라인으로 만든다.
 
@@ -72,8 +72,12 @@ python3 scripts/plot_vslam_timing.py --report /path/to/timing_report.json \
 ```
 
 Windows에서도 ROS 없이 `py -m pip install matplotlib` 후 같은 명령을 실행할 수 있다.
-`total_latency_by_session.png`은 프레임별 총 지연과 500 ms 빨간 점선,
-`session_stage_breakdown.png`은 세션별 평균 총 지연을 다음 구간으로 나눈 누적 막대다.
+`total_latency_by_session.png`은 PoseAdapter에서 폐기되기 전 raw 반환 pose와 최종 base
+pose를 함께 그리고, 아래 패널에 10초별 반환률·최종 완성률·500 ms 초과율을 표시한다.
+`pipeline_delivery_funnel.png`은 카메라 입력부터 최종 base pose까지 각 경계의 전달률과
+직전 경계 대비 손실 수를 표시한다. `latency_tail_by_stage.png`은 구간별 p50/p95/p99/max를
+로그 축으로 비교해 평균에 숨는 tail을 보여준다. `session_stage_breakdown.png`은 성공한
+최종 pose만 대상으로 세션별 평균 총 지연을 다음 구간으로 나눈 누적 막대다.
 
 1. UPC TX queue/socket
 2. TCP 왕복 residual
@@ -105,7 +109,7 @@ JSONL은 오프라인 `json.loads()`로 읽어 CSV에 옮길 수 있는 원시 �
 | `frame_id`, `child_frame_id` | 측정 프레임과 포즈 대상 |
 | `width`, `height`, `step`, `encoding`, `payload_bytes` | 영상 메타데이터 및 원본 픽셀 바이트 수 |
 | `position`, `orientation`, `velocity` | pose/twist가 있을 때 작은 수치 배열 |
-| `state` | bridge/localization/gate 등의 JSON 전체. session_id, detail, drop 및 `tx_mailbox`/`rx_mailbox` enqueue·drain·replace·expire 카운터 보존 |
+| `state` | bridge/localization/gate 등의 JSON 전체. session_id, detail, drop 및 `tx_mailbox`/`rx_mailbox` enqueue·drain·replace·expire·dropped_oldest·discarded_on_clear 카운터 보존 |
 | `bridge_session_id`, `bridge_connected` | 관측 당시 bridge 상태. timing 이벤트는 wire packet의 정확한 session ID 우선 |
 | `timing_stage` | `/rby1/vslam/timing` 내부 경계 이름 |
 
@@ -133,7 +137,7 @@ cuVSLAM pose stamp는 프로젝트에서 덮어쓰지 않지만 모든 입력에
 
 같은 PC에서도 서로 다른 구독 콜백의 scheduling 순서로 음수 구간이 생길 수 있다. 내부 작업 시작/끝의 정확한 latency로 해석하지 않고 pcap·RMW·호스트 부하를 함께 비교한다.
 
-관측 누락은 패킷 손실과 같지 않다. TCP 재전송, 브리지 latest-only 큐 폐기, 동기화 실패, cuVSLAM 출력률, 구독 QoS drop, 수집기 지연이 모두 가능하다. `bridge_status`의 dropped_stereo, imu_overflows, sync_drops 및 observer counts를 함께 본다. drop 카운터는 재연결 시 의미/연속성이 달라질 수 있으므로 session별로 비교한다.
+관측 누락은 패킷 손실과 같지 않다. TCP 재전송, stereo/state latest-only 교체, pose FIFO capacity drop, session reset의 queued-packet clear, PoseAdapter stale/TF drop, 동기화 실패, cuVSLAM 출력률, 구독 QoS drop, 수집기 지연이 모두 가능하다. `bridge_status`의 dropped_stereo, dropped_oldest, discarded_on_clear, imu_overflows, sync_drops 및 observer counts를 함께 본다. drop 카운터는 재연결 시 의미/연속성이 달라질 수 있으므로 session별로 비교한다.
 
 ## TCP 패킷도 확인할 때
 
@@ -193,4 +197,4 @@ IPv6이면 ip.src/ip.dst 대신 ipv6.src/ipv6.dst도 포함한다. seq/ack는 �
 
 system_samples의 ps pcpu는 프로세스 수명 평균이며 순간 CPU 정밀 지표가 아니다. GPU는 nvidia-smi가 있는 LAB에서 기록되며 Jetson에는 값이 없을 수 있다. ss는 낮은 빈도 snapshot이고 system sampling 주기도 명령 수행 시간+sleep 1초이므로 정확히 1 Hz라고 가정하지 않는다.
 
-기존 bridge/transport/cuVSLAM/Nav2/control 실행 로직은 바꾸지 않았다. 로컬에서 Bash 구문, 도움말, ROS 없는 메타데이터 단위 검사를 수행한다. 실제 Humble/Jazzy 양쪽 통합 수집과 데이터 품질은 실험 시 구독/카운터/로그로 확인해야 한다.
+bridge transport는 동일 wire protocol/포트를 유지하면서 TX/RX worker를 분리하고 반환 pose를 bounded FIFO로 처리한다. cuVSLAM/Nav2/control 로직은 바꾸지 않았다. 로컬에서 ROS 없는 transport·분석 단위 검사를 수행하며, 실제 Humble/Jazzy 양쪽 통합 수집과 데이터 품질은 실험 시 구독/카운터/로그로 확인해야 한다.

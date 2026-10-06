@@ -5,6 +5,7 @@
     socket_timeout_sec: 2.0
     reconnect_delay_sec: 1.0
     max_imu_queue: 512
+    pose_queue_size: 32
     enable_imu: true
     camera_frame_prefix: d435_
     camera_root_frame: d435_link

@@ -8,6 +8,7 @@ claim to validate generated ROS Python setters, DDS, QoS, or Isaac ROS runtime.
 from dataclasses import asdict, dataclass, field, is_dataclass
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -359,3 +360,101 @@ def test_lab_diagnostic_localization_uses_only_visual_slam_source(bridge):
     actual.values[0].value = 'No'
     bridge.BridgeNode._on_diagnostics(node, SimpleNamespace(status=[actual]))
     assert not node._localized
+
+
+class FakeBridgeLink:
+    def __init__(self, state, packets=()):
+        self.current_state = dict(state)
+        self.packets = list(packets)
+        self.invalidated = []
+
+    def state(self):
+        return dict(self.current_state)
+
+    def receive(self):
+        packets, self.packets = self.packets, []
+        return packets
+
+    def invalidate(self, reason):
+        self.invalidated.append(reason)
+
+
+def guard_test_node(bridge, link, events):
+    synchronizer = SimpleNamespace(
+        dropped=0, clear=lambda: events.append('session_reset'))
+    node = SimpleNamespace(
+        role='upc', cfg=dict(bridge.DEFAULTS), link=link,
+        _synchronizer=synchronizer,
+        _previous_state=(True, 'old-session'), _session='old-session',
+        _last_stereo_stamp=123, _tracking_state=1,
+        _tracking_received_at=10.0, _localized=True,
+        _localization_received_at=10.0, _requires_localization=True,
+        _lab_input_session='old-session', _lab_first_image_stamp=123,
+        _status_dirty=False,
+        get_logger=lambda: SimpleNamespace(
+            info=lambda message: events.append('state_logged'),
+            error=lambda message: events.append('error_logged')),
+    )
+    node._sync_link_state = lambda state: bridge.BridgeNode._sync_link_state(node, state)
+    node._publish_received = lambda packet: events.append(
+        ('packet_published', node._session, node._tracking_state, packet.session_id))
+    node._drain_received = lambda: bridge.BridgeNode._drain_received(node)
+    return node
+
+
+def test_receive_guard_resets_session_before_first_packet_is_published(bridge):
+    events = []
+    state = {'connected': True, 'session_id': 'new-session', 'reason': 'connected'}
+    packet = Packet('tracking_odom', {}, session_id='new-session')
+    link = FakeBridgeLink(state, [packet])
+    node = guard_test_node(bridge, link, events)
+
+    bridge.BridgeNode._drain_received(node)
+
+    assert events == [
+        'session_reset', 'state_logged',
+        ('packet_published', 'new-session', 0, 'new-session'),
+    ]
+    assert node._previous_state == (True, 'new-session')
+    assert node._lab_input_session == ''
+    assert node._lab_first_image_stamp is None
+    assert node._tracking_received_at is None
+    assert not node._localized
+    assert node._status_dirty
+    assert link.invalidated == []
+
+
+def test_guard_consumed_session_change_is_latched_for_next_status_tick(
+        bridge, monkeypatch):
+    events = []
+    state = {'connected': True, 'session_id': 'new-session', 'reason': 'connected'}
+    link = FakeBridgeLink(state)
+    node = guard_test_node(bridge, link, events)
+    published = []
+    node._timing_pub = SimpleNamespace(get_subscription_count=lambda: 0)
+    node._publish_transport_timing = lambda: None
+    node._tracking_fields = lambda now, connected: {
+        'tracking_ok': False, 'tracking_age_sec': None, 'vo_state': 0,
+        'localized': False, 'require_localized': False,
+        'localization_age_sec': None,
+    }
+    node._status_pub = SimpleNamespace(publish=published.append)
+    node._last_status_at = 100.0
+    monkeypatch.setattr(bridge.time, 'monotonic', lambda: 100.0)
+    monkeypatch.setattr(
+        bridge, 'String', lambda **fields: SimpleNamespace(**fields))
+
+    # This models the transport receive guard running before the 10 ms timer.
+    bridge.BridgeNode._drain_received(node)
+    assert node._status_dirty
+    assert published == []
+
+    bridge.BridgeNode._tick(node)
+
+    assert len(published) == 1
+    assert json.loads(published[0].data)['session_id'] == 'new-session'
+    assert not node._status_dirty
+
+    # The latch is one-shot; the ordinary 100 ms cadence still applies.
+    bridge.BridgeNode._tick(node)
+    assert len(published) == 1

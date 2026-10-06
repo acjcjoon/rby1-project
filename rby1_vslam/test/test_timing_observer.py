@@ -57,6 +57,15 @@ class TimingMetadataTest(unittest.TestCase):
         self.assertEqual(result['log_name'], 'visual_slam')
         self.assertEqual(result['log_message'], 'Visual tracking is lost')
 
+    def test_jazzy_diagnostic_uint8_bytes_is_normalized(self):
+        status = SimpleNamespace(
+            level=b'\x02', name='visual_slam', hardware_id='gpu',
+            message='tracking degraded', values=[])
+        result = observer.message_metadata(
+            SimpleNamespace(status=[status]), 'diagnostic_msgs/msg/DiagnosticArray')
+        self.assertEqual(result['diagnostics'][0]['level'], 2)
+        json.dumps(result, allow_nan=False)
+
     def test_action_status_keeps_status_five_and_goal_id(self):
         goal_info = SimpleNamespace(
             goal_id=SimpleNamespace(uuid=[1, 2, 255]),

@@ -17,7 +17,7 @@ def stat(mean, p95=None):
             'p95': mean if p95 is None else p95, 'p99': mean, 'max': mean}
 
 
-def test_report_generates_three_png_files(tmp_path):
+def test_report_generates_problem_focused_png_files(tmp_path):
     sample = {
         'session_id': 'abcdef0123456789', 'source_stamp_ns': 1,
         'upc_start_wall_ns': 1_000_000_000, 'total_ms': 80.0,
@@ -33,6 +33,16 @@ def test_report_generates_three_png_files(tmp_path):
     session = {
         'session_id': sample['session_id'], 'started': 2, 'complete': 2,
         'completion_fraction': 1.0, 'samples_over_threshold': 0,
+        'raw_returned': 2, 'raw_return_samples_over_threshold': 0,
+        'raw_return_pose_ms': stat(70.0, 90.0),
+        'funnel': [
+            {'key': 'camera_enqueued', 'label': 'UPC camera frames enqueued',
+             'count': 2, 'fraction_of_started': 1.0, 'fraction_of_previous': None,
+             'dropped_from_previous': 0},
+            {'key': 'base_pose', 'label': 'Final base pose published',
+             'count': 2, 'fraction_of_started': 1.0, 'fraction_of_previous': 1.0,
+             'dropped_from_previous': 0},
+        ],
         'total_ms': stat(80.0, 95.0),
     }
     for field in (
@@ -48,9 +58,24 @@ def test_report_generates_three_png_files(tmp_path):
     report = tmp_path / 'timing_report.json'
     report.write_text(json.dumps({
         'stale_threshold_ms': 500.0,
-        'end_to_end': {'samples': [sample, dict(sample, source_stamp_ns=2,
-                                                upc_start_wall_ns=1_033_000_000)],
-                       'sessions': [session]},
+        'end_to_end': {
+            'samples': [sample, dict(sample, source_stamp_ns=2,
+                                     upc_start_wall_ns=1_033_000_000)],
+            'raw_return_samples': [
+                {'session_id': sample['session_id'], 'source_stamp_ns': 1,
+                 'upc_start_wall_ns': 1_000_000_000, 'latency_ms': 70.0,
+                 'over_threshold': False},
+                {'session_id': sample['session_id'], 'source_stamp_ns': 2,
+                 'upc_start_wall_ns': 1_033_000_000, 'latency_ms': 90.0,
+                 'over_threshold': False},
+            ],
+            'delivery_bins': [
+                {'elapsed_s': 0.0, 'started': 2, 'raw_returned': 2,
+                 'raw_over_threshold': 0, 'final': 2,
+                 'raw_return_fraction': 1.0, 'final_fraction': 1.0,
+                 'raw_over_threshold_fraction': 0.0},
+            ],
+            'sessions': [session]},
     }), encoding='utf-8')
     output = tmp_path / 'plots'
     script = Path(__file__).resolve().parents[1] / 'scripts/plot_vslam_timing.py'
@@ -62,6 +87,7 @@ def test_report_generates_three_png_files(tmp_path):
     assert result.returncode == 0, result.stderr
     assert {path.name for path in output.glob('*.png')} == {
         'total_latency_by_session.png', 'session_stage_breakdown.png',
+        'pipeline_delivery_funnel.png', 'latency_tail_by_stage.png',
         'one_way_wall_clock_diagnostic.png',
     }
     assert all(path.stat().st_size > 1000 for path in output.glob('*.png'))
