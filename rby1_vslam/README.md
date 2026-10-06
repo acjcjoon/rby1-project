@@ -24,7 +24,7 @@ RBY1의 Jetson(Ubuntu 22.04 / ROS 2 Humble)에서 D435i를 읽고, LAB PC의 Ubu
 
 이 패키지만 양쪽에 복사해 빌드한다. **Jetson에는 Isaac ROS를 설치하지 않는다.** LAB PC만 Isaac ROS를 실행한다. 실물 전체 절차와 명령은 **[Jetson 실물 실행 가이드](docs/jetson_physical.md)**에 정리되어 있다.
 
-**Nav2와 지도:** `navigation.launch.py`는 Navfn 경로계획 + holonomic DWB 제어 + velocity smoother를 실행한다. cuVSLAM 특징점 지도와 Nav2의 occupancy map은 다른 데이터다. 실물 launch 기본값 `use_scan:=false`에서는 장애물 layer가 제거되며 회피 기능이 없다. LiDAR를 연결한 뒤 `use_scan:=true`로 실행하면 `/scan`으로 local/global obstacle layer를 사용한다. 같은 `vslam_map` 좌표로 정렬된 occupancy map이 있다면 `occupancy_map:=/절대경로/map.yaml` 옵션으로 map_server/static layer를 사용한다.
+**Nav2와 지도:** `navigation.launch.py`는 Theta* 경로계획 + holonomic DWB 제어 + velocity smoother를 실행한다. 목표 허용오차는 위치 0.01 m, yaw 1°다. cuVSLAM 특징점 지도와 Nav2의 occupancy map은 다른 데이터다. 실물 launch 기본값 `use_scan:=false`에서는 장애물 layer가 제거되며 회피 기능이 없다. LiDAR를 연결한 뒤 `use_scan:=true`로 실행하면 `/scan`으로 local/global obstacle layer를 사용한다. 같은 `vslam_map` 좌표로 정렬된 occupancy map이 있다면 `occupancy_map:=/절대경로/map.yaml` 옵션으로 map_server/static layer를 사용한다.
 
 ## 담당 범위
 

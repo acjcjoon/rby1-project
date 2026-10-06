@@ -23,6 +23,7 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>nav2_common</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav2_theta_star_planner</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

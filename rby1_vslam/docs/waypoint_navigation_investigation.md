@@ -109,7 +109,7 @@ launch 인자나 ROS 파라미터로 바뀔 수 있으므로 실제 노드 값�
 
 Nav2의 SimpleProgressChecker는 현재 설정으로 15초 안에 baseline에서 0.1 m 초과 평면 이동이 있어야 진행으로 본다. Humble 구현은 yaw 변화만을 진행 거리로 세지 않는다. 목표 주변 방향 정렬 지연이나 최종 cmd_vel 차단으로 움직이지 못하면 progress failure의 후보가 된다. 이것만으로 status=5의 원인을 설명할 수는 없으며 보통 서버 실패 상태 6과 구분해서 조사한다. [Humble 구현](https://github.com/ros-navigation/navigation2/blob/humble/nav2_controller/plugins/simple_progress_checker.cpp)
 
-목표 판정에는 x/y뿐 아니라 저장 yaw도 사용한다. 현재 허용 오차는 위치 0.08 m, yaw 0.12 rad(약 6.88°). 두 점 yaw 차이는 약 14°이므로 위치에 접근한 뒤 회전 단계가 필요할 수 있다. DWB의 RotateToGoal은 목표 근처에서 감속/회전 제약을 적용한다. 실제 controller 로그에 trajectory/progress 오류가 있는지 확인한다. [Humble RotateToGoal](https://github.com/ros-navigation/navigation2/blob/humble/nav2_dwb_controller/dwb_critics/src/rotate_to_goal.cpp)
+목표 판정에는 x/y뿐 아니라 저장 yaw도 사용한다. 현재 허용 오차는 위치 0.01 m, yaw 0.0174533 rad(1°). 두 점 yaw 차이는 약 14°이므로 위치에 접근한 뒤 회전 단계가 필요할 수 있다. DWB의 RotateToGoal은 목표 근처에서 감속/회전 제약을 적용한다. 실제 controller 로그에 trajectory/progress 오류가 있는지 확인한다. [Humble RotateToGoal](https://github.com/ros-navigation/navigation2/blob/humble/nav2_dwb_controller/dwb_critics/src/rotate_to_goal.cpp)
 
 `rby1_control`도 별도 안전 상태를 검사해 최종 속도를 0으로 만들 수 있다. `/rby1/vslam/nav2_cmd_vel`, `/rby1/cmd_raw`, `/rby1/cmd_vel`을 함께 기록하면 어느 단계에서 막혔는지 구분할 수 있다. Nav2 goal 결과만으로 최종 드라이버가 속도를 받았는지 알 수 없다.
 
