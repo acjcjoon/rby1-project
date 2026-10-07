@@ -28,6 +28,7 @@
 
 ```bash
 cd "$HOME/rby1_ros2_ws/src/rby1-project"
+export ROS_DOMAIN_ID=10
 bash rby1_vslam/scripts/capture_vslam_mapping_debug.sh \
   --run-id mapping_loop_01
 ```

@@ -5,6 +5,7 @@ set -Eeo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 RECORDER="$PROJECT_ROOT/record_trial.sh"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
 
 if [[ ! -f "$RECORDER" ]]; then
   echo "record_trial.sh not found at $RECORDER" >&2

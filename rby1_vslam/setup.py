@@ -29,5 +29,6 @@ setup(
         'map_tool = rby1_vslam.map_tool:main',
         'waypoint_ui = rby1_vslam.waypoint_ui:main',
         'mobile_base_qt = rby1_vslam.mobile_base_qt:main',
+        'sensor_replay_relay = rby1_vslam.sensor_replay_relay:main',
     ]},
 )
