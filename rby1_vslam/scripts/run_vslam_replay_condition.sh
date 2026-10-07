@@ -115,7 +115,7 @@ echo '[sensor-replay] Relay and bridge are ready. Start the UPC and LAB recorder
 read -r -p '[sensor-replay] After fresh LAB cuVSLAM and both recorders are ready, press Enter... ' _
 bridge_status="$(timeout 4 ros2 topic echo /rby1/vslam/bridge_status \
   std_msgs/msg/String --once 2>/dev/null || true)"
-grep -q '"connected":true' <<<"$bridge_status" || \
+grep -Eq '"connected"[[:space:]]*:[[:space:]]*true' <<<"$bridge_status" || \
   die 'UPC bridge is not connected to LAB; do not start an incomplete replay'
 response="$(ros2 service call /rby1/vslam/sensor_replay/arm std_srvs/srv/Trigger '{}')"
 grep -Eqi 'success[=:][[:space:]]*[Tt]rue' <<<"$response" || \
