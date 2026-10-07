@@ -67,6 +67,13 @@ class RuntimeEngine:
         kind = str(command.get('cmd', '')).lower()
         if kind == 'pause':
             self.paused = True
+            if self.current_task_id:
+                self.planner.cancel()
+                self._event(
+                    'task_cancel_requested',
+                    task_id=self.current_task_id,
+                    reason='scheduler paused',
+                )
             self._event('scheduler_paused')
         elif kind in {'resume', 'play'}:
             self.paused = False

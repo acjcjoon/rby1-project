@@ -83,3 +83,4 @@
 {"sequence":6,"timestamp":"2026-10-06T08:09:27.152546+00:00","type":"manual_transfer_requested","task_id":"MANUAL.T002","source":"INBOX","destination":"STORE"}
 {"sequence":7,"timestamp":"2026-10-06T08:09:27.153440+00:00","type":"task_started","task_id":"MANUAL.T002","mission_id":"mission-3624ea7127ae"}
 {"sequence":8,"timestamp":"2026-10-06T08:10:22.802375+00:00","type":"task_completed","task_id":"MANUAL.T002","mission_id":"mission-3624ea7127ae"}
+{"sequence":1,"timestamp":"2026-10-07T06:26:42.193397+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":20}

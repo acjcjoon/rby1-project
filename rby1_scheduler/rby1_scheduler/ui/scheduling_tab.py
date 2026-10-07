@@ -15,12 +15,15 @@ class SchedulingTab(QWidget):
         self.robot = QLabel('Robot: UNKNOWN')
         self.sim_button = QPushButton('Sim')
         self.play_button = QPushButton('Play')
-        self.pause_button = QPushButton('Pause')
+        self.pause_button = QPushButton('Pause / Cancel (Space)')
         self.promote_button = QPushButton('\uc120\ud0dd \uc791\uc5c5 P0 \uc2b9\uaca9')
         self.retry_button = QPushButton('\uc120\ud0dd \uc791\uc5c5 \uc7ac\uc2dc\ub3c4')
         self.reload_button = QPushButton('JSON / lab.yaml \ub2e4\uc2dc \uc77d\uae30')
         self.sim_button.setToolTip('\uc2e4\uc81c Planner\uc640 \uc11c\ubc84 \uc0c1\ud0dc\ub97c \ubc14\uafb8\uc9c0 \uc54a\uace0 \uac00\uc0c1 \uc2dc\uac04\uc73c\ub85c \uacc4\uc0b0\ud569\ub2c8\ub2e4.')
         self.play_button.setToolTip('\ub77c\uc774\ube0c \uc791\uc5c5 \uc2e4\ud589\uc744 \ud5c8\uc6a9\ud569\ub2c8\ub2e4.')
+        self.pause_button.setToolTip(
+            '\uc0c8 \uc791\uc5c5 \uc120\ud0dd\uc744 \uba48\ucd94\uace0 \ud604\uc7ac \uc2e4\ud589 \uc911\uc778 Planner \uc791\uc5c5\uc744 cancel\ud569\ub2c8\ub2e4.'
+        )
         self.queue = QTableWidget(0, 6)
         self.queue.setHorizontalHeaderLabels(['\uc6b0\uc120\uc21c\uc704', 'Task', 'Plate', '\uacbd\ub85c', '\uc0c1\ud0dc', '\uc624\ub958'])
         self.devices = QTableWidget(0, 3)

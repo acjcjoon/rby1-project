@@ -29,7 +29,9 @@ def _run(argv) -> int:
     refresh_timer.timeout.connect(refresh)
     refresh_timer.start()
     signal.signal(signal.SIGINT, lambda *_: app.quit())
-    window.statusBar().showMessage(f'Qt: {QT_BINDING}')
+    window.statusBar().showMessage(
+        f'Qt: {QT_BINDING} | Space: Pause and cancel the active task'
+    )
     window.show()
     try:
         return app_exec(app)

@@ -81,7 +81,11 @@ class RosPlannerClient(PlannerClient):
         return self._report
 
     def cancel(self) -> None:
-        if self._task is None or self._terminal is not None:
+        if (
+            self._task is None
+            or self._terminal is not None
+            or self._cancel_requested
+        ):
             return
         self._cancel_requested = True
         self._report = PlannerReport(

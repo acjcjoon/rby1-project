@@ -21,8 +21,10 @@ class CommunicationTestTab(QWidget):
             self.pick.addItem(label, value)
             self.place.addItem(label, value)
         self.play = QPushButton('Play')
-        self.pause = QPushButton('Pause')
-        self.pause.setToolTip('\ud604\uc7ac \ud14c\uc2a4\ud2b8 \uc791\uc5c5\uc5d0 cancel \uc694\uccad\uc744 \ubcf4\ub0c5\ub2c8\ub2e4.')
+        self.pause = QPushButton('Pause / Cancel (Space)')
+        self.pause.setToolTip(
+            '\uc2a4\ucf00\uc904\ub9c1\uc744 \uc77c\uc2dc\uc815\uc9c0\ud558\uace0 \ud604\uc7ac \ud14c\uc2a4\ud2b8 \uc791\uc5c5\uc5d0 cancel \uc694\uccad\uc744 \ubcf4\ub0c5\ub2c8\ub2e4.'
+        )
         selectors = QGridLayout()
         selectors.addWidget(QLabel('Pick'), 0, 0)
         selectors.addWidget(QLabel('Place'), 0, 1)
@@ -65,7 +67,7 @@ class CommunicationTestTab(QWidget):
         layout.addWidget(left_box, 1)
         layout.addWidget(right_box, 2)
         self.play.clicked.connect(self._play)
-        self.pause.clicked.connect(lambda: self.send_command({'cmd': 'cancel'}))
+        self.pause.clicked.connect(lambda: self.send_command({'cmd': 'pause'}))
 
     def update_state(self, state: dict[str, Any]) -> None:
         robot = state.get('robot', {})

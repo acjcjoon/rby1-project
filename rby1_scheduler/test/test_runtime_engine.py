@@ -51,7 +51,25 @@ def test_manual_transfer_pause_button_cancel_path(tmp_path):
     engine = RuntimeEngine(MockPlannerClient())
     engine.sync_external(config.enrich_snapshot(source.read_snapshot()))
     engine.apply_command({'cmd': 'manual_transfer', 'source': 'MPR', 'destination': 'LH1'})
-    engine.apply_command({'cmd': 'cancel'})
+    engine.apply_command({'cmd': 'pause'})
     engine.tick()
+    assert engine.paused is True
+    assert engine.current_task_id == ''
+    assert engine.last_planner_result['status'] == 'canceled'
+
+def test_live_pause_cancels_active_planner_task(tmp_path):
+    root = Path(__file__).parents[1]
+    source = JsonDataSource(root / 'mock_server' / 'server_input.json', tmp_path / 'out.json', tmp_path / 'events.jsonl')
+    config = load_lab_config(root / 'config' / 'lab.yaml')
+    engine = RuntimeEngine(MockPlannerClient())
+    engine.sync_external(config.enrich_snapshot(source.read_snapshot()))
+    engine.apply_command({'cmd': 'play'})
+    engine.tick()
+    assert engine.current_task_id == 'B001.T01'
+
+    engine.apply_command({'cmd': 'pause'})
+    engine.tick()
+
+    assert engine.paused is True
     assert engine.current_task_id == ''
     assert engine.last_planner_result['status'] == 'canceled'

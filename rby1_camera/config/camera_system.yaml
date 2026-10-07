@@ -88,6 +88,7 @@ depth_tag_tf_node:
     # 실제 사용 전에 측정한 D435 장착 위치/각도로 바꿔야 한다.
     parent_to_camera_center_translation: [0.0464, 0.0, 0.066]
     parent_to_camera_center_rotation: [0.0, -2.0, 0.0]
+    #rby1 수평도 오차
 
     # T_d435_camera_center_d435_link
     # D435 중심과 d435_link 사이의 CAD 오프셋이 있으면 여기에 입력한다.
