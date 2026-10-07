@@ -24,6 +24,19 @@ class TimingMetadataTest(unittest.TestCase):
         self.assertNotIn('data', result)
         self.assertNotIn('private-pixels', json.dumps(result))
 
+    def test_imu_keeps_motion_values_for_stationary_jitter_analysis(self):
+        message = SimpleNamespace(
+            header=SimpleNamespace(stamp=SimpleNamespace(sec=7, nanosec=8),
+                                   frame_id='d435_gyro_optical_frame'),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.1, w=0.99),
+            angular_velocity=SimpleNamespace(x=0.01, y=-0.02, z=0.03),
+            linear_acceleration=SimpleNamespace(x=0.1, y=9.7, z=-0.2),
+        )
+        result = observer.message_metadata(message, 'sensor_msgs/msg/Imu')
+        self.assertEqual(result['source_stamp_ns'], 7_000_000_008)
+        self.assertEqual(result['angular_velocity'], [0.01, -0.02, 0.03])
+        self.assertEqual(result['linear_acceleration'], [0.1, 9.7, -0.2])
+
     def test_status_keeps_session_and_fault_reason(self):
         result = observer.message_metadata(SimpleNamespace(data=json.dumps({
             'session_id': 'session-a', 'enabled': False,

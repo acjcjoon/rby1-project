@@ -246,6 +246,50 @@ def test_localization_correction_wraps_yaw_and_segments_sessions():
     assert math.isclose(result['jumps'][0]['translation_m'], 0.07, abs_tol=1e-9)
 
 
+def test_marked_mapping_loop_reports_stationary_jitter_and_return_error():
+    def odom(index, mono_ns, x, yaw=0.0):
+        return message(
+            'upc', '/rby1/vslam/slam_odom', index, mono_ns, mono_ns,
+            position=[x, 0.0, 0.0],
+            orientation=[0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)],
+            velocity=[0.0, 0.0, 0.0], frame_id='vslam_map',
+            child_frame_id='base')
+
+    records = [
+        odom(1, 1_100_000_000, 0.000),
+        odom(2, 2_100_000_000, 0.002),
+        odom(3, 4_100_000_000, 0.500),
+        odom(4, 6_100_000_000, 0.030, math.radians(2.0)),
+        odom(5, 7_100_000_000, 0.032, math.radians(2.2)),
+    ]
+    imu = [
+        message('upc', '/d435/d435/imu', index, mono_ns, mono_ns,
+                angular_velocity=[0.0, 0.0, 0.01 * index],
+                linear_acceleration=[0.01 * index, 0.0, 9.8])
+        for index, mono_ns in enumerate(
+            (1_200_000_000, 2_200_000_000, 6_200_000_000, 7_200_000_000), 1)
+    ]
+    data = capture('upc', {
+        '/rby1/vslam/slam_odom': records,
+        '/d435/d435/imu': imu,
+    })
+    data['markers'] = [
+        {'phase': 'initial_stationary', 'monotonic_ns': 1_000_000_000},
+        {'phase': 'mapping_motion', 'monotonic_ns': 4_000_000_000},
+        {'phase': 'returned_stationary', 'monotonic_ns': 6_000_000_000},
+        {'phase': 'capture_end', 'monotonic_ns': 8_000_000_000},
+    ]
+    result = analysis.motion_debug_summary(data)
+    pose = result['pose_topics']['/rby1/vslam/slam_odom']
+    assert result['complete'] is True
+    assert pose['phases']['initial_stationary']['samples'] == 2
+    assert math.isclose(
+        pose['phases']['initial_stationary']['translation_jitter_m']['max'], 0.001)
+    assert math.isclose(pose['return_error']['translation_m'], 0.03)
+    assert math.isclose(pose['return_error']['yaw_rad'], math.radians(2.1))
+    assert result['imu']['phases']['returned_stationary']['samples'] == 2
+
+
 def test_parameter_events_keep_false_and_deletion():
     records = [{
         'observed_monotonic_ns': 1, 'observed_wall_ns': 2,

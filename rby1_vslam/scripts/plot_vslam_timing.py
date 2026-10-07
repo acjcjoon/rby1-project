@@ -41,14 +41,14 @@ def load_report(args, parser):
             return json.loads(args.report.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
-    if len(args.captures) != 2:
-        parser.error('provide UPC and LAB capture directories, or --report timing_report.json')
+    if not 1 <= len(args.captures) <= 2:
+        parser.error('provide one/two capture directories, or --report timing_report.json')
     try:
         captures = [load_capture(path) for path in args.captures]
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     roles = {capture['role'] for capture in captures}
-    if roles != {'upc', 'lab'}:
+    if len(captures) == 2 and roles != {'upc', 'lab'}:
         parser.error(f'captures must contain one UPC and one LAB role; got {sorted(roles)}')
     return build_report(captures, args.threshold_ms)
 
@@ -276,6 +276,145 @@ def plot_one_way_diagnostic(plt, samples, sessions, output):
     plt.close(fig)
 
 
+def _marked_motion(report):
+    motion = report.get('motion_analysis') or {}
+    if motion.get('upc', {}).get('available'):
+        return 'upc', motion['upc']
+    for role, result in motion.items():
+        if result.get('available'):
+            return role, result
+    return None, None
+
+
+def plot_pose_trajectory(plt, role, motion, output):
+    preferred = (
+        ('/rby1/vslam/odom', 'VSLAM tracking (base)'),
+        ('/rby1/vslam/slam_odom', 'SLAM-corrected (base)'),
+        ('/rby1/odom', 'Wheel odometry'),
+    )
+    available = [(topic, label, motion.get('pose_topics', {}).get(topic))
+                 for topic, label in preferred
+                 if motion.get('pose_topics', {}).get(topic, {}).get('trace')]
+    if not available:
+        return False
+    colors = {
+        'initial_stationary': '#4c78a8',
+        'mapping_motion': '#f58518',
+        'returned_stationary': '#54a24b',
+    }
+    fig, axes = plt.subplots(1, len(available),
+                             figsize=(5.2 * len(available), 5.2), squeeze=False)
+    for ax, (topic, label, result) in zip(axes[0], available):
+        initial = result.get('phases', {}).get('initial_stationary')
+        center = initial.get('center') if initial else None
+        if center is None:
+            first = result['trace'][0]
+            center = [first['x'], first['y'], first['z'], first['yaw']]
+        for phase, color in colors.items():
+            trace = [sample for sample in result['trace'] if sample.get('phase') == phase]
+            if not trace:
+                continue
+            ax.plot([sample['x'] - center[0] for sample in trace],
+                    [sample['y'] - center[1] for sample in trace],
+                    color=color, linewidth=1.2, alpha=0.85,
+                    label=phase.replace('_', ' '))
+        closure = result.get('return_error') or {}
+        closure_text = ''
+        if closure:
+            closure_text = (f'\nreturn {closure["translation_m"] * 100:.1f} cm, '
+                            f'{math.degrees(closure["yaw_rad"]):.2f} deg')
+        ax.scatter([0], [0], marker='*', s=100, color='black', label='initial center')
+        ax.set(title=label + closure_text, xlabel='x from initial center (m)',
+               ylabel='y from initial center (m)')
+        ax.axis('equal')
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc='best', fontsize=7)
+    fig.suptitle(f'{role.upper()} marked mapping-loop trajectories')
+    fig.tight_layout()
+    fig.savefig(output, dpi=170)
+    plt.close(fig)
+    return True
+
+
+def plot_stationary_jitter(plt, role, motion, output):
+    preferred = (
+        ('/rby1/vslam/odom', 'VSLAM tracking'),
+        ('/rby1/vslam/slam_odom', 'SLAM-corrected'),
+        ('/rby1/odom', 'Wheel odometry'),
+    )
+    available = [(topic, label, motion.get('pose_topics', {}).get(topic))
+                 for topic, label in preferred
+                 if motion.get('pose_topics', {}).get(topic, {}).get('trace')]
+    imu = motion.get('imu') or {}
+    if not available and not imu.get('trace'):
+        return False
+    fig, axes = plt.subplots(3, 1, figsize=(13, 9.5), sharex=True)
+    colors = plt.get_cmap('tab10')
+    stationary_phases = ('initial_stationary', 'returned_stationary')
+    for index, (_, label, result) in enumerate(available):
+        x_values, radial_values, yaw_values = [], [], []
+        for sample in result['trace']:
+            phase = sample.get('phase')
+            summary = result.get('phases', {}).get(phase, {})
+            center = summary.get('center')
+            if phase not in stationary_phases or not center:
+                continue
+            x_values.append(sample['elapsed_sec'])
+            radial_values.append(100.0 * math.hypot(
+                sample['x'] - center[0], sample['y'] - center[1]))
+            delta = math.atan2(math.sin(sample['yaw'] - center[3]),
+                               math.cos(sample['yaw'] - center[3]))
+            yaw_values.append(math.degrees(delta))
+        if x_values:
+            axes[0].plot(x_values, radial_values, linewidth=0.8, alpha=0.8,
+                         color=colors(index), label=label)
+            axes[1].plot(x_values, yaw_values, linewidth=0.8, alpha=0.8,
+                         color=colors(index), label=label)
+    imu_x, gyro, accel = [], [], []
+    for sample in imu.get('trace', []):
+        phase = sample.get('phase')
+        summary = imu.get('phases', {}).get(phase, {})
+        center = summary.get('acceleration_center')
+        if phase not in stationary_phases or not center:
+            continue
+        imu_x.append(sample['elapsed_sec'])
+        gyro.append(sample['gyro_norm_rps'])
+        accel.append(math.sqrt(sum(
+            (sample['linear_acceleration'][axis] - center[axis]) ** 2
+            for axis in range(3))))
+    if imu_x:
+        axes[2].plot(imu_x, gyro, linewidth=0.7, color='#e45756',
+                     label='gyro norm (rad/s)')
+        axes[2].plot(imu_x, accel, linewidth=0.7, color='#72b7b2',
+                     label='accel residual (m/s²)')
+    origin = motion.get('intervals', [{}])[0].get('start_monotonic_ns', 0)
+    for axis in axes:
+        for interval in motion.get('intervals', []):
+            if interval['phase'] not in stationary_phases:
+                continue
+            start = (interval['start_monotonic_ns'] - origin) / 1e9
+            end = (interval['end_monotonic_ns'] - origin) / 1e9
+            axis.axvspan(start, end, color=('#4c78a8' if
+                         interval['phase'] == 'initial_stationary' else '#54a24b'),
+                         alpha=0.07)
+        axis.grid(True, alpha=0.25)
+        if axis.lines:
+            axis.legend(loc='best', fontsize=8, ncols=3)
+    axes[0].axhline(1.0, color='red', linestyle='--', linewidth=1.0,
+                    label='1 cm reference')
+    axes[1].axhline(1.0, color='red', linestyle='--', linewidth=1.0)
+    axes[1].axhline(-1.0, color='red', linestyle='--', linewidth=1.0)
+    axes[0].set_ylabel('Position jitter (cm)')
+    axes[1].set_ylabel('Yaw from phase center (deg)')
+    axes[2].set_ylabel('IMU magnitude')
+    axes[2].set_xlabel('Elapsed time from initial-stationary marker (s)')
+    fig.suptitle(f'{role.upper()} stationary pose/IMU jitter (mapping motion omitted)')
+    fig.tight_layout()
+    fig.savefig(output, dpi=170)
+    plt.close(fig)
+    return True
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('captures', nargs='*')
@@ -292,25 +431,36 @@ def main(argv=None):
     raw_samples = end_to_end.get('raw_return_samples') or []
     delivery_bins = end_to_end.get('delivery_bins') or []
     sessions = end_to_end.get('sessions') or []
-    if not samples or not sessions:
-        parser.error('report has no complete internal timing samples')
+    motion_role, motion = _marked_motion(report)
+    if (not samples or not sessions) and motion is None:
+        parser.error('report has neither complete internal timing nor marked motion samples')
     plt = _pyplot()
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    outputs = (
-        output_dir / 'total_latency_by_session.png',
-        output_dir / 'session_stage_breakdown.png',
-        output_dir / 'pipeline_delivery_funnel.png',
-        output_dir / 'latency_tail_by_stage.png',
-        output_dir / 'one_way_wall_clock_diagnostic.png',
-    )
-    plot_total_timeline(
-        plt, samples, raw_samples, delivery_bins, sessions,
-        args.threshold_ms, outputs[0])
-    plot_session_breakdown(plt, sessions, args.threshold_ms, outputs[1])
-    plot_delivery_funnel(plt, sessions, outputs[2])
-    plot_latency_tails(plt, sessions, args.threshold_ms, outputs[3])
-    plot_one_way_diagnostic(plt, samples, sessions, outputs[4])
+    outputs = []
+    if samples and sessions:
+        timing_outputs = (
+            output_dir / 'total_latency_by_session.png',
+            output_dir / 'session_stage_breakdown.png',
+            output_dir / 'pipeline_delivery_funnel.png',
+            output_dir / 'latency_tail_by_stage.png',
+            output_dir / 'one_way_wall_clock_diagnostic.png',
+        )
+        plot_total_timeline(
+            plt, samples, raw_samples, delivery_bins, sessions,
+            args.threshold_ms, timing_outputs[0])
+        plot_session_breakdown(plt, sessions, args.threshold_ms, timing_outputs[1])
+        plot_delivery_funnel(plt, sessions, timing_outputs[2])
+        plot_latency_tails(plt, sessions, args.threshold_ms, timing_outputs[3])
+        plot_one_way_diagnostic(plt, samples, sessions, timing_outputs[4])
+        outputs.extend(timing_outputs)
+    if motion is not None:
+        trajectory = output_dir / 'mapping_pose_trajectory.png'
+        jitter = output_dir / 'stationary_pose_imu_jitter.png'
+        if plot_pose_trajectory(plt, motion_role, motion, trajectory):
+            outputs.append(trajectory)
+        if plot_stationary_jitter(plt, motion_role, motion, jitter):
+            outputs.append(jitter)
     for path in outputs:
         print(path)
     return 0

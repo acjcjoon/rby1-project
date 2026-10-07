@@ -91,3 +91,55 @@ def test_report_generates_problem_focused_png_files(tmp_path):
         'one_way_wall_clock_diagnostic.png',
     }
     assert all(path.stat().st_size > 1000 for path in output.glob('*.png'))
+
+
+def test_single_upc_marked_loop_generates_motion_plots(tmp_path):
+    phase_summary = {
+        'samples': 2, 'center': [0.0, 0.0, 0.0, 0.0],
+        'translation_jitter_m': stat(0.001), 'yaw_jitter_rad': stat(0.002),
+    }
+    trace = [
+        {'elapsed_sec': 0.0, 'phase': 'initial_stationary',
+         'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0, 'velocity': [0.0, 0.0, 0.0]},
+        {'elapsed_sec': 1.0, 'phase': 'initial_stationary',
+         'x': 0.001, 'y': 0.0, 'z': 0.0, 'yaw': 0.001, 'velocity': [0.0, 0.0, 0.0]},
+        {'elapsed_sec': 5.0, 'phase': 'mapping_motion',
+         'x': 1.0, 'y': 0.2, 'z': 0.0, 'yaw': 0.2, 'velocity': [0.1, 0.0, 0.1]},
+        {'elapsed_sec': 10.0, 'phase': 'returned_stationary',
+         'x': 0.02, 'y': 0.0, 'z': 0.0, 'yaw': 0.01, 'velocity': [0.0, 0.0, 0.0]},
+    ]
+    report = tmp_path / 'timing_report.json'
+    report.write_text(json.dumps({
+        'end_to_end': {},
+        'motion_analysis': {'upc': {
+            'available': True,
+            'intervals': [
+                {'phase': 'initial_stationary', 'start_monotonic_ns': 0,
+                 'end_monotonic_ns': 2_000_000_000, 'duration_sec': 2.0},
+                {'phase': 'mapping_motion', 'start_monotonic_ns': 2_000_000_000,
+                 'end_monotonic_ns': 9_000_000_000, 'duration_sec': 7.0},
+                {'phase': 'returned_stationary', 'start_monotonic_ns': 9_000_000_000,
+                 'end_monotonic_ns': 12_000_000_000, 'duration_sec': 3.0},
+            ],
+            'pose_topics': {'/rby1/vslam/slam_odom': {
+                'trace': trace,
+                'phases': {
+                    'initial_stationary': phase_summary,
+                    'returned_stationary': dict(phase_summary,
+                                                center=[0.02, 0.0, 0.0, 0.01]),
+                },
+                'return_error': {'translation_m': 0.02, 'yaw_rad': 0.01},
+            }},
+            'imu': {'samples': 0, 'phases': {}, 'trace': []},
+        }},
+    }), encoding='utf-8')
+    output = tmp_path / 'plots'
+    script = Path(__file__).resolve().parents[1] / 'scripts/plot_vslam_timing.py'
+    env = dict(os.environ, MPLCONFIGDIR=str(tmp_path / 'matplotlib'))
+    result = subprocess.run(
+        [sys.executable, str(script), '--report', str(report),
+         '--output-dir', str(output)],
+        capture_output=True, text=True, env=env, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert {path.name for path in output.glob('*.png')} == {
+        'mapping_pose_trajectory.png', 'stationary_pose_imu_jitter.png'}

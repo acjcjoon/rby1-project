@@ -2,6 +2,9 @@
 
 주행·VSLAM timeout을 변경하지 않고 데이터를 수집한다. UPC와 LAB에서 같은 trial 이름으로 실행하고, JSONL/rosbag/pcap과 자동 요약 보고서로 구간별 지연과 정지 원인을 비교한다. `/rby1/vslam/timing`에는 UPC stereo enqueue, LAB receive/publish, cuVSLAM pose callback, UPC pose receive/publish, PoseAdapter receive/publish/drop 경계가 원본 stamp와 TCP session ID로 기록된다. bridge 상태에는 latest-only stereo/state와 bounded pose FIFO의 enqueue/drain/replace/expire/drop 누적 카운터도 포함된다.
 
+처음 정지→mapping→시작점 복귀→마지막 정지 실험에서 pose/IMU jitter와 복귀 오차를
+그래프로 보려면 [mapping 왕복·정지 jitter 기록](mapping_jitter_capture.md)을 사용한다.
+
 ## 실행
 
 먼저 평소대로 stack을 실행한다. 각 PC의 별도 터미널에서 해당 ROS와 workspace setup을 source한다. **수집 터미널의 ROS_DOMAIN_ID는 해당 PC에서 실행 중인 stack과 같아야 한다.** UPC와 LAB끼리 같은 도메인일 필요는 없으며, 두 PC 사이 VSLAM 전송은 TCP다.

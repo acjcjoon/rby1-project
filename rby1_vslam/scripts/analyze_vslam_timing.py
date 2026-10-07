@@ -26,6 +26,14 @@ SELECTED_TOPICS = (
     '/rby1/vslam/navigation_status',
 )
 
+MOTION_POSE_TOPICS = (
+    '/rby1/vslam/odom',
+    '/rby1/vslam/slam_odom',
+    '/rby1/odom',
+    '/rby1/vslam/camera_odometry',
+    '/rby1/vslam/camera_slam_odometry',
+)
+
 RELEVANT_LOG_TERMS = (
     'tracking is lost', 'failed to track', 'failed to get slam pose',
     'stale', 'future clock', 'queue overflow', 'heartbeat timed out',
@@ -185,6 +193,20 @@ def load_capture(path):
         role_candidates = [item.get('role') for values in messages.values()
                            for item in values if item.get('role')]
     role = role_candidates[0] if role_candidates else 'unknown'
+    markers = []
+    markers_path = events_path.parent / 'markers.jsonl'
+    if markers_path.is_file():
+        with markers_path.open(encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    marker = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    malformed += 1
+                    continue
+                if (marker.get('event') == 'phase_marker'
+                        and isinstance(marker.get('phase'), str)
+                        and isinstance(marker.get('monotonic_ns'), int)):
+                    markers.append(marker)
     return {
         'path': str(events_path.parent),
         'events_path': str(events_path),
@@ -194,6 +216,7 @@ def load_capture(path):
         'start': starts[0] if starts else {},
         'subscription_unavailable': subscription_unavailable,
         'last_observer_health': last_health,
+        'markers': sorted(markers, key=lambda item: item['monotonic_ns']),
     }
 
 
@@ -678,6 +701,226 @@ def _angle_delta(right, left):
     return math.atan2(math.sin(right - left), math.cos(right - left))
 
 
+def _phase_intervals(markers, fallback_end_ns):
+    """Turn the recorder's ordered operator markers into half-open intervals."""
+    starts = {}
+    for marker in sorted(markers, key=lambda item: item.get('monotonic_ns', 0)):
+        phase = marker.get('phase')
+        timestamp = marker.get('monotonic_ns')
+        if phase not in starts and isinstance(timestamp, int):
+            starts[phase] = timestamp
+    ordered = (
+        ('initial_stationary', 'mapping_motion'),
+        ('mapping_motion', 'returned_stationary'),
+        ('returned_stationary', 'capture_end'),
+    )
+    intervals = []
+    for phase, next_phase in ordered:
+        start = starts.get(phase)
+        end = starts.get(next_phase, fallback_end_ns)
+        if isinstance(start, int) and isinstance(end, int) and end > start:
+            intervals.append({'phase': phase, 'start_monotonic_ns': start,
+                              'end_monotonic_ns': end,
+                              'duration_sec': (end - start) / 1e9})
+    return intervals
+
+
+def _phase_at(timestamp, intervals):
+    for interval in intervals:
+        if interval['start_monotonic_ns'] <= timestamp < interval['end_monotonic_ns']:
+            return interval['phase']
+    return None
+
+
+def _downsample(samples, limit=6000):
+    if len(samples) <= limit:
+        return samples
+    stride = math.ceil((len(samples) - 1) / (limit - 1))
+    reduced = samples[::stride]
+    if reduced[-1] is not samples[-1]:
+        reduced.append(samples[-1])
+    return reduced
+
+
+def _circular_center(values):
+    sine = statistics.fmean(math.sin(value) for value in values)
+    cosine = statistics.fmean(math.cos(value) for value in values)
+    if abs(sine) < 1e-12 and abs(cosine) < 1e-12:
+        return values[0]
+    return math.atan2(sine, cosine)
+
+
+def _pose_phase_summary(samples):
+    if not samples:
+        return None
+    center_x = statistics.median(sample['x'] for sample in samples)
+    center_y = statistics.median(sample['y'] for sample in samples)
+    center_z = statistics.median(sample['z'] for sample in samples)
+    center_yaw = _circular_center([sample['yaw'] for sample in samples])
+    radial = [math.hypot(sample['x'] - center_x, sample['y'] - center_y)
+              for sample in samples]
+    yaw_jitter = [abs(_angle_delta(sample['yaw'], center_yaw)) for sample in samples]
+    pose_steps = [math.hypot(right['x'] - left['x'], right['y'] - left['y'])
+                  for left, right in zip(samples, samples[1:])]
+    yaw_steps = [abs(_angle_delta(right['yaw'], left['yaw']))
+                 for left, right in zip(samples, samples[1:])]
+    speeds = [math.hypot(sample['velocity'][0], sample['velocity'][1])
+              for sample in samples]
+    angular_speeds = [abs(sample['velocity'][2]) for sample in samples]
+    first, last = samples[0], samples[-1]
+    return {
+        'samples': len(samples),
+        'duration_sec': (last['monotonic_ns'] - first['monotonic_ns']) / 1e9,
+        'center': [center_x, center_y, center_z, center_yaw],
+        'translation_jitter_m': numeric_stats(radial),
+        'yaw_jitter_rad': numeric_stats(yaw_jitter),
+        'translation_step_m': numeric_stats(pose_steps),
+        'yaw_step_rad': numeric_stats(yaw_steps),
+        'planar_speed_mps': numeric_stats(speeds),
+        'angular_speed_rps': numeric_stats(angular_speeds),
+        'endpoint_drift_m': math.hypot(last['x'] - first['x'], last['y'] - first['y']),
+        'endpoint_yaw_drift_rad': abs(_angle_delta(last['yaw'], first['yaw'])),
+    }
+
+
+def _pose_samples(records, intervals, origin_ns):
+    samples = []
+    for record in sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        timestamp = record.get('observed_monotonic_ns')
+        position = record.get('position')
+        orientation = record.get('orientation')
+        velocity = record.get('velocity')
+        if (not isinstance(timestamp, int)
+                or not isinstance(position, list) or len(position) < 3
+                or not isinstance(orientation, list) or len(orientation) < 4
+                or not isinstance(velocity, list) or len(velocity) < 3):
+            continue
+        values = position[:3] + orientation[:4] + velocity[:3]
+        if not all(isinstance(value, (int, float)) and math.isfinite(value)
+                   for value in values):
+            continue
+        x, y, z = (float(value) for value in position[:3])
+        qx, qy, qz, qw = (float(value) for value in orientation[:4])
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy),
+                         1.0 - 2.0 * (qy * qy + qz * qz))
+        samples.append({
+            'monotonic_ns': timestamp,
+            'wall_ns': record.get('observed_wall_ns'),
+            'elapsed_sec': (timestamp - origin_ns) / 1e9,
+            'phase': _phase_at(timestamp, intervals),
+            'x': x, 'y': y, 'z': z, 'yaw': yaw,
+            'velocity': [float(value) for value in velocity[:3]],
+        })
+    return samples
+
+
+def _imu_motion_summary(records, intervals, origin_ns):
+    samples = []
+    for record in sorted(records, key=lambda item: item.get('observed_monotonic_ns', 0)):
+        timestamp = record.get('observed_monotonic_ns')
+        angular = record.get('angular_velocity')
+        linear = record.get('linear_acceleration')
+        if (not isinstance(timestamp, int)
+                or not isinstance(angular, list) or len(angular) < 3
+                or not isinstance(linear, list) or len(linear) < 3):
+            continue
+        values = angular[:3] + linear[:3]
+        if not all(isinstance(value, (int, float)) and math.isfinite(value)
+                   for value in values):
+            continue
+        angular = [float(value) for value in angular[:3]]
+        linear = [float(value) for value in linear[:3]]
+        samples.append({
+            'monotonic_ns': timestamp,
+            'wall_ns': record.get('observed_wall_ns'),
+            'elapsed_sec': (timestamp - origin_ns) / 1e9,
+            'phase': _phase_at(timestamp, intervals),
+            'angular_velocity': angular,
+            'linear_acceleration': linear,
+            'gyro_norm_rps': math.sqrt(sum(value * value for value in angular)),
+            'accel_norm_mps2': math.sqrt(sum(value * value for value in linear)),
+        })
+    phases = {}
+    for interval in intervals:
+        name = interval['phase']
+        selected = [sample for sample in samples if sample['phase'] == name]
+        if not selected:
+            continue
+        center = [statistics.median(sample['linear_acceleration'][axis]
+                                    for sample in selected) for axis in range(3)]
+        residuals = [math.sqrt(sum((sample['linear_acceleration'][axis] - center[axis]) ** 2
+                                   for axis in range(3))) for sample in selected]
+        phases[name] = {
+            'samples': len(selected),
+            'gyro_norm_rps': numeric_stats([sample['gyro_norm_rps'] for sample in selected]),
+            'accel_norm_mps2': numeric_stats([sample['accel_norm_mps2'] for sample in selected]),
+            'accel_residual_mps2': numeric_stats(residuals),
+            'acceleration_center': center,
+        }
+    return {'samples': len(samples), 'phases': phases,
+            'trace': _downsample(samples)}
+
+
+def motion_debug_summary(capture):
+    """Summarize explicitly marked still/mapping/returned intervals."""
+    markers = capture.get('markers') or []
+    all_timestamps = [record.get('observed_monotonic_ns')
+                      for records in capture.get('messages', {}).values()
+                      for record in records
+                      if isinstance(record.get('observed_monotonic_ns'), int)]
+    fallback_end = max(all_timestamps) + 1 if all_timestamps else None
+    intervals = _phase_intervals(markers, fallback_end)
+    if not intervals:
+        return {'available': False, 'markers': markers, 'intervals': []}
+    origin_ns = intervals[0]['start_monotonic_ns']
+    topics = {}
+    for topic in MOTION_POSE_TOPICS:
+        records = capture.get('messages', {}).get(topic, [])
+        samples = _pose_samples(records, intervals, origin_ns)
+        if not samples:
+            continue
+        phases = {}
+        for interval in intervals:
+            name = interval['phase']
+            summary = _pose_phase_summary(
+                [sample for sample in samples if sample['phase'] == name])
+            if summary:
+                phases[name] = summary
+        initial = phases.get('initial_stationary')
+        returned = phases.get('returned_stationary')
+        return_error = None
+        if initial and returned:
+            return_error = {
+                'translation_m': math.hypot(returned['center'][0] - initial['center'][0],
+                                            returned['center'][1] - initial['center'][1]),
+                'yaw_rad': abs(_angle_delta(returned['center'][3], initial['center'][3])),
+                'from_center': initial['center'],
+                'to_center': returned['center'],
+            }
+        topics[topic] = {
+            'samples': len(samples),
+            'frame_id': next((str(record.get('frame_id')) for record in records
+                              if record.get('frame_id')), ''),
+            'child_frame_id': next((str(record.get('child_frame_id')) for record in records
+                                    if record.get('child_frame_id')), ''),
+            'phases': phases,
+            'return_error': return_error,
+            'trace': _downsample(samples),
+        }
+    imu = _imu_motion_summary(
+        capture.get('messages', {}).get('/d435/d435/imu', []), intervals, origin_ns)
+    marker_names = [marker.get('phase') for marker in markers]
+    return {
+        'available': True,
+        'complete': all(name in marker_names for name in (
+            'initial_stationary', 'mapping_motion', 'returned_stationary', 'capture_end')),
+        'markers': markers,
+        'intervals': intervals,
+        'pose_topics': topics,
+        'imu': imu,
+    }
+
+
 def localization_correction_summary(records, odom_records=(),
                                     jump_m=0.05, jump_rad=math.radians(5.0),
                                     goal_tolerance_m=0.01,
@@ -1149,6 +1392,7 @@ def build_report(captures, stale_ms):
     path_quality = {}
     status_timelines = {}
     aborts = {}
+    motion_analysis = {}
     for capture in captures:
         role = capture['role']
         topic_stats[role] = {
@@ -1189,6 +1433,7 @@ def build_report(captures, stale_ms):
         }
         aborts[role] = abort_evidence(
             goals[role], capture['messages'], child_goals[role])
+        motion_analysis[role] = motion_debug_summary(capture)
 
     end_to_end = build_end_to_end(captures, stale_ms)
 
@@ -1334,6 +1579,27 @@ def build_report(captures, stale_ms):
             f'UPC vslam_map->odom correction exceeded the diagnostic jump threshold '
             f'{upc_correction["jump_count"]} times '
             f'(max {largest:.4f} m, {math.degrees(largest_yaw):.2f} deg).')
+    upc_motion = motion_analysis.get('upc', {})
+    for topic in ('/rby1/vslam/odom', '/rby1/vslam/slam_odom'):
+        pose_result = upc_motion.get('pose_topics', {}).get(topic, {})
+        for phase in ('initial_stationary', 'returned_stationary'):
+            phase_result = pose_result.get('phases', {}).get(phase, {})
+            translation = (phase_result.get('translation_jitter_m') or {}).get('p95')
+            yaw = (phase_result.get('yaw_jitter_rad') or {}).get('p95')
+            if ((isinstance(translation, (int, float)) and translation > 0.01)
+                    or (isinstance(yaw, (int, float)) and yaw > math.radians(1.0))):
+                findings.append(
+                    f'UPC {topic} {phase} p95 pose jitter exceeds 1 cm or 1 deg '
+                    f'({translation or 0.0:.4f} m, '
+                    f'{math.degrees(yaw or 0.0):.2f} deg).')
+        closure = pose_result.get('return_error') or {}
+        if ((closure.get('translation_m') or 0.0) > 0.05
+                or (closure.get('yaw_rad') or 0.0) > math.radians(3.0)):
+            findings.append(
+                f'UPC {topic} reports initial-to-return center separation of '
+                f'{closure.get("translation_m", 0.0):.4f} m and '
+                f'{math.degrees(closure.get("yaw_rad", 0.0)):.2f} deg; '
+                'compare wheel odometry because this also includes manual return accuracy.')
     upc_paths = path_quality.get('upc', {})
     endpoint_max = (upc_paths.get('endpoint_error_m') or {}).get('max')
     if isinstance(endpoint_max, (int, float)) and endpoint_max > 0.01:
@@ -1415,6 +1681,16 @@ def build_report(captures, stale_ms):
                 warnings.append(
                     'UPC saw accepted navigation requests and plans but could not correlate '
                     'their accepted-to-terminal lifetimes; inspect navigation_event delivery.')
+        motion = motion_analysis.get(capture['role'], {})
+        if motion.get('available') and not motion.get('complete'):
+            warnings.append(
+                f'{capture["role"].upper()} mapping-debug markers are incomplete; '
+                'only completed phase intervals were analyzed.')
+        if (motion.get('available') and capture['role'] == 'upc'
+                and not motion.get('imu', {}).get('samples')):
+            warnings.append(
+                'UPC mapping-debug capture has no IMU numeric samples; rebuild with the '
+                'updated timing_observer.py and verify /d435/d435/imu.')
     if len(captures) == 2 and not end_to_end['samples']:
         warnings.append(
             'No complete internal timing samples were matched. Rebuild both bridge nodes, '
@@ -1430,7 +1706,7 @@ def build_report(captures, stale_ms):
                 f'Session {session["session_id"][:12]} has negative TCP residual samples; '
                 'inspect exact-stamp pairing and event ordering before interpreting the stack.')
     return {
-        'schema_version': 2,
+        'schema_version': 3,
         'stale_threshold_ms': stale_ms,
         'captures': [{key: value for key, value in capture.items()
                       if key not in ('messages',)} for capture in captures],
@@ -1448,6 +1724,7 @@ def build_report(captures, stale_ms):
         'path_quality': path_quality,
         'status_timelines': status_timelines,
         'aborted_goal_evidence': aborts,
+        'motion_analysis': motion_analysis,
         'findings': findings,
         'warnings': warnings,
     }
@@ -1611,6 +1888,54 @@ def render_text(report):
             lines.append(
                 f'  jump wall_ns={jump.get("observed_wall_ns")}: '
                 f'{jump["translation_m"]:.4f} m, {jump["yaw_deg"]:.2f} deg')
+    motion = report.get('motion_analysis', {}).get('upc', {})
+    if motion.get('available'):
+        lines.extend(['', 'Marked mapping loop: stationary jitter and return error'])
+        lines.append('- phases: ' + ', '.join(
+            f'{item["phase"]}={item["duration_sec"]:.1f}s'
+            for item in motion.get('intervals', [])))
+        for topic in MOTION_POSE_TOPICS:
+            pose_result = motion.get('pose_topics', {}).get(topic)
+            if not pose_result:
+                continue
+            closure = pose_result.get('return_error') or {}
+            closure_text = 'return=n/a'
+            if closure:
+                closure_text = (
+                    f'return={closure["translation_m"]:.4f}m/'
+                    f'{math.degrees(closure["yaw_rad"]):.2f}deg')
+            lines.append(
+                f'- {topic} ({pose_result.get("frame_id") or "unknown frame"}): '
+                f'samples={pose_result["samples"]}, {closure_text}')
+            for phase in ('initial_stationary', 'returned_stationary'):
+                phase_result = pose_result.get('phases', {}).get(phase)
+                if not phase_result:
+                    continue
+                translation = phase_result.get('translation_jitter_m') or {}
+                yaw = phase_result.get('yaw_jitter_rad') or {}
+                speed = phase_result.get('planar_speed_mps') or {}
+                lines.append(
+                    f'  {phase}: n={phase_result["samples"]}, '
+                    f'jitter p95/max={format_number(translation.get("p95"), 4)}/'
+                    f'{format_number(translation.get("max"), 4)} m, '
+                    f'yaw p95/max='
+                    f'{format_number(None if yaw.get("p95") is None else math.degrees(yaw["p95"]), 3)}/'
+                    f'{format_number(None if yaw.get("max") is None else math.degrees(yaw["max"]), 3)} deg, '
+                    f'speed max={format_number(speed.get("max"), 4)} m/s')
+        imu = motion.get('imu', {})
+        if imu.get('samples'):
+            lines.append(f'- /d435/d435/imu: samples={imu["samples"]}')
+            for phase in ('initial_stationary', 'returned_stationary'):
+                values = imu.get('phases', {}).get(phase)
+                if not values:
+                    continue
+                gyro = values.get('gyro_norm_rps') or {}
+                accel = values.get('accel_residual_mps2') or {}
+                lines.append(
+                    f'  {phase}: gyro p95/max={format_number(gyro.get("p95"), 5)}/'
+                    f'{format_number(gyro.get("max"), 5)} rad/s, '
+                    f'accel residual p95/max={format_number(accel.get("p95"), 4)}/'
+                    f'{format_number(accel.get("max"), 4)} m/s^2')
     paths = report.get('path_quality', {}).get('upc', {})
     if paths.get('plans'):
         endpoint = paths.get('endpoint_error_m') or {}
@@ -1724,6 +2049,8 @@ def main(argv=None):
     json_path = output_dir / 'timing_report.json'
     text_path = output_dir / 'timing_report.txt'
     samples_path = output_dir / 'timing_samples.csv'
+    motion_path = output_dir / 'motion_pose_samples.csv'
+    imu_path = output_dir / 'motion_imu_samples.csv'
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + '\n',
                          encoding='utf-8')
     text_path.write_text(render_text(report), encoding='utf-8')
@@ -1735,9 +2062,54 @@ def main(argv=None):
             writer.writerows(samples)
     else:
         samples_path.write_text('', encoding='utf-8')
+    motion_rows = []
+    imu_rows = []
+    for role, result in report.get('motion_analysis', {}).items():
+        for topic, pose in result.get('pose_topics', {}).items():
+            for sample in pose.get('trace', []):
+                velocity = sample.get('velocity') or [None, None, None]
+                motion_rows.append({
+                    'role': role, 'topic': topic, 'phase': sample.get('phase'),
+                    'elapsed_sec': sample.get('elapsed_sec'),
+                    'wall_ns': sample.get('wall_ns'),
+                    'x': sample.get('x'), 'y': sample.get('y'), 'z': sample.get('z'),
+                    'yaw_rad': sample.get('yaw'),
+                    'vx_mps': velocity[0], 'vy_mps': velocity[1],
+                    'wz_rps': velocity[2],
+                })
+        for sample in result.get('imu', {}).get('trace', []):
+            angular = sample.get('angular_velocity') or [None, None, None]
+            linear = sample.get('linear_acceleration') or [None, None, None]
+            imu_rows.append({
+                'role': role, 'phase': sample.get('phase'),
+                'elapsed_sec': sample.get('elapsed_sec'),
+                'wall_ns': sample.get('wall_ns'),
+                'gyro_x_rps': angular[0], 'gyro_y_rps': angular[1],
+                'gyro_z_rps': angular[2], 'gyro_norm_rps': sample.get('gyro_norm_rps'),
+                'accel_x_mps2': linear[0], 'accel_y_mps2': linear[1],
+                'accel_z_mps2': linear[2],
+                'accel_norm_mps2': sample.get('accel_norm_mps2'),
+            })
+    for path, rows, fields in (
+        (motion_path, motion_rows,
+         ('role', 'topic', 'phase', 'elapsed_sec', 'wall_ns', 'x', 'y', 'z',
+          'yaw_rad', 'vx_mps', 'vy_mps', 'wz_rps')),
+        (imu_path, imu_rows,
+         ('role', 'phase', 'elapsed_sec', 'wall_ns', 'gyro_x_rps', 'gyro_y_rps',
+          'gyro_z_rps', 'gyro_norm_rps', 'accel_x_mps2', 'accel_y_mps2',
+          'accel_z_mps2', 'accel_norm_mps2')),
+    ):
+        with path.open('w', encoding='utf-8', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
     print(text_path)
     print(json_path)
     print(samples_path)
+    if motion_rows:
+        print(motion_path)
+    if imu_rows:
+        print(imu_path)
     return 0
 
 

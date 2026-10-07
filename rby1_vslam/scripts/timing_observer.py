@@ -135,6 +135,15 @@ def message_metadata(message, message_type):
         fields.update(width=int(message.width), height=int(message.height),
                       step=int(message.step), encoding=str(message.encoding),
                       payload_bytes=len(message.data))
+    elif message_type == 'sensor_msgs/msg/Imu':
+        orientation = message.orientation
+        angular = message.angular_velocity
+        linear = message.linear_acceleration
+        fields.update(
+            imu_orientation=[orientation.x, orientation.y, orientation.z, orientation.w],
+            angular_velocity=[angular.x, angular.y, angular.z],
+            linear_acceleration=[linear.x, linear.y, linear.z],
+        )
     elif message_type == 'nav_msgs/msg/Odometry':
         p, q, v = message.pose.pose.position, message.pose.pose.orientation, message.twist.twist
         fields.update(child_frame_id=str(message.child_frame_id),

@@ -4,6 +4,7 @@ set -Eeo pipefail
 ROLE=''; RUN_ID=''; OUTPUT="${HOME}/rby1_trials"; DOMAIN=''; WAYPOINTS=''; PORT=7447
 FULL_BAG=false
 NAV2_DEBUG=false
+MAPPING_DEBUG=false
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 die() { echo "[record] $*" >&2; exit 2; }
 usage() {
@@ -15,9 +16,11 @@ Usage: bash record_trial.sh --role upc|lab --run-id NAME [options]
   --port PORT       VSLAM TCP port for socket snapshots (default: 7447)
   --full-bag        Record every topic, including raw images (high overhead)
   --nav2-debug      Add scan/costmaps/footprints for a short Nav2 trial
+  --mapping-debug   UPC interactive marks: initial still -> mapping -> returned still
 By default only low-bandwidth state/pose/TF/action topics are bagged.
 Timing metadata and an automatic local bottleneck report are also saved.
 Start BEFORE the operator stack. Stop robot via UI, then Ctrl+C here to finalize.
+With --mapping-debug, start after VSLAM tracking is healthy and follow the prompts.
 This script never sends robot commands. Topic recording is not service tracing.
 LAB: run inside Isaac ROS; choose --output on a persistent mounted directory.
 EOF
@@ -27,6 +30,7 @@ while (($#)); do
     -h|--help) usage; exit 0 ;;
     --full-bag) FULL_BAG=true; shift ;;
     --nav2-debug) NAV2_DEBUG=true; shift ;;
+    --mapping-debug) MAPPING_DEBUG=true; shift ;;
     --role|--run-id|--output|--domain|--waypoints|--port)
       [[ $# -ge 2 && -n "$2" ]] || die "Missing value: $1"
       case "$1" in
@@ -39,6 +43,8 @@ while (($#)); do
 done
 [[ "$ROLE" == upc || "$ROLE" == lab ]] || die '--role upc|lab required'
 [[ "$NAV2_DEBUG" == false || "$ROLE" == upc ]] || die '--nav2-debug is UPC-only'
+[[ "$MAPPING_DEBUG" == false || "$ROLE" == upc ]] || die '--mapping-debug is UPC-only'
+[[ "$MAPPING_DEBUG" == false || -t 0 ]] || die '--mapping-debug needs an interactive terminal'
 [[ "$RUN_ID" =~ ^[a-zA-Z0-9_-]+$ ]] || die '--run-id requires letters/digits/_/-'
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || die 'Invalid port'
 if [[ "$ROLE" == upc ]]; then
@@ -67,6 +73,7 @@ else
 fi
 TIMING_OBSERVER="$TIMING_SCRIPTS/timing_observer.py"
 TIMING_ANALYZER="$TIMING_SCRIPTS/analyze_vslam_timing.py"
+TIMING_PLOTTER="$TIMING_SCRIPTS/plot_vslam_timing.py"
 [[ -f "$TIMING_OBSERVER" && -f "$TIMING_ANALYZER" ]] || \
   die 'timing_observer.py/analyze_vslam_timing.py missing under rby1_vslam/scripts'
 mkdir -p -- "$OUTPUT"
@@ -81,6 +88,7 @@ fi
   printf 'capture_id=%s\nVSLAM_TCP_PORT=%s\n' "$CAPTURE_ID" "$PORT"
   printf 'full_bag=%s\n' "$FULL_BAG"
   printf 'nav2_debug=%s\n' "$NAV2_DEBUG"
+  printf 'mapping_debug=%s\n' "$MAPPING_DEBUG"
   git -C "$ROOT" rev-parse HEAD 2>/dev/null || true
   git -C "$ROOT" status --short 2>/dev/null || true
   date -u; uname -a; df -h "$RUN_DIR"
@@ -183,6 +191,20 @@ cleanup() {
   if python3 "$TIMING_ANALYZER" "$RUN_DIR" --output-dir "$RUN_DIR" \
       > "$RUN_DIR/analysis.log" 2>&1; then
     echo "[record] Timing report: $RUN_DIR/timing_report.txt"
+    if [[ "$MAPPING_DEBUG" == true && -f "$TIMING_PLOTTER" ]]; then
+      if python3 -c 'import matplotlib' >/dev/null 2>&1; then
+        mkdir -p "$RUN_DIR/plots"
+        if python3 "$TIMING_PLOTTER" --report "$RUN_DIR/timing_report.json" \
+            --output-dir "$RUN_DIR/plots" > "$RUN_DIR/plotting.log" 2>&1; then
+          echo "[record] Mapping/jitter plots: $RUN_DIR/plots"
+        else
+          echo "[record] WARNING: plot generation failed; inspect $RUN_DIR/plotting.log" >&2
+        fi
+      else
+        echo '[record] matplotlib unavailable; report/CSVs were saved but PNG plots were skipped.' >&2
+        echo "[record] Generate later: python3 $TIMING_PLOTTER --report $RUN_DIR/timing_report.json --output-dir $RUN_DIR/plots" >&2
+      fi
+    fi
   else
     echo "[record] WARNING: timing analysis failed; inspect $RUN_DIR/analysis.log" >&2
   fi
@@ -202,6 +224,8 @@ else
   BAG_ARGS+=(
     /rosout /tf /tf_static /diagnostics
     /parameter_events
+    /d435/d435/infra1/camera_info /d435/d435/infra2/camera_info
+    /d435/d435/imu
     /rby1/vslam/bridge_status /rby1/vslam/timing
     /rby1/vslam/camera_odometry /rby1/vslam/camera_slam_odometry
   )
@@ -250,7 +274,7 @@ python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); 
   python3 "$TIMING_OBSERVER" "${OBSERVER_ARGS[@]}" > "$RUN_DIR/observer.log" 2>&1 &
 OBSERVER_PID=$!
 (snapshot start; : > "$RUN_DIR/params_start_complete") & SNAPSHOT_PID=$!
-if [[ "$ROLE" == upc ]]; then
+if [[ "$ROLE" == upc && "$MAPPING_DEBUG" == false ]]; then
   ready_snapshot & READY_PID=$!
 fi
 (
@@ -273,6 +297,36 @@ fi
 ) > "$RUN_DIR/system_samples.txt" 2>&1 & SAMPLE_PID=$!
 echo "[record] Recorder launched: $RUN_DIR"
 echo "[record] role=$ROLE ROS_DOMAIN_ID=$ROS_DOMAIN_ID TCP_PORT=$PORT"
-echo '[record] Confirm recorder.log and observer.log; keep recording through the stop + 10 seconds.'
-echo '[record] Stop the robot in the UI first, then Ctrl+C here. No motion commands are sent.'
+echo '[record] Confirm recorder.log and observer.log. No motion commands are sent.'
+write_marker() {
+  local phase="$1"
+  python3 -c 'import json,sys,time; record={"event":"phase_marker","phase":sys.argv[2],"wall_ns":time.time_ns(),"monotonic_ns":time.monotonic_ns()}; stream=open(sys.argv[1],"a",encoding="utf-8"); stream.write(json.dumps(record,separators=(",",":"))+"\n"); stream.close()' \
+    "$RUN_DIR/markers.jsonl" "$phase"
+  echo "[record] phase=$phase"
+}
+ensure_collectors_alive() {
+  kill -0 "$BAG_PID" 2>/dev/null || die 'rosbag recorder stopped; inspect recorder.log'
+  kill -0 "$OBSERVER_PID" 2>/dev/null || die 'timing observer stopped; inspect observer.log'
+}
+if [[ "$MAPPING_DEBUG" == true ]]; then
+  echo '[record] Waiting for the initial graph/parameter snapshot before jitter measurement...'
+  wait "$SNAPSHOT_PID"
+  SNAPSHOT_PID=''
+  ensure_collectors_alive
+  write_marker initial_stationary
+  echo '[record] Keep the robot completely still for at least 10 seconds.'
+  read -r -p '[record] Press Enter immediately before starting mapping motion... ' _
+  ensure_collectors_alive
+  write_marker mapping_motion
+  read -r -p '[record] Return to the start pose, stop fully, then press Enter... ' _
+  ensure_collectors_alive
+  write_marker returned_stationary
+  echo '[record] Keep the robot completely still for at least 10 more seconds.'
+  read -r -p '[record] Press Enter to finish the capture... ' _
+  ensure_collectors_alive
+  write_marker capture_end
+  exit 0
+fi
+echo '[record] Keep recording through the stop + 10 seconds.'
+echo '[record] Stop the robot in the UI first, then Ctrl+C here.'
 wait "$BAG_PID"

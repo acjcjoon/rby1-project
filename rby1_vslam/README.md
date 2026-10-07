@@ -20,6 +20,11 @@ UPC/LAB 지연을 정량적으로 기록하려면 **[양쪽 시간 계측 가이
 참고한다. 실행 로직을 바꾸지 않고 JSONL·rosbag 및 선택적 TCP pcap을 수집하여 오프라인
 CSV/그래프 분석에 사용한다.
 
+처음과 끝에 완전히 정지하고 mapping 경로를 돌아 시작점으로 복귀하는 시험은
+**[mapping 왕복·정지 jitter 기록](docs/mapping_jitter_capture.md)**을 따른다. 대화형 phase
+marker를 기준으로 tracking/SLAM/wheel pose의 정지 jitter와 시작↔복귀 오차, IMU 진동을
+CSV와 PNG로 만든다.
+
 근거리 waypoint의 Theta* path, MPPI 제어, status 6, localization 보정 점프와 실행 중
 Nav2 parameter를 함께 조사할 때는 **[근거리 Nav2 진단/MPPI 적용](docs/nav2_close_goal_review.md)**를
 따른다. UPC에서 `bash rby1_vslam/scripts/capture_navigation_debug.sh`를 실행하면 된다.
