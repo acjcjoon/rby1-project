@@ -24,7 +24,7 @@ bridge로 전달된다. TCP 포트는 하나지만 session 내부의 송신과 �
 - UI의 빨간 정지는 소프트웨어 정지다. 하드웨어 EMO를 대체하지 않는다.
 - 실물 launch는 collision 상태를 무시하지 않으며 전원·서보·stream도 자동으로 켜지 않는다.
 
-## 1. LAB PC 유선 IP 확인
+## 1. LAB PC Wi-Fi IP 확인
 
 LAB PC 호스트에서 실행한다.
 
@@ -33,8 +33,8 @@ hostname -I
 ip -4 -br addr
 ```
 
-Jetson과 같은 유선망의 주소를 고른다. 아래 예시는 `192.168.30.50`이다.
-`127.0.0.1`, `172.17.x.x` 같은 Docker bridge 주소, 다른 망의 Wi-Fi 주소를 쓰지 않는다.
+Jetson에서 접근 가능한 LAB Wi-Fi 주소를 고른다. 아래 `192.168.30.50`은 예시다.
+`127.0.0.1`, `172.17.x.x` 같은 Docker 내부 주소를 쓰지 않는다.
 
 Jetson에서 도달 가능한지 확인한다.
 
@@ -124,7 +124,7 @@ source /opt/ros/jazzy/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 export ROS_DOMAIN_ID=85
 
-ros2 launch rby1_vslam mapping.launch.py \
+ros2 launch rby1_vslam lab.launch.py mode:=mapping \
   bind_host:=0.0.0.0 port:=7447
 ```
 
@@ -143,7 +143,8 @@ cd "$RBY1_WS"
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch rby1_vslam physical.launch.py \
+cd "$RBY1_WS/src/rby1-project"
+bash run_vslam_upc.sh \
   lab_host:=192.168.30.50 \
   port:=7447 \
   robot_address:=192.168.30.1:50051 \
@@ -214,15 +215,15 @@ velocity gate를 명시적으로 활성화한 뒤 새 goal을 보낸다. `use_sc
 
 ## 6. 저장 지도에서 다시 시작
 
-LAB에서 mapping launch를 종료하고 localization launch를 실행한다.
+LAB에서 mapping 모드를 종료하고 localization 모드로 다시 실행한다.
 
 ```bash
-ros2 launch rby1_vslam localization.launch.py \
+ros2 launch rby1_vslam lab.launch.py mode:=localization \
   map_path:=/workspaces/isaac_ros-dev/maps/rby1_lab_01 \
   bind_host:=0.0.0.0 port:=7447
 ```
 
-Jetson의 `physical.launch.py`를 다시 실행해 영상이 들어온 뒤 LAB의 다른 터미널에서
+Jetson의 `run_vslam_upc.sh`를 다시 실행해 영상이 들어온 뒤 LAB의 다른 터미널에서
 초기 위치 힌트를 보낸다. 지도 작성 시작 위치와 같은 카메라 자세이면 0 값을 쓴다.
 
 ```bash
@@ -245,9 +246,9 @@ cuVGL은 이 기본 절차에 필요하지 않다. 시작 pose를 모르는 임�
 
 ## 7. 자주 생기는 문제
 
-- `Connection refused`: LAB launch가 먼저 떠 있는지, LAB 유선 IP, TCP 7447,
+- `Connection refused`: LAB launch가 먼저 떠 있는지, LAB Wi-Fi IP, TCP 7447,
   컨테이너 host network를 확인한다.
-- `127.0.0.1`로 연결됨: Jetson 자신이다. LAB PC 유선 IP로 바꾼다.
+- `127.0.0.1`로 연결됨: Jetson 자신이다. LAB PC Wi-Fi IP로 바꾼다.
 - camera odometry만 있고 base pose가 없음: `base → d435_link` TF와 joint states를 본다.
 - UI는 떴지만 이동 안 함: collision/EMO, power/servo, control manager, stream을 확인한다.
 - Nav2가 움직이지 않음: bridge/tracking/localization/wheel odom/gate 상태를 확인한다.

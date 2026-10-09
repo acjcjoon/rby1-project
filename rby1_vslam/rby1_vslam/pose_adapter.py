@@ -1,12 +1,10 @@
 """Convert returned rig poses to base poses with TF at the acquisition time."""
 import copy
-import json
 import math
 import time
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
 import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
@@ -15,16 +13,8 @@ from rclpy.time import Time
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
-from .geometry import compose, offset_covariance
+from .geometry import compose, offset_covariance, xyz, xyzw
 from .pose_queue import PoseQueue
-
-
-def xyz(v):
-    return (v.x, v.y, v.z)
-
-
-def xyzw(q):
-    return (q.x, q.y, q.z, q.w)
 
 
 class PoseAdapter(Node):
@@ -39,7 +29,6 @@ class PoseAdapter(Node):
             'publish_odom_tf': False,
             'max_input_age_sec': 0.5, 'tf_wait_sec': 0.15,
             'pose_queue_size': 32,
-            'timing_topic': '/rby1/vslam/timing',
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -57,7 +46,6 @@ class PoseAdapter(Node):
                                  if self.p['publish_odom_tf'] else None)
         self.pending = PoseQueue(('odom', 'slam_odom'), self.p['pose_queue_size'])
         self.last_warning = 0.
-        self.timing_pub = self.create_publisher(String, self.p['timing_topic'], 100)
         self.publishers_by_kind = {}
         pose_qos = QoSProfile(
             depth=self.p['pose_queue_size'], reliability=ReliabilityPolicy.RELIABLE)
@@ -73,31 +61,10 @@ class PoseAdapter(Node):
         self.retry_timer.cancel()
         self._retry_active = False
 
-    @staticmethod
-    def _stamp_ns(message):
-        return int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
-
-    def _timing(self, stage, kind, message, **fields):
-        if self.timing_pub.get_subscription_count() == 0:
-            return
-        event = {
-            'schema_version': 1, 'stage': stage, 'role': 'upc',
-            'session_id': '', 'kind': kind,
-            'source_stamp_ns': self._stamp_ns(message),
-            'wall_ns': time.time_ns(), 'monotonic_ns': time.monotonic_ns(),
-        }
-        event.update(fields)
-        self.timing_pub.publish(String(data=json.dumps(
-            event, separators=(',', ':'), allow_nan=False)))
-
     def on_pose(self, kind, message):
         received = time.monotonic()
-        self._timing('upc_pose_adapter_received', kind, message)
         dropped = self.pending.put(kind, (message, received))
         if dropped is not None:
-            dropped_message, _ = dropped
-            self._timing('upc_pose_adapter_dropped', kind, dropped_message,
-                         reason='queue_overflow')
             self.warn(f'{kind} pose queue full; dropped oldest pose')
         self.drain(kind)
 
@@ -109,9 +76,8 @@ class PoseAdapter(Node):
             self.retry_timer.cancel()
             self._retry_active = False
 
-    def _drop(self, kind, message, reason, detail):
+    def _drop(self, kind, detail):
         self.pending.pop(kind)
-        self._timing('upc_pose_adapter_dropped', kind, message, reason=reason)
         self.warn(detail)
 
     def _drain_kind(self, kind):
@@ -124,19 +90,16 @@ class PoseAdapter(Node):
                 stamp = Time.from_msg(msg.header.stamp)
                 age = (self.get_clock().now().nanoseconds - stamp.nanoseconds) / 1e9
                 if stamp.nanoseconds <= 0:
-                    self._drop(kind, msg, 'invalid_stamp',
-                               'camera pose has no valid timestamp')
+                    self._drop(kind, 'camera pose has no valid timestamp')
                     continue
                 if age < -0.05:
-                    self._drop(kind, msg, 'future',
-                               'future camera pose; check clocks and bridge delay')
+                    self._drop(kind, 'future camera pose; check clocks and bridge delay')
                     continue
                 if age > self.p['max_input_age_sec']:
-                    self._drop(kind, msg, 'stale',
-                               'stale camera pose; check bridge delay')
+                    self._drop(kind, 'stale camera pose; check bridge delay')
                     continue
                 if msg.child_frame_id != self.p['camera_frame'] or not msg.header.frame_id:
-                    self._drop(kind, msg, 'invalid_frame', 'unexpected camera pose frame')
+                    self._drop(kind, 'unexpected camera pose frame')
                     continue
                 # T_world_base(t) = T_world_camera(t) * T_camera_base(t).
                 transform = self.buffer.lookup_transform(
@@ -157,8 +120,6 @@ class PoseAdapter(Node):
                 # This topic is pose-only; mark the unused twist highly uncertain.
                 out.twist.covariance = [1e6 if i % 7 == 0 else 0. for i in range(36)]
                 self.publishers_by_kind[kind].publish(out)
-                self._timing('upc_pose_adapter_published', kind, out,
-                             adapter_wait_ms=(time.monotonic() - received) * 1000.0)
                 if kind == 'odom' and self.odom_broadcaster is not None:
                     odom_tf = TransformStamped()
                     odom_tf.header = copy.deepcopy(out.header)
@@ -171,13 +132,12 @@ class PoseAdapter(Node):
                 self.pending.pop(kind)
             except TransformException as exc:
                 if time.monotonic() - received > self.p['tf_wait_sec']:
-                    self._drop(kind, msg, 'tf_timeout',
-                               f'Acquisition-time camera/base TF timed out: {exc}')
+                    self._drop(kind, f'Acquisition-time camera/base TF timed out: {exc}')
                     continue
                 self.warn(f'Waiting for acquisition-time camera/base TF: {exc}')
                 return
             except (ValueError, TypeError, OverflowError) as exc:
-                self._drop(kind, msg, 'invalid_pose', str(exc))
+                self._drop(kind, str(exc))
 
     def drain(self, kind=None):
         kinds = (kind,) if kind is not None else self.pending.kinds

@@ -6,7 +6,7 @@ PACKAGE = 'rby1_vslam'
 setup(
     name=PACKAGE,
     version='0.1.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + PACKAGE]),
         ('share/' + PACKAGE, ['package.xml', 'README.md']),
@@ -29,6 +29,5 @@ setup(
         'map_tool = rby1_vslam.map_tool:main',
         'waypoint_ui = rby1_vslam.waypoint_ui:main',
         'mobile_base_qt = rby1_vslam.mobile_base_qt:main',
-        'sensor_replay_relay = rby1_vslam.sensor_replay_relay:main',
     ]},
 )

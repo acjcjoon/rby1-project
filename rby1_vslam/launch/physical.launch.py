@@ -84,6 +84,7 @@ def _launch(context):
         launch_arguments={
             'lab_host': lab_host,
             'port': LaunchConfiguration('port'),
+            'bridge_params_file': LaunchConfiguration('bridge_params_file'),
             'start_camera': LaunchConfiguration('start_camera'),
             'serial_no': LaunchConfiguration('serial_no'),
             'infra_profile': LaunchConfiguration('infra_profile'),
@@ -137,8 +138,10 @@ def generate_launch_description():
     share = Path(get_package_share_directory('rby1_vslam'))
     return LaunchDescription([
         DeclareLaunchArgument(
-            'lab_host', description='Reachable wired-LAN IPv4 address of the LAB PC.'),
+            'lab_host', description='LAB PC IP or host name reachable over Wi-Fi/LAN.'),
         DeclareLaunchArgument('port', default_value='7447'),
+        DeclareLaunchArgument('bridge_params_file',
+                              default_value=str(share / 'config/bridge.yaml')),
         DeclareLaunchArgument('robot_address', default_value='192.168.30.1:50051'),
         DeclareLaunchArgument('robot_model', default_value='m'),
         DeclareLaunchArgument('robot_version', default_value='1_3'),

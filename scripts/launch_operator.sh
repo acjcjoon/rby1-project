@@ -15,7 +15,6 @@ VSLAM forces the RSUSB librealsense build under ~/librealsense-rsusb-2.58.4.
 Mobile starts only driver, safe control and UI (no TCP/camera/Nav2).
 Defaults: ROS_DOMAIN_ID=current environment or 0.
 Set RBY1_ROS_SETUP / RBY1_WORKSPACE_SETUP / RBY1_RSUSB_LIB_DIR for a different installation.
-Recording is separate: bash record_trial.sh --role upc --run-id trial01
 EOF
   exit 0
 fi

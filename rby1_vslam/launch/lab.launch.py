@@ -10,7 +10,6 @@ from launch_ros.descriptions import ComposableNode
 
 
 def _launch(context):
-    share = Path(get_package_share_directory('rby1_vslam'))
     get = lambda name: LaunchConfiguration(name).perform(context)
     mode = get('mode')
     if mode not in ('mapping', 'localization', 'odometry'):
@@ -20,11 +19,14 @@ def _launch(context):
         raise ValueError('localization requires map_path:=/absolute/path inside the LAB environment')
     if mode == 'localization' and not Path(map_path).is_dir():
         raise ValueError(f'LAB map directory does not exist: {map_path}')
-    use_imu = get('enable_imu').lower() == 'true'
+    imu_value = get('enable_imu').strip().lower()
+    if imu_value not in ('true', 'false'):
+        raise ValueError('enable_imu must be true or false')
+    use_imu = imu_value == 'true'
     bridge = Node(
         package='rby1_vslam', executable='bridge_node', name='lab_bridge',
         namespace='/rby1/vslam', output='screen',
-        parameters=[str(share / 'config/bridge.yaml'), {
+        parameters=[get('bridge_params_file'), {
             'role': 'lab', 'bind_host': get('bind_host'), 'port': int(get('port')),
             'tracking_odom_topic': '/rby1/vslam/camera_odometry',
             'slam_odom_topic': '/rby1/vslam/camera_slam_odometry',
@@ -70,6 +72,7 @@ def generate_launch_description():
         DeclareLaunchArgument('port', default_value='7447'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
         DeclareLaunchArgument('pose_queue_size', default_value='32'),
+        DeclareLaunchArgument('bridge_params_file', default_value=str(share / 'config/bridge.yaml')),
         DeclareLaunchArgument('vslam_params_file', default_value=str(share / 'config/isaac_vslam.yaml')),
         OpaqueFunction(function=_launch),
     ])

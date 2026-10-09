@@ -124,10 +124,10 @@ NVIDIA [4.5 quickstart rosbag](https://nvidia-isaac-ros.github.io/v/release-4.5/
 ```bash
 export ROS_DOMAIN_ID=85
 source /workspaces/isaac_ros-dev/install/setup.bash
-ros2 launch rby1_vslam mapping.launch.py
+ros2 launch rby1_vslam lab.launch.py mode:=mapping
 ```
 
-UPC 실행과 측정, 지도 저장, navigation은 [실험 가이드](experiment.md)를 따른다.
+UPC 실행, 지도 저장, navigation은 [VSLAM 실행 안내](../README.md)를 따른다.
 
 ## 호스트에 직접 Jazzy를 설치하려면
 

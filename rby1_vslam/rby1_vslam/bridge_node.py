@@ -3,7 +3,6 @@
 from array import array
 import json
 import math
-import queue
 import time
 
 import rclpy
@@ -27,6 +26,8 @@ DEFAULTS = {
     'socket_timeout_sec': 2.0, 'reconnect_delay_sec': 1.0, 'max_imu_queue': 512,
     'pose_queue_size': 32,
     'stereo_slop_ms': 5.0, 'stereo_queue_size': 8, 'stereo_max_age_sec': 0.5,
+    'stereo_tx_queue_size': 3, 'stereo_rx_queue_size': 3,
+    'socket_send_buffer_bytes': 0,
     'max_image_age_sec': 0.5, 'max_future_image_sec': 0.05,
     'enable_imu': True,
     'camera_root_frame': 'd435_link', 'camera_frame_prefix': 'd435_',
@@ -43,7 +44,6 @@ DEFAULTS = {
     'upc_tracking_odom_topic': '/rby1/vslam/camera_odometry',
     'upc_slam_odom_topic': '/rby1/vslam/camera_slam_odometry',
     'status_topic': '/rby1/vslam/bridge_status',
-    'timing_topic': '/rby1/vslam/timing',
 }
 
 
@@ -184,7 +184,6 @@ class BridgeNode(Node):
             self.declare_parameter(key, value)
         self.cfg = {key: self.get_parameter(key).value for key in DEFAULTS}
         self.role = self.cfg['role']
-        self._session = ''
         self._camera_session = ''
         self._previous_state = None
         self._tracking_state = 0
@@ -198,8 +197,6 @@ class BridgeNode(Node):
         self._static_candidates = {}
         self._bridge_subscriptions = []
         self._bridge_publishers = {}
-        self._transport_timing = queue.SimpleQueue()
-        self._timing_active = False
         self._synchronizer = StereoSynchronizer(
             int(self.cfg['stereo_slop_ms'] * 1_000_000), self.cfg['stereo_queue_size'])
         if self.cfg['tracking_timeout_sec'] <= 0:
@@ -224,12 +221,11 @@ class BridgeNode(Node):
             max_imu=self.cfg['max_imu_queue'],
             stereo_max_age_sec=self.cfg['stereo_max_age_sec'],
             pose_queue_size=self.cfg['pose_queue_size'],
-            trace_callback=self._on_transport_timing,
+            stereo_tx_queue_size=self.cfg['stereo_tx_queue_size'],
+            stereo_rx_queue_size=self.cfg['stereo_rx_queue_size'],
+            socket_send_buffer_bytes=self.cfg['socket_send_buffer_bytes'],
             receive_callback=self._receive_guard.trigger)
         self._status_pub = self.create_publisher(String, self.cfg['status_topic'], 5)
-        # This publisher is effectively free during normal operation: timing
-        # JSON is only constructed while a recorder is subscribed.
-        self._timing_pub = self.create_publisher(String, self.cfg['timing_topic'], 100)
         sensor_qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.BEST_EFFORT)
         pose_qos = QoSProfile(
             depth=self.cfg['pose_queue_size'], reliability=ReliabilityPolicy.RELIABLE)
@@ -290,68 +286,6 @@ class BridgeNode(Node):
         self._status_dirty = False
         self.link.start()
 
-    def _timing(self, stage, kind, source_stamp_ns, session_id='',
-                event_wall_ns=None, event_monotonic_ns=None, **fields):
-        """Publish a small, recorder-only boundary event.
-
-        Wall time makes optional one-way UPC/LAB plots possible when NTP is
-        healthy.  Monotonic time is the authoritative clock for durations on
-        one host and for the clock-independent round-trip decomposition.
-        """
-        if self._timing_pub.get_subscription_count() == 0:
-            return
-        event = {
-            'schema_version': 1, 'stage': stage, 'role': self.role,
-            'session_id': session_id, 'kind': kind,
-            'source_stamp_ns': int(source_stamp_ns),
-            'wall_ns': time.time_ns() if event_wall_ns is None else int(event_wall_ns),
-            'monotonic_ns': (time.monotonic_ns() if event_monotonic_ns is None
-                             else int(event_monotonic_ns)),
-        }
-        event.update(fields)
-        self._timing_pub.publish(String(data=json.dumps(
-            event, separators=(',', ':'), allow_nan=False)))
-
-    def _on_transport_timing(self, event):
-        if self._timing_active:
-            self._transport_timing.put(event)
-
-    @staticmethod
-    def _packet_stamp_ns(packet):
-        if packet.kind == 'stereo':
-            stamp = packet.payload['left']['message']['header']['stamp']
-        else:
-            stamp = packet.payload['header']['stamp']
-        return int(stamp['sec']) * 1_000_000_000 + int(stamp['nanosec'])
-
-    def _publish_transport_timing(self):
-        stages = {
-            ('upc', 'socket_sent', 'stereo'): 'upc_stereo_socket_sent',
-            ('lab', 'socket_received', 'stereo'): 'lab_stereo_socket_received',
-            ('lab', 'socket_sent', 'tracking_odom'): 'lab_pose_socket_sent',
-            ('lab', 'socket_sent', 'slam_odom'): 'lab_pose_socket_sent',
-            ('upc', 'socket_received', 'tracking_odom'): 'upc_pose_socket_received',
-            ('upc', 'socket_received', 'slam_odom'): 'upc_pose_socket_received',
-        }
-        while True:
-            try:
-                trace = self._transport_timing.get_nowait()
-            except queue.Empty:
-                return
-            packet = trace['packet']
-            stage = stages.get((self.role, trace['event'], packet.kind))
-            if stage is None:
-                continue
-            try:
-                stamp = self._packet_stamp_ns(packet)
-            except (KeyError, TypeError, ValueError):
-                continue
-            fields = {key: value for key, value in trace.items()
-                      if key not in ('event', 'packet', 'wall_ns', 'monotonic_ns')}
-            self._timing(stage, packet.kind, stamp, packet.session_id,
-                         event_wall_ns=trace['wall_ns'],
-                         event_monotonic_ns=trace['monotonic_ns'], **fields)
-
     def _on_camera(self, name, message):
         state = self.link.state()
         if not state['connected']:
@@ -368,10 +302,7 @@ class BridgeNode(Node):
                 if self._last_stereo_stamp is not None and stamp <= self._last_stereo_stamp:
                     raise ProtocolError('camera timestamp moved backward or repeated')
                 self._last_stereo_stamp = stamp
-                packet = _stereo_packet(*messages)
-                if self.link.send(packet):
-                    self._timing('upc_stereo_enqueued', 'stereo', stamp,
-                                 state['session_id'], payload_bytes=len(packet.blob))
+                self.link.send(_stereo_packet(*messages))
         except (ProtocolError, ValueError, TypeError) as exc:
             self.link.invalidate(str(exc))
 
@@ -451,23 +382,12 @@ class BridgeNode(Node):
                 or self._lab_first_image_stamp is None
                 or _stamp_ns(message.header.stamp) < self._lab_first_image_stamp):
             return
-        if self.link.send(Packet(kind, _to_dict(message))):
-            self._timing('lab_pose_enqueued', kind,
-                         _stamp_ns(message.header.stamp), state['session_id'])
+        self.link.send(Packet(kind, _to_dict(message)))
 
     def _publish_received(self, packet):
-        dequeued_wall_ns = time.time_ns()
-        dequeued_monotonic_ns = time.monotonic_ns()
-        publishers = getattr(self, '_bridge_publishers', None)
-        if publishers is None:
-            publishers = getattr(self, '_publishers', None)
+        publishers = self._bridge_publishers
         if packet.kind == 'stereo':
             messages = _decode_stereo(packet, self._synchronizer.slop_ns)
-            source_stamp_ns = _stamp_ns(messages[0].header.stamp)
-            self._timing('lab_stereo_dequeued', 'stereo', source_stamp_ns,
-                         packet.session_id, event_wall_ns=dequeued_wall_ns,
-                         event_monotonic_ns=dequeued_monotonic_ns,
-                         payload_bytes=len(packet.blob))
             # TCP may have buffered stale bytes before they reached this process.
             now_ns = self.get_clock().now().nanoseconds
             for message in messages[:2]:
@@ -486,8 +406,6 @@ class BridgeNode(Node):
             for name, message in zip(('left_info', 'right_info', 'left', 'right'),
                                      (messages[2], messages[3], messages[0], messages[1])):
                 publishers[name].publish(message)
-            self._timing('lab_stereo_published', 'stereo', source_stamp_ns,
-                         packet.session_id, payload_bytes=len(packet.blob))
         elif packet.kind == 'static_tf':
             if set(packet.payload) != {'transforms'} or not isinstance(packet.payload['transforms'], list):
                 raise ProtocolError('invalid static TF fields')
@@ -528,16 +446,7 @@ class BridgeNode(Node):
             if packet.kind == 'imu' and not self.cfg['enable_imu']:
                 raise ProtocolError('IMU forwarding is disabled')
             message = _from_dict(msg_type, packet.payload)
-            source_stamp_ns = (_stamp_ns(message.header.stamp)
-                               if hasattr(message, 'header') else 0)
-            if packet.kind in ('tracking_odom', 'slam_odom'):
-                self._timing('upc_pose_dequeued', packet.kind, source_stamp_ns,
-                             packet.session_id, event_wall_ns=dequeued_wall_ns,
-                             event_monotonic_ns=dequeued_monotonic_ns)
             publishers[packet.kind].publish(message)
-            if packet.kind in ('tracking_odom', 'slam_odom'):
-                self._timing('upc_pose_published', packet.kind, source_stamp_ns,
-                             packet.session_id)
 
     def _sync_link_state(self, state):
         changed = (state['connected'], state['session_id']) != self._previous_state
@@ -552,15 +461,12 @@ class BridgeNode(Node):
                 self._requires_localization = self.cfg['require_localized']
             self._lab_input_session = ''
             self._lab_first_image_stamp = None
-            self._session = state['session_id']
             self._previous_state = (state['connected'], state['session_id'])
             self._status_dirty = True
             self.get_logger().info('TCP bridge: ' + state['reason'])
         return changed
 
     def _tick(self):
-        self._timing_active = self._timing_pub.get_subscription_count() > 0
-        self._publish_transport_timing()
         state = self.link.state()
         self._sync_link_state(state)
         now = time.monotonic()

@@ -6,6 +6,12 @@
     reconnect_delay_sec: 1.0
     max_imu_queue: 512
     pose_queue_size: 32
+    # Short FIFOs absorb temporary Wi-Fi stalls; capacity 1 keeps only the latest pair.
+    # These are independent of the four-topic stereo_queue_size synchronizer.
+    stereo_tx_queue_size: 3
+    stereo_rx_queue_size: 3
+    # 0 leaves TCP send-buffer autotuning enabled; positive values set a fixed limit.
+    socket_send_buffer_bytes: 0
     enable_imu: true
     camera_frame_prefix: d435_
     camera_root_frame: d435_link

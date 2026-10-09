@@ -17,6 +17,7 @@ def generate_launch_description():
     declarations = [
         DeclareLaunchArgument('lab_host', description='Reachable LAB PC IP or host name.'),
         DeclareLaunchArgument('port', default_value='7447'),
+        DeclareLaunchArgument('bridge_params_file', default_value=str(share / 'config/bridge.yaml')),
         DeclareLaunchArgument('start_camera', default_value='true'),
         DeclareLaunchArgument('serial_no', default_value=''),
         DeclareLaunchArgument('infra_profile', default_value='640,480,30'),
@@ -47,7 +48,7 @@ def generate_launch_description():
     bridge = Node(
         package='rby1_vslam', executable='bridge_node', name='upc_bridge',
         namespace='/rby1/vslam', output='screen',
-        parameters=[str(share / 'config/bridge.yaml'), {
+        parameters=[LaunchConfiguration('bridge_params_file'), {
             'role': 'upc', 'lab_host': value('lab_host', str), 'port': value('port', int),
             'enable_imu': value('enable_imu', bool),
             'use_sim_time': False,

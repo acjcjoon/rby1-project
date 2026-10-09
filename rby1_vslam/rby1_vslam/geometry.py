@@ -2,6 +2,14 @@
 import math
 
 
+def xyz(vector):
+    return (vector.x, vector.y, vector.z)
+
+
+def xyzw(rotation):
+    return (rotation.x, rotation.y, rotation.z, rotation.w)
+
+
 def finite(values):
     result = tuple(float(v) for v in values)
     if not all(math.isfinite(v) for v in result):

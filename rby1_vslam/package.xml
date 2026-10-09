@@ -17,7 +17,6 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
-  <exec_depend>message_filters</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
@@ -30,6 +29,5 @@
   <exec_depend>python3-yaml</exec_depend>
   <!-- Role-specific RealSense (UPC) and Isaac ROS (LAB) dependencies are
        installed explicitly in docs; never pull Isaac/CUDA onto the UPC. -->
-  <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

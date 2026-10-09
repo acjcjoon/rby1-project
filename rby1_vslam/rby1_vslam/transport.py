@@ -12,7 +12,6 @@ from .wire import Packet, ProtocolError, encode_packet, read_packet
 
 UPC_KINDS = frozenset({'stereo', 'imu', 'static_tf'})
 LAB_KINDS = frozenset({'tracking_odom', 'slam_odom', 'tracking_status'})
-TRACE_KINDS = frozenset({'stereo', 'tracking_odom', 'slam_odom'})
 POSE_KINDS = frozenset({'tracking_odom', 'slam_odom'})
 
 
@@ -65,31 +64,38 @@ class StereoSynchronizer:
 
 
 class BoundedMailbox:
-    """Ordered IMU/poses and latest-only state/video. All access is thread safe.
+    """Ordered IMU/poses/stereo and latest-only state. Access is thread safe.
 
-    Stereo pairs are indivisible; replacing one never mixes left/right images.
+    Stereo pairs are indivisible and use a short FIFO to absorb temporary stalls.
+    Capacity one keeps only the latest pair.
+    Larger FIFOs report capacity loss as ``dropped_oldest`` and age loss as
+    ``expired``; they never grow without a bound or rewrite source timestamps.
     An IMU overflow invalidates the stream instead of silently hiding a gap.
     Returned poses use a small per-kind FIFO so a receive burst cannot silently
     collapse to one sample.  If that bounded FIFO fills, the oldest pose of the
     same kind is discarded and reported explicitly in ``dropped_oldest``.
     """
 
-    def __init__(self, max_imu=512, stereo_max_age_sec=0.5, pose_queue_size=32):
-        if max_imu < 1 or pose_queue_size < 1:
+    def __init__(self, max_imu=512, stereo_max_age_sec=0.5, pose_queue_size=32,
+                 stereo_queue_size=3):
+        if (max_imu < 1 or pose_queue_size < 1 or
+                type(stereo_queue_size) is not int or stereo_queue_size < 1):
             raise ValueError('mailbox queue sizes must be positive')
         self._lock = threading.Lock()
         self._imu = deque()
         self._poses = deque()
+        self._stereo = deque()
         self._pose_counts = Counter()
         self._latest = {}
         self.max_imu = max_imu
         self.pose_queue_size = pose_queue_size
+        self.stereo_queue_size = stereo_queue_size
+        self._stereo_high_watermark = 0
         self.stereo_max_age_sec = stereo_max_age_sec
         self.dropped_stereo = 0
         self.imu_overflows = 0
         # Lifetime counters intentionally survive clear()/reconnect.  They are
-        # exposed through bridge_status so a passive recorder can distinguish
-        # producer gaps from latest-only mailbox replacement.
+        # exposed through bridge_status to identify capacity/age losses.
         self._enqueued = Counter()
         self._drained = Counter()
         self._replaced = Counter()
@@ -108,6 +114,13 @@ class BoundedMailbox:
                 return
         raise RuntimeError('pose queue accounting is inconsistent')
 
+    def _expire_stereo(self, now):
+        while (self._stereo and
+               now - self._stereo[0][1] > self.stereo_max_age_sec):
+            self._stereo.popleft()
+            self.dropped_stereo += 1
+            self._expired['stereo'] += 1
+
     def put(self, packet):
         with self._lock:
             if packet.kind == 'imu':
@@ -123,15 +136,27 @@ class BoundedMailbox:
                     self._drop_oldest_pose(packet.kind)
                 self._poses.append((packet, time.monotonic()))
                 self._pose_counts[packet.kind] += 1
+            elif packet.kind == 'stereo':
+                now = time.monotonic()
+                self._expire_stereo(now)
+                if len(self._stereo) >= self.stereo_queue_size:
+                    self._stereo.popleft()
+                    self.dropped_stereo += 1
+                    counter = (self._replaced if self.stereo_queue_size == 1
+                               else self._dropped_oldest)
+                    counter['stereo'] += 1
+                self._stereo.append((packet, now))
+                self._stereo_high_watermark = max(
+                    self._stereo_high_watermark, len(self._stereo))
             else:
                 if packet.kind in self._latest:
                     self._replaced[packet.kind] += 1
-                    if packet.kind == 'stereo':
-                        self.dropped_stereo += 1
                 self._latest[packet.kind] = (packet, time.monotonic())
             self._enqueued[packet.kind] += 1
 
-    def drain(self, max_imu=32):
+    def drain(self, max_imu=32, max_stereo=None):
+        if max_stereo is not None and max_stereo < 1:
+            raise ValueError('max_stereo must be positive or None')
         with self._lock:
             result = []
             # Calibration precedes the first frame after every reconnect.
@@ -148,11 +173,13 @@ class BoundedMailbox:
                     del self._pose_counts[packet.kind]
                 result.append(packet)
                 self._drained[packet.kind] += 1
+            self._expire_stereo(time.monotonic())
+            stereo_count = (len(self._stereo) if max_stereo is None
+                            else min(max_stereo, len(self._stereo)))
+            for _ in range(stereo_count):
+                result.append(self._stereo.popleft()[0])
+                self._drained['stereo'] += 1
             for kind, (packet, queued_at) in self._latest.items():
-                if kind == 'stereo' and time.monotonic() - queued_at > self.stereo_max_age_sec:
-                    self.dropped_stereo += 1
-                    self._expired[kind] += 1
-                    continue
                 result.append(packet)
                 self._drained[kind] += 1
             self._latest.clear()
@@ -163,15 +190,18 @@ class BoundedMailbox:
             self._discarded_on_clear.update(packet.kind for packet in self._imu)
             self._discarded_on_clear.update(
                 packet.kind for packet, _ in self._poses)
+            self._discarded_on_clear.update(
+                packet.kind for packet, _ in self._stereo)
             self._discarded_on_clear.update(self._latest.keys())
             self._imu.clear()
             self._poses.clear()
+            self._stereo.clear()
             self._pose_counts.clear()
             self._latest.clear()
 
     def has_pending(self):
         with self._lock:
-            return bool(self._imu or self._poses or self._latest)
+            return bool(self._imu or self._poses or self._stereo or self._latest)
 
     def metrics(self):
         """Return a JSON-safe snapshot without changing queue behavior."""
@@ -179,6 +209,8 @@ class BoundedMailbox:
             queued = dict(Counter(packet.kind for packet in self._imu))
             queued.update(self._pose_counts)
             queued.update({kind: 1 for kind in self._latest})
+            if self._stereo:
+                queued['stereo'] = len(self._stereo)
             return {
                 'enqueued': dict(self._enqueued),
                 'drained': dict(self._drained),
@@ -187,6 +219,11 @@ class BoundedMailbox:
                 'dropped_oldest': dict(self._dropped_oldest),
                 'discarded_on_clear': dict(self._discarded_on_clear),
                 'queued': queued,
+                'stereo_capacity': self.stereo_queue_size,
+                'stereo_high_watermark': self._stereo_high_watermark,
+                'stereo_oldest_age_ms': (
+                    max(0.0, time.monotonic() - self._stereo[0][1]) * 1000
+                    if self._stereo else None),
             }
 
 
@@ -201,7 +238,9 @@ class SocketLink:
     def __init__(self, role, host='127.0.0.1', bind_host='0.0.0.0', port=7447,
                  timeout_sec=2.0, reconnect_delay_sec=1.0, max_imu=512,
                  stereo_max_age_sec=0.5, pose_queue_size=32,
-                 trace_callback=None, receive_callback=None):
+                 receive_callback=None,
+                 stereo_tx_queue_size=3, stereo_rx_queue_size=3,
+                 socket_send_buffer_bytes=0):
         if role not in ('upc', 'lab'):
             raise ValueError('role must be upc or lab')
         if timeout_sec < 0.5 or reconnect_delay_sec < 0.01 or not 0 <= port <= 65535:
@@ -212,11 +251,20 @@ class SocketLink:
             raise ValueError('pose_queue_size must be positive')
         if stereo_max_age_sec <= 0:
             raise ValueError('stereo_max_age_sec must be positive')
+        if (type(stereo_tx_queue_size) is not int or stereo_tx_queue_size < 1 or
+                type(stereo_rx_queue_size) is not int or stereo_rx_queue_size < 1):
+            raise ValueError('stereo queue sizes must be positive integers')
+        if type(socket_send_buffer_bytes) is not int or socket_send_buffer_bytes < 0:
+            raise ValueError('socket_send_buffer_bytes must be a nonnegative integer')
         self.role = role
         self.host, self.bind_host, self.port = host, bind_host, port
         self.timeout_sec, self.reconnect_delay_sec = timeout_sec, reconnect_delay_sec
-        self.outbox = BoundedMailbox(max_imu, stereo_max_age_sec, pose_queue_size)
-        self.inbox = BoundedMailbox(max_imu, stereo_max_age_sec, pose_queue_size)
+        self.socket_send_buffer_bytes = socket_send_buffer_bytes
+        self._initial_send_buffer_bytes = None
+        self.outbox = BoundedMailbox(
+            max_imu, stereo_max_age_sec, pose_queue_size, stereo_tx_queue_size)
+        self.inbox = BoundedMailbox(
+            max_imu, stereo_max_age_sec, pose_queue_size, stereo_rx_queue_size)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._reset = threading.Event()
@@ -227,20 +275,7 @@ class SocketLink:
         self._persistent = {}
         self._connection_count = 0
         self._state = {'connected': False, 'session_id': '', 'reason': 'starting'}
-        self._trace_callback = trace_callback
         self._receive_callback = receive_callback
-
-    def _trace(self, event, packet, wall_ns, monotonic_ns, **fields):
-        if self._trace_callback is None or packet.kind not in TRACE_KINDS:
-            return
-        try:
-            self._trace_callback({
-                'event': event, 'packet': packet, 'wall_ns': int(wall_ns),
-                'monotonic_ns': int(monotonic_ns), **fields,
-            })
-        except Exception:
-            # Diagnostics must never reset or delay the transport session.
-            pass
 
     def _notify_receive(self):
         if self._receive_callback is None:
@@ -280,6 +315,8 @@ class SocketLink:
                         dropped_stereo=self.outbox.dropped_stereo + self.inbox.dropped_stereo,
                         imu_overflows=self.outbox.imu_overflows + self.inbox.imu_overflows,
                         connection_count=self._connection_count,
+                        socket_send_buffer_bytes=self.socket_send_buffer_bytes,
+                        initial_send_buffer_bytes=self._initial_send_buffer_bytes,
                         tx_mailbox=self.outbox.metrics(),
                         rx_mailbox=self.inbox.metrics())
 
@@ -332,8 +369,14 @@ class SocketLink:
         sock.settimeout(self.timeout_sec)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        # Limit the amount of stale video hidden inside the kernel send queue.
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
+        # Zero leaves Linux TCP send-buffer autotuning enabled. An explicit
+        # value sets a fixed limit instead.
+        if self.socket_send_buffer_bytes:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
+                            self.socket_send_buffer_bytes)
+        with self._lock:
+            self._initial_send_buffer_bytes = sock.getsockopt(
+                socket.SOL_SOCKET, socket.SO_SNDBUF)
 
     def _handshake(self, sock):
         if self.role == 'lab':
@@ -362,17 +405,13 @@ class SocketLink:
             # work so that the consumed wakeup cannot delay reconnect/close.
             if self._stop.is_set() or self._reset.is_set():
                 return
-            for packet in self.outbox.drain():
+            # Leave waiting frames in the bounded FIFO, rather than hiding an
+            # entire burst in a local batch. Recheck age between video sends.
+            for packet in self.outbox.drain(max_stereo=1):
                 if self._reset.is_set() or self._stop.is_set():
                     return
                 outbound = replace(packet, session_id=session)
-                encoded = encode_packet(outbound)
-                started_ns = time.monotonic_ns()
-                sock.sendall(encoded)
-                finished_mono_ns = time.monotonic_ns()
-                self._trace('socket_sent', outbound, time.time_ns(), finished_mono_ns,
-                            io_duration_ns=finished_mono_ns - started_ns,
-                            wire_bytes=len(encoded))
+                sock.sendall(encode_packet(outbound))
                 last_send = time.monotonic()
             now = time.monotonic()
             if now - last_send >= heartbeat_sec:
@@ -396,7 +435,6 @@ class SocketLink:
                 continue
             if packet.kind not in allowed:
                 raise ProtocolError('message kind is not allowed in this direction')
-            self._trace('socket_received', packet, time.time_ns(), time.monotonic_ns())
             queued = False
             with self._lock:
                 if not self._reset.is_set():
