@@ -47,18 +47,10 @@ def test_automatic_transfers_match_the_existing_demo(settings_file):
     expected = task_source.object_handover_demo_final_tmp()
     task_source.current_position = None
     actual = Task(expected.name)
-    actual.extend(task_source.object_gripping_initial_pose_torso_right())
-    for start, end in (
-        ('INBOX', 'LH1'),
-        ('STORE', 'LH2'),
-        ('LH1', 'INBOX'),
-        ('LH2', 'STORE'),
-    ):
-        actual.extend(task_source.pick_up_move_and_put_down_object2(start, end))
-        assert task_source.current_position == end
-    actual.extend(task_source.turn_and_move('STORE', 'INBOX'))
+    actual.extend(task_source.object_gripping_initial_pose_torso_left())
+    actual.extend(task_source.pick_up_move_and_put_down_object('LH1', 'LH2'))
 
-    # Includes the same tag-specific offsets and intermediate movements.
+    # The authored demo starts at LH1 and performs the same direct transfer.
     assert actual.build() == expected
     assert settings_file.read_bytes() == original_settings
 

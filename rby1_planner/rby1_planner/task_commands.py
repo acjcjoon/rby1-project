@@ -1123,6 +1123,11 @@ def _location_tag_id(locations: dict, name: str) -> str:
         raise ValueError('location name must be a nonempty string')
     if name not in locations:
         raise ValueError(f'Unknown location {name!r} in settings.yaml')
+    location = locations[name]
+    if isinstance(location, dict) and location.get('enabled', True) is not True:
+        raise ValueError(
+            f'Location {name!r} is disabled until its position and tag are calibrated'
+        )
     return _location_tags(locations)[name][0]
 
 
@@ -1140,6 +1145,10 @@ def _move_location(locations: dict, name: str) -> tuple[float, float, str]:
     location = locations[name]
     if not isinstance(location, dict):
         raise ValueError(f'Location {name!r} must contain position and side')
+    if location.get('enabled', True) is not True:
+        raise ValueError(
+            f'Location {name!r} is disabled until its position and tag are calibrated'
+        )
     position = location.get('position')
     if not isinstance(position, list) or len(position) != 2:
         raise ValueError(f'Location {name!r} position must be [x, y] in metres')

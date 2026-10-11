@@ -7,8 +7,9 @@ from .qt import (
 )
 
 LOCATIONS = [
-    ('INBOX', 'INBOX'), ('STORE', 'STORE'),
     ('LH1', 'LH1'), ('LH2', 'LH2'),
+    ('ZS (미보정)', 'ZS'), ('MPR (미보정)', 'MPR'),
+    ('INC (미보정)', 'INC'), ('WASTE (미보정)', 'WASTE'),
 ]
 
 class CommunicationTestTab(QWidget):
@@ -20,6 +21,7 @@ class CommunicationTestTab(QWidget):
         for label, value in LOCATIONS:
             self.pick.addItem(label, value)
             self.place.addItem(label, value)
+        self.place.setCurrentIndex(1)
         self.play = QPushButton('Play')
         self.pause = QPushButton('Pause / Cancel (Space)')
         self.pause.setToolTip(

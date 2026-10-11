@@ -51,7 +51,7 @@ def object_gripping_initial_pose_temp() -> Task:
     task.whole_body_joint_absolute(
         right_arm=(-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557),
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(5.0, 2.0, 3.0),
+        joint_motion=(2.0, 2.0, 4.0),
     )
     return task.build()
 
@@ -186,7 +186,7 @@ def align_base_and_pick_up_object(
 ) -> RunnableTaskDefinition:
     """동일 태그로 base 정렬 후 그리퍼를 열고 접근·파지·상승한다."""
     task = Task(f'align_base_and_pick_up_object_{object_id}')
-    tcp_motion = [3.0, 1.0, 1.0, 1.0]
+    tcp_motion = [1.0, 1.0, 1.0, 1.0]
     pickup_distance = 0.075
     contact_offset = [0.0, 0.0, 0.065] 
     approach_offset = list_sum(contact_offset, [0.0, 0.0, pickup_distance])
@@ -286,28 +286,8 @@ def pick_up_move_and_put_down_object2(
 def object_handover_demo_final() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final')
 
-    task.extend(object_gripping_initial_pose_torso_right())
-
-    task.extend(pick_up_object_at('INBOX'))
-    task.extend(turn_and_move('INBOX', 'LH1'))
-    task.extend(put_down_object_at('LH1'))
-
-    task.extend(turn_and_move('LH1', 'STORE'))
-    task.extend(pick_up_object_at('STORE'))
-    task.extend(turn_and_move('STORE', 'LH2'))
-    task.extend(put_down_object_at('LH2'))
-
-    task.extend(turn_and_move('LH2', 'LH1'))
-    task.extend(pick_up_object_at('LH1'))
-    task.extend(turn_and_move('LH1', 'INBOX'))
-    task.extend(put_down_object_at('INBOX'))
-
-    task.extend(turn_and_move('INBOX', 'LH2'))
-    task.extend(pick_up_object_at('LH2'))
-    task.extend(turn_and_move('LH2', 'STORE'))
-    task.extend(put_down_object_at('STORE'))
-
-    task.extend(turn_and_move('STORE', 'INBOX'))
+    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2'))
 
     return task.build()
 
@@ -315,17 +295,8 @@ def object_handover_demo_final() -> RunnableTaskDefinition:
 def object_handover_demo_final_tmp() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final_tmp')
 
-    task.extend(object_gripping_initial_pose_torso_right())
-
-    task.extend(pick_up_move_and_put_down_object2('INBOX', 'LH1'))
-
-    task.extend(pick_up_move_and_put_down_object2('STORE', 'LH2'))
-
-    task.extend(pick_up_move_and_put_down_object2('LH1', 'INBOX'))
-
-    task.extend(pick_up_move_and_put_down_object2('LH2', 'STORE'))
-
-    task.extend(turn_and_move('STORE', 'INBOX'))
+    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2'))
 
     return task.build()
 

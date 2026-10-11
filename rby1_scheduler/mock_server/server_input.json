@@ -37,16 +37,16 @@
         "C": {
           "plate_id": "B001-C",
           "barcode": "RB9Q-361704-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B001-D",
           "barcode": "RB2X-945172-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -86,16 +86,16 @@
         "C": {
           "plate_id": "B002-C",
           "barcode": "RB8N-632147-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B002-D",
           "barcode": "RB5V-890413-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -135,16 +135,16 @@
         "C": {
           "plate_id": "B003-C",
           "barcode": "RB7F-319648-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B003-D",
           "barcode": "RB4R-825074-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -184,16 +184,16 @@
         "C": {
           "plate_id": "B004-C",
           "barcode": "RB6W-914372-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B004-D",
           "barcode": "RB3J-157806-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -233,16 +233,16 @@
         "C": {
           "plate_id": "B005-C",
           "barcode": "RB1T-270965-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B005-D",
           "barcode": "RB7Y-461328-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -282,16 +282,16 @@
         "C": {
           "plate_id": "B006-C",
           "barcode": "RB2N-658034-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B006-D",
           "barcode": "RB6U-982451-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -331,16 +331,16 @@
         "C": {
           "plate_id": "B007-C",
           "barcode": "RB5Q-697842-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B007-D",
           "barcode": "RB1Z-426305-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -380,16 +380,16 @@
         "C": {
           "plate_id": "B008-C",
           "barcode": "RB9V-105283-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B008-D",
           "barcode": "RB2K-549736-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -429,16 +429,16 @@
         "C": {
           "plate_id": "B009-C",
           "barcode": "RB8R-624519-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B009-D",
           "barcode": "RB5X-170862-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
@@ -478,122 +478,21 @@
         "C": {
           "plate_id": "B010-C",
           "barcode": "RB4T-830426-C",
-          "location": "INBOX",
-          "current_task": "T01",
+          "location": "LH1",
+          "current_task": "S1",
           "task_status": "pending",
           "completed_tasks": []
         },
         "D": {
           "plate_id": "B010-D",
           "barcode": "RB9Y-312975-D",
-          "location": "STORE",
-          "current_task": "T05",
+          "location": "LH2",
+          "current_task": "S4",
           "task_status": "pending",
           "completed_tasks": []
         }
       }
     }
   ],
-  "work_queue": [
-    {
-      "task_id": "B001.T01",
-      "batch_id": "B001",
-      "status": "pending"
-    },
-    {
-      "task_id": "B001.T05",
-      "batch_id": "B001",
-      "status": "pending"
-    },
-    {
-      "task_id": "B002.T01",
-      "batch_id": "B002",
-      "status": "pending"
-    },
-    {
-      "task_id": "B002.T05",
-      "batch_id": "B002",
-      "status": "pending"
-    },
-    {
-      "task_id": "B003.T01",
-      "batch_id": "B003",
-      "status": "pending"
-    },
-    {
-      "task_id": "B003.T05",
-      "batch_id": "B003",
-      "status": "pending"
-    },
-    {
-      "task_id": "B004.T01",
-      "batch_id": "B004",
-      "status": "pending"
-    },
-    {
-      "task_id": "B004.T05",
-      "batch_id": "B004",
-      "status": "pending"
-    },
-    {
-      "task_id": "B005.T01",
-      "batch_id": "B005",
-      "status": "pending"
-    },
-    {
-      "task_id": "B005.T05",
-      "batch_id": "B005",
-      "status": "pending"
-    },
-    {
-      "task_id": "B006.T01",
-      "batch_id": "B006",
-      "status": "pending"
-    },
-    {
-      "task_id": "B006.T05",
-      "batch_id": "B006",
-      "status": "pending"
-    },
-    {
-      "task_id": "B007.T01",
-      "batch_id": "B007",
-      "status": "pending"
-    },
-    {
-      "task_id": "B007.T05",
-      "batch_id": "B007",
-      "status": "pending"
-    },
-    {
-      "task_id": "B008.T01",
-      "batch_id": "B008",
-      "status": "pending"
-    },
-    {
-      "task_id": "B008.T05",
-      "batch_id": "B008",
-      "status": "pending"
-    },
-    {
-      "task_id": "B009.T01",
-      "batch_id": "B009",
-      "status": "pending"
-    },
-    {
-      "task_id": "B009.T05",
-      "batch_id": "B009",
-      "status": "pending"
-    },
-    {
-      "task_id": "B010.T01",
-      "batch_id": "B010",
-      "status": "pending"
-    },
-    {
-      "task_id": "B010.T05",
-      "batch_id": "B010",
-      "status": "pending"
-    }
-  ]
+  "work_queue": []
 }

@@ -1,22 +1,38 @@
 locations:
-  INBOX:
-    position: [0.0, 0.0]
-    side: right
-    tag_2:
-      offset: [-0.05, 0.06250, -0.009]
-  STORE:
-    position: [ -0.50, 0.0]
-    side: right
-    tag_1:
-      offset: [-0.05, 0.06250, -0.009]
   LH1:
     position: [0.0, 0.81]
     side: left
     tag_3:
-      offset: [-0.05, 0.06250, -0.009]
+      offset: [-0.05, 0.06100, -0.009]
   LH2:
     position: [0.60, 0.81]
     side: left
     tag_0:
-      offset: [-0.05, 0.06250, -0.009]
-  current_location:
+      offset: [-0.05, 0.06100, -0.009]
+  # 아래 장비들은 실제 위치/방향/tag 보정 전의 자리표시자이다.
+  # enabled: false인 동안 Planner가 실제 이송에 사용하지 않는다.
+  ZS:
+    enabled: false
+    position: [0.0, 0.0]
+    side: left
+    tag_4:
+      offset: [0.0, 0.0, 0.0]
+  MPR:
+    enabled: false
+    position: [0.0, 0.0]
+    side: left
+    tag_5:
+      offset: [0.0, 0.0, 0.0]
+  INC:
+    enabled: false
+    position: [0.0, 0.0]
+    side: left
+    tag_6:
+      offset: [0.0, 0.0, 0.0]
+  WASTE:
+    enabled: false
+    position: [0.0, 0.0]
+    side: left
+    tag_7:
+      offset: [0.0, 0.0, 0.0]
+  current_location: LH1

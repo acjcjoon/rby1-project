@@ -5,8 +5,8 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
         QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
-        QTabWidget, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout,
-        QWidget,
+        QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QToolTip, QTreeWidget,
+        QTreeWidgetItem, QVBoxLayout, QWidget,
     )
     QT_BINDING = 'PySide6'
 except ImportError:
@@ -15,8 +15,8 @@ except ImportError:
     from PyQt5.QtWidgets import (
         QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
         QLineEdit, QMainWindow, QPlainTextEdit, QProgressBar, QPushButton,
-        QShortcut, QTabWidget, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout,
-        QWidget,
+        QScrollArea, QShortcut, QTabWidget, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout,
+        QTreeWidget, QTreeWidgetItem, QWidget,
     )
     QT_BINDING = 'PyQt5'
 

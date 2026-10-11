@@ -46,16 +46,54 @@ class LabConfig:
             key: spec.plate_capacity for key, spec in self.devices.items()
             if spec.plate_capacity is not None
         }
-        for task in data.get('work_queue', []):
+        queue = data.setdefault('work_queue', [])
+        known_task_ids = {
+            str(task.get('task_id', '')) for task in queue
+        }
+        # The external server may send only current work. Populate the complete
+        # authored workflow so Mock Play and selected-task execution can run
+        # process prerequisites as well as robot transfers.
+        for batch in data.get('batches', []):
+            batch_id = str(batch.get('batch_id', ''))
+            plates = batch.get('plates', {})
+            for step in self.workflow.values():
+                task_id = f'{batch_id}.{step.step_id}'
+                if task_id in known_task_ids:
+                    continue
+                affected_roles = (
+                    (step.role,) if step.kind == 'transfer'
+                    else tuple(dict.fromkeys((*step.roles, *step.produces)))
+                )
+                completed = {
+                    str(value).upper()
+                    for role in affected_roles
+                    for value in plates.get(role, {}).get('completed_tasks', [])
+                }
+                queue.append({
+                    'task_id': task_id,
+                    'batch_id': batch_id,
+                    'order': step.order,
+                    'status': (
+                        'done' if step.step_id in completed else 'pending'
+                    ),
+                })
+                known_task_ids.add(task_id)
+        for task in queue:
             local_id = str(task.get('task_id', '')).rsplit('.', 1)[-1]
             step = self.workflow.get(local_id)
-            if step is None or step.kind != 'transfer':
+            if step is None:
                 continue
+            task.setdefault('kind', step.kind)
             task.setdefault('role', step.role)
+            task.setdefault('roles', list(step.roles))
+            task.setdefault('produces', list(step.produces))
             task.setdefault('source', step.source)
             task.setdefault('destination', step.destination)
+            task.setdefault('device', step.device)
+            task.setdefault('duration_min', step.duration_min)
             task.setdefault('priority', step.priority.name)
             task.setdefault('prerequisites', list(step.after))
+            task.setdefault('order', step.order)
         return data
 
     def summary(self) -> dict[str, Any]:

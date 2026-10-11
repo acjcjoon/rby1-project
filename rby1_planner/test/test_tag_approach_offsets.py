@@ -165,22 +165,25 @@ def test_invalid_tag_id_is_rejected(settings_file, object_id):
 
 def test_location_to_tag_mapping_drives_the_handover(settings_file):
     location_tags = {
-        'A': 'tag_0',
-        'B': 'tag_2',
-        'C': 'tag_1',
-        'D': 'tag_3',
+        'LH1': 'tag_3',
+        'LH2': 'tag_0',
     }
-    settings_file.write_text(yaml.safe_dump(nested_settings(
-        location_tags,
-        {tag_id: [0.0, 0.0, 0.0] for tag_id in location_tags.values()},
-    )), encoding='utf-8')
+    locations = {
+        'LH1': {'position': [0.0, 0.81], 'side': 'left'},
+        'LH2': {'position': [0.6, 0.81], 'side': 'left'},
+    }
+    for name, tag_id in location_tags.items():
+        locations[name][tag_id] = {'offset': [0.0, 0.0, 0.0]}
+    settings_file.write_text(
+        yaml.safe_dump({'locations': locations}), encoding='utf-8',
+    )
 
     definition = task_source.object_handover_demo_final()
     alignment_steps = [
         step for step in definition.commands
         if isinstance(step, CameraMoveToTagStep)
     ]
-    location_order = ('A', 'C', 'B', 'D', 'C', 'A', 'D', 'B')
+    location_order = ('LH1', 'LH2')
     assert [step.object_id for step in alignment_steps] == [
         location_tags[name] for name in location_order
     ]

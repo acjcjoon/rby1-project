@@ -62,6 +62,11 @@ class WorkItem:
     role: str
     source: str
     destination: str
+    kind: str = 'transfer'
+    roles: list[str] = field(default_factory=list)
+    produces: list[str] = field(default_factory=list)
+    device: str = ''
+    duration_min: float = 0.0
     priority: Priority = Priority.P5
     status: TaskStatus = TaskStatus.PENDING
     prerequisites: list[str] = field(default_factory=list)
@@ -74,10 +79,17 @@ class WorkItem:
         if isinstance(priority, str):
             priority = Priority[priority.upper()]
         return cls(
-            task_id=str(raw['task_id']), batch_id=str(raw['batch_id']), role=str(raw['role']),
-            source=str(raw['source']), destination=str(raw['destination']),
+            task_id=str(raw['task_id']), batch_id=str(raw['batch_id']),
+            role=str(raw.get('role', '')),
+            source=str(raw.get('source', '')), destination=str(raw.get('destination', '')),
+            kind=str(raw.get('kind', 'transfer')).lower(),
+            roles=[str(value) for value in raw.get('roles', [])],
+            produces=[str(value) for value in raw.get('produces', [])],
+            device=str(raw.get('device', '')),
+            duration_min=float(raw.get('duration_min', 0.0)),
             priority=Priority(int(priority)), status=TaskStatus(str(raw.get('status', 'pending')).lower()),
-            prerequisites=[str(value) for value in raw.get('prerequisites', [])], order=order,
+            prerequisites=[str(value) for value in raw.get('prerequisites', [])],
+            order=int(raw.get('order', order)),
             error=str(raw.get('error', '')),
         )
 
@@ -85,6 +97,10 @@ class WorkItem:
         return {
             'task_id': self.task_id, 'batch_id': self.batch_id, 'role': self.role,
             'source': self.source, 'destination': self.destination,
+            'kind': self.kind, 'roles': list(self.roles),
+            'produces': list(self.produces), 'device': self.device,
+            'duration_min': self.duration_min,
             'priority': self.priority.name, 'status': self.status.value,
-            'prerequisites': list(self.prerequisites), 'error': self.error,
+            'prerequisites': list(self.prerequisites), 'order': self.order,
+            'error': self.error,
         }

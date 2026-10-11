@@ -9,11 +9,12 @@ def test_lab_config_supplies_static_queue_fields(tmp_path):
     config = load_lab_config(root / 'config' / 'lab.yaml')
     source = JsonDataSource(root / 'mock_server' / 'server_input.json', tmp_path / 'out.json', tmp_path / 'events.jsonl')
     data = config.enrich_snapshot(source.read_snapshot())
-    task = next(item for item in data['work_queue'] if item['task_id'] == 'B002.T01')
-    assert task['source'] == 'INBOX'
-    assert task['destination'] == 'LH1'
-    assert task['priority'] == 'P5'
-    assert data['capacities']['LH1'] == 3
+    task = next(item for item in data['work_queue'] if item['task_id'] == 'B002.T08')
+    assert task['source'] == 'LH1'
+    assert task['destination'] == 'LH2'
+    assert task['priority'] == 'P3'
+    assert task['prerequisites'] == ['S1', 'T07']
+    assert data['capacities']['LH1'] == 10
 
 def test_simulation_completes_without_mutating_server_snapshot(tmp_path):
     root = Path(__file__).parents[1]

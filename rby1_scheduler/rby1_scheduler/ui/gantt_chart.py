@@ -34,6 +34,7 @@ class GanttBar:
     end_min: float
     duration_min: float
     lane: int
+    status: str = ''
 
 
 @dataclass(frozen=True)
@@ -43,9 +44,14 @@ class GanttRow:
     bars: tuple[GanttBar, ...]
 
 
-def build_gantt_rows(timeline: list[dict[str, Any]]) -> list[GanttRow]:
+def build_gantt_rows(
+    timeline: list[dict[str, Any]],
+    resources: list[str] | tuple[str, ...] | None = None,
+) -> list[GanttRow]:
     """Group timeline entries by resource and assign non-overlapping lanes."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {
+        str(resource): [] for resource in (resources or [])
+    }
     for item in timeline:
         try:
             start = float(item.get('start_min', 0.0))
@@ -96,7 +102,11 @@ def build_gantt_rows(timeline: list[dict[str, Any]]) -> list[GanttRow]:
             else:
                 lane_ends[lane] = end
             task_id = str(item.get('task_id', ''))
-            batch_id = task_id.partition('.')[0] or 'UNKNOWN'
+            batch_id = str(
+                item.get('batch_id')
+                or task_id.partition('.')[0]
+                or 'UNKNOWN'
+            )
             bars.append(GanttBar(
                 task_id=task_id,
                 batch_id=batch_id,
@@ -107,6 +117,7 @@ def build_gantt_rows(timeline: list[dict[str, Any]]) -> list[GanttRow]:
                 end_min=end,
                 duration_min=float(item.get('duration_min', end - start)),
                 lane=lane,
+                status=str(item.get('status', '')),
             ))
         rows.append(GanttRow(
             resource=resource,
@@ -116,14 +127,38 @@ def build_gantt_rows(timeline: list[dict[str, Any]]) -> list[GanttRow]:
     return rows
 
 
-def _format_minutes(value: float) -> str:
-    total = max(0, round(value))
-    hours, minutes = divmod(total, 60)
-    return f'{hours}:{minutes:02d}'
+def _format_duration(value_min: float) -> str:
+    total_seconds = max(0, round(value_min * 60.0))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f'{hours}시간 {minutes:02d}분 {seconds:02d}초'
+    if minutes:
+        return f'{minutes}분 {seconds:02d}초'
+    return f'{seconds}초'
+
+
+def _axis_unit(span_min: float) -> str:
+    if span_min <= 2.0:
+        return 's'
+    if span_min <= 120.0:
+        return 'min'
+    return 'h'
+
+
+def _format_axis_tick(value_min: float, span_min: float) -> str:
+    if span_min <= 2.0:
+        return f'{value_min * 60:g}'
+    if span_min <= 120.0:
+        return f'{value_min:g}'
+    return f'{value_min / 60:g}'
 
 
 def _tick_step(span_min: float) -> float:
-    for step in (15, 30, 60, 120, 180, 360, 720, 1440, 2880):
+    for step in (
+        0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 180,
+        360, 720, 1440, 2880,
+    ):
         if span_min / step <= 9:
             return float(step)
     return 4320.0
@@ -134,27 +169,36 @@ class GanttChart(QWidget):
 
     _LABEL_WIDTH = 104.0
     _RIGHT_MARGIN = 18.0
-    _TOP_MARGIN = 42.0
+    _TOP_MARGIN = 54.0
     _LANE_HEIGHT = 18.0
     _ROW_GAP = 8.0
     _AXIS_HEIGHT = 32.0
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        empty_message: str = 'Sim을 실행하면 장비별 간트 차트가 표시됩니다.',
+        minimum_span_min: float = 60.0,
+        accessible_name: str = '장비 점유 간트 차트',
+    ) -> None:
         super().__init__()
         self._rows: list[GanttRow] = []
         self._end_min = 0.0
         self._batch_colors: dict[str, QColor] = {}
         self._hit_boxes: list[tuple[QRectF, GanttBar]] = []
+        self._empty_message = empty_message
+        self._minimum_span_min = max(0.1, float(minimum_span_min))
         self.setMinimumHeight(250)
         self.setMouseTracking(True)
-        self.setAccessibleName('시뮬레이션 장비 점유 간트 차트')
+        self.setAccessibleName(accessible_name)
 
     def set_timeline(
         self,
         timeline: list[dict[str, Any]],
         end_min: float = 0.0,
+        resources: list[str] | tuple[str, ...] | None = None,
     ) -> None:
-        self._rows = build_gantt_rows(timeline)
+        self._rows = build_gantt_rows(timeline, resources=resources)
         maximum = max(
             (bar.end_min for row in self._rows for bar in row.bars),
             default=0.0,
@@ -186,13 +230,13 @@ class GanttChart(QWidget):
             painter.drawText(
                 self.rect(),
                 int(Qt.AlignCenter),
-                'Sim을 실행하면 장비별 간트 차트가 표시됩니다.',
+                self._empty_message,
             )
             return
 
         left = self._LABEL_WIDTH
         right = max(left + 1.0, self.width() - self._RIGHT_MARGIN)
-        span = max(self._end_min, 60.0)
+        span = max(self._end_min, self._minimum_span_min)
         pixels_per_minute = (right - left) / span
         self._paint_legend(painter, left, right)
 
@@ -244,7 +288,7 @@ class GanttChart(QWidget):
             painter.drawText(
                 QRectF(x - 28.0, axis_y + 4.0, 56.0, 18.0),
                 int(Qt.AlignHCenter | Qt.AlignTop),
-                f'{tick / 60:g}',
+                _format_axis_tick(tick, span),
             )
             painter.setPen(QPen(QColor('#D2D8DF'), 1.0))
             tick += step
@@ -253,7 +297,7 @@ class GanttChart(QWidget):
         painter.drawText(
             QRectF(right - 12.0, axis_y + 4.0, 28.0, 18.0),
             int(Qt.AlignRight | Qt.AlignTop),
-            'h',
+            _axis_unit(span),
         )
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -278,9 +322,10 @@ class GanttChart(QWidget):
                     global_position,
                     f'{bar.task_id} · {bar.kind}\n'
                     f'{bar.route}\n'
-                    f'{_format_minutes(bar.start_min)} → '
-                    f'{_format_minutes(bar.end_min)} '
-                    f'(소요 {_format_minutes(bar.duration_min)})',
+                    f'{_format_duration(bar.start_min)} → '
+                    f'{_format_duration(bar.end_min)} '
+                    f'(소요 {_format_duration(bar.duration_min)})'
+                    + (f'\n상태: {bar.status}' if bar.status else ''),
                     self,
                 )
                 return

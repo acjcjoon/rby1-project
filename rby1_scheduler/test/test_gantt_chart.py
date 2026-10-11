@@ -71,3 +71,21 @@ def test_gantt_rows_ignore_invalid_intervals():
 
     assert len(rows) == 1
     assert rows[0].resource == 'LH2'
+
+
+def test_live_gantt_can_keep_empty_equipment_rows_visible():
+    rows = build_gantt_rows(
+        [{
+            'task_id': 'B001.S1',
+            'resource': 'LH1',
+            'start_min': 0,
+            'end_min': 1,
+        }],
+        resources=['ROBOT', 'LH1', 'LH2', 'ZS', 'MPR', 'INC'],
+    )
+
+    assert [row.resource for row in rows] == [
+        'ROBOT', 'LH1', 'LH2', 'ZS', 'MPR', 'INC',
+    ]
+    assert rows[0].bars == ()
+    assert rows[1].bars[0].task_id == 'B001.S1'

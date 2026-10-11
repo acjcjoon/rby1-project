@@ -36,20 +36,26 @@ class SchedulerNode(Node):
         self.planner_mode = str(
             self.get_parameter('planner_mode').value
         ).strip().lower()
+        mock_duration_sec = float(
+            self.get_parameter('mock_planner_duration_sec').value
+        )
         if self.planner_mode == 'ros':
             planner = RosPlannerClient(
                 self,
                 str(self.get_parameter('planner_action_name').value),
             )
         elif self.planner_mode == 'mock':
-            planner = MockPlannerClient(float(
-                self.get_parameter('mock_planner_duration_sec').value
-            ))
+            planner = MockPlannerClient(mock_duration_sec)
         else:
             raise ValueError(
                 "planner_mode must be either 'ros' or 'mock'"
             )
-        self.engine = RuntimeEngine(planner)
+        self.engine = RuntimeEngine(
+            planner,
+            mock_process_duration_sec=(
+                mock_duration_sec if self.planner_mode == 'mock' else None
+            ),
+        )
         self.lab_config_path = str(self.get_parameter('lab_config_path').value)
         self.lab = load_lab_config(self.lab_config_path)
         self.simulator = ScheduleSimulator(self.lab)
