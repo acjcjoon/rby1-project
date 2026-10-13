@@ -1,0 +1,3 @@
+schema_version: 1
+frame_id: vslam_map
+waypoints: []
