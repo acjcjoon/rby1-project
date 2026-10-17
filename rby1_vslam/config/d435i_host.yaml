@@ -1,0 +1,5 @@
+# Flat parameter file consumed by realsense2_camera/rs_launch.py on the host.
+# Disable the D435i infrared dot projector for stereo VSLAM.
+depth_module.emitter_enabled: 0
+depth_module.emitter_on_off: false
+depth_module.laser_power: 0.0

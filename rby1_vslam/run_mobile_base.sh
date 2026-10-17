@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Camera dataset acquisition only; cuVSLAM is started by run_vslam.sh.
+# Host-side RBY1 driver, control and manual base UI. Camera is optional.
 set -Eeo pipefail
 
 ROS_SETUP="${RBY1_ROS_SETUP:-/opt/ros/humble/setup.bash}"
@@ -9,5 +9,5 @@ WORKSPACE_SETUP="${RBY1_WORKSPACE_SETUP:-${ISAAC_ROS_WS:-${HOME}/rby1_ros2_ws}/i
 source "$ROS_SETUP"
 source "$WORKSPACE_SETUP"
 set -u
-export ROS_DOMAIN_ID="${RBY1_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-0}}"
+export ROS_DOMAIN_ID="${RBY1_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-10}}"
 exec ros2 launch rby1_vslam mobile_base.launch.py "$@"

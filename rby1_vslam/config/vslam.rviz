@@ -1,5 +1,6 @@
 Panels:
   - Class: rviz_common/Displays
+    Help Height: 70
     Name: Displays
     Property Tree Widget:
       Expanded:
@@ -8,14 +9,15 @@ Panels:
         - /Camera Images1
         - /VSLAM Motion1
         - /VSLAM Map1
-      Splitter Ratio: 0.55
-    Tree Height: 720
+      Splitter Ratio: 0.550000011920929
+    Tree Height: 207
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Views
-    Name: Views
     Expanded:
       - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
   Displays:
@@ -25,9 +27,14 @@ Visualization Manager:
       Color: 120; 120; 120
       Enabled: true
       Line Style:
-        Line Width: 0.03
+        Line Width: 0.029999999329447746
         Value: Lines
       Name: Ground Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
       Plane: XY
       Plane Cell Count: 20
       Reference Frame: <Fixed Frame>
@@ -37,12 +44,147 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-      Marker Scale: 0.35
+        base:
+          Value: true
+        base_footprint:
+          Value: true
+        d435_aligned_depth_to_infra1_frame:
+          Value: true
+        d435_camera_center:
+          Value: true
+        d435_infra1_frame:
+          Value: true
+        d435_infra1_optical_frame:
+          Value: true
+        d435_infra2_frame:
+          Value: true
+        d435_infra2_optical_frame:
+          Value: true
+        d435_link:
+          Value: true
+        ee_left:
+          Value: true
+        ee_right:
+          Value: true
+        gripper_left:
+          Value: true
+        gripper_right:
+          Value: true
+        link_head_0:
+          Value: true
+        link_head_1:
+          Value: true
+        link_head_2:
+          Value: true
+        link_left_arm_0:
+          Value: true
+        link_left_arm_1:
+          Value: true
+        link_left_arm_2:
+          Value: true
+        link_left_arm_3:
+          Value: true
+        link_left_arm_4:
+          Value: true
+        link_left_arm_5:
+          Value: true
+        link_left_arm_6:
+          Value: true
+        link_right_arm_0:
+          Value: true
+        link_right_arm_1:
+          Value: true
+        link_right_arm_2:
+          Value: true
+        link_right_arm_3:
+          Value: true
+        link_right_arm_4:
+          Value: true
+        link_right_arm_5:
+          Value: true
+        link_right_arm_6:
+          Value: true
+        link_torso_0:
+          Value: true
+        link_torso_1:
+          Value: true
+        link_torso_2:
+          Value: true
+        link_torso_3:
+          Value: true
+        link_torso_4:
+          Value: true
+        link_torso_5:
+          Value: true
+        odom:
+          Value: true
+        vslam_map:
+          Value: true
+        wheel_fl_link:
+          Value: true
+        wheel_fr_link:
+          Value: true
+        wheel_rl_link:
+          Value: true
+        wheel_rr_link:
+          Value: true
+      Marker Scale: 0.3499999940395355
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
-      Tree: {}
+      Tree:
+        vslam_map:
+          odom:
+            base_footprint:
+              base:
+                link_torso_0:
+                  link_torso_1:
+                    link_torso_2:
+                      link_torso_3:
+                        link_torso_4:
+                          link_torso_5:
+                            link_head_0:
+                              link_head_1:
+                                link_head_2:
+                                  d435_camera_center:
+                                    d435_link:
+                                      d435_aligned_depth_to_infra1_frame:
+                                        d435_infra1_optical_frame:
+                                          {}
+                                      d435_infra1_frame:
+                                        {}
+                                      d435_infra2_frame:
+                                        d435_infra2_optical_frame:
+                                          {}
+                            link_left_arm_0:
+                              link_left_arm_1:
+                                link_left_arm_2:
+                                  link_left_arm_3:
+                                    link_left_arm_4:
+                                      link_left_arm_5:
+                                        link_left_arm_6:
+                                          ee_left:
+                                            gripper_left:
+                                              {}
+                            link_right_arm_0:
+                              link_right_arm_1:
+                                link_right_arm_2:
+                                  link_right_arm_3:
+                                    link_right_arm_4:
+                                      link_right_arm_5:
+                                        link_right_arm_6:
+                                          ee_right:
+                                            gripper_right:
+                                              {}
+                wheel_fl_link:
+                  {}
+                wheel_fr_link:
+                  {}
+                wheel_rl_link:
+                  {}
+                wheel_rr_link:
+                  {}
       Update Interval: 0
       Value: true
     - Class: rviz_common/Group
@@ -79,21 +221,36 @@ Visualization Manager:
       Name: Camera Images
     - Class: rviz_common/Group
       Displays:
-        - Angle Tolerance: 0.1
+        - Angle Tolerance: 0.10000000149011612
           Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: true
           Enabled: false
           Keep: 2000
           Name: Tracking Odometry
-          Position Tolerance: 0.02
+          Position Tolerance: 0.019999999552965164
           Shape:
             Alpha: 1
             Axes Length: 0.25
-            Axes Radius: 0.02
+            Axes Radius: 0.019999999552965164
             Color: 50; 130; 255
-            Head Length: 0.12
-            Head Radius: 0.06
-            Shaft Length: 0.2
-            Shaft Radius: 0.03
+            Head Length: 0.11999999731779099
+            Head Radius: 0.05999999865889549
+            Shaft Length: 0.20000000298023224
+            Shaft Radius: 0.029999999329447746
             Value: Arrow
           Topic:
             Depth: 5
@@ -102,22 +259,37 @@ Visualization Manager:
             History Policy: Keep Last
             Reliability Policy: Reliable
             Value: /rby1/vslam/camera_odometry
-          Value: true
-        - Angle Tolerance: 0.1
+          Value: false
+        - Angle Tolerance: 0.10000000149011612
           Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: true
           Enabled: true
           Keep: 2000
-          Name: SLAM Odometry
-          Position Tolerance: 0.02
+          Name: Base SLAM Odometry
+          Position Tolerance: 0.019999999552965164
           Shape:
             Alpha: 1
-            Axes Length: 0.3
-            Axes Radius: 0.025
+            Axes Length: 0.30000001192092896
+            Axes Radius: 0.02500000037252903
             Color: 40; 220; 80
-            Head Length: 0.15
-            Head Radius: 0.07
+            Head Length: 0.15000000596046448
+            Head Radius: 0.07000000029802322
             Shaft Length: 0.25
-            Shaft Radius: 0.035
+            Shaft Radius: 0.03500000014901161
             Value: Arrow
           Topic:
             Depth: 5
@@ -125,17 +297,28 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /rby1/vslam/camera_slam_odometry
+            Value: /rby1/vslam/slam_odom
           Value: true
         - Alpha: 1
           Buffer Length: 1
           Class: rviz_default_plugins/Path
           Color: 50; 130; 255
           Enabled: false
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Lines
-          Line Width: 0.03
+          Line Width: 0.029999999329447746
           Name: VO Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
           Pose Style: None
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -143,16 +326,27 @@ Visualization Manager:
             History Policy: Keep Last
             Reliability Policy: Reliable
             Value: /visual_slam/tracking/vo_path
-          Value: true
+          Value: false
         - Alpha: 1
           Buffer Length: 1
           Class: rviz_default_plugins/Path
           Color: 40; 220; 80
-          Enabled: true
+          Enabled: false
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Lines
-          Line Width: 0.05
-          Name: SLAM Path
+          Line Width: 0.05000000074505806
+          Name: Camera SLAM Path (raw)
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
           Pose Style: None
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -160,11 +354,12 @@ Visualization Manager:
             History Policy: Keep Last
             Reliability Policy: Reliable
             Value: /visual_slam/tracking/slam_path
-          Value: true
+          Value: false
         - Class: rviz_default_plugins/Marker
           Enabled: true
           Name: Gravity
-          Namespaces: {}
+          Namespaces:
+            {}
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -180,6 +375,8 @@ Visualization Manager:
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
             Value: true
           Axis: Z
           Channel Name: intensity
@@ -188,10 +385,16 @@ Visualization Manager:
           Color Transformer: RGB8
           Decay Time: 0
           Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
           Name: Loop Closures
           Position Transformer: XYZ
           Selectable: true
           Size (Pixels): 4
+          Size (m): 0.009999999776482582
           Style: Flat Squares
           Topic:
             Depth: 5
@@ -201,11 +404,20 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /visual_slam/vis/loop_closure_cloud
           Use Fixed Frame: true
+          Use rainbow: true
           Value: true
-        - Class: rviz_default_plugins/PoseArray
+        - Alpha: 1
+          Arrow Length: 0.30000001192092896
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.009999999776482582
+          Class: rviz_default_plugins/PoseArray
           Color: 255; 80; 40
           Enabled: true
-          Name: Pose Graph Nodes
+          Head Length: 0.07000000029802322
+          Head Radius: 0.029999999329447746
+          Name: Camera Pose Graph Nodes
+          Shaft Length: 0.23000000417232513
+          Shaft Radius: 0.009999999776482582
           Shape: Axes
           Topic:
             Depth: 5
@@ -218,7 +430,8 @@ Visualization Manager:
         - Class: rviz_default_plugins/Marker
           Enabled: true
           Name: Pose Graph Edges
-          Namespaces: {}
+          Namespaces:
+            {}
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -230,6 +443,8 @@ Visualization Manager:
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
             Value: true
           Axis: Z
           Channel Name: intensity
@@ -237,11 +452,17 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: false
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
           Name: Landmarks (enable in VSLAM config)
           Position Transformer: XYZ
           Selectable: true
           Size (Pixels): 3
+          Size (m): 0.009999999776482582
           Style: Flat Squares
           Topic:
             Depth: 5
@@ -251,10 +472,13 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /visual_slam/vis/landmarks_cloud
           Use Fixed Frame: true
-          Value: false
+          Use rainbow: true
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
             Value: true
           Axis: Z
           Channel Name: intensity
@@ -262,11 +486,17 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: false
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
           Name: Observations (enable in VSLAM config)
           Position Transformer: XYZ
           Selectable: true
           Size (Pixels): 3
+          Size (m): 0.009999999776482582
           Style: Flat Squares
           Topic:
             Depth: 5
@@ -276,7 +506,8 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /visual_slam/vis/observations_cloud
           Use Fixed Frame: true
-          Value: false
+          Use rainbow: true
+          Value: true
       Enabled: true
       Name: VSLAM Map
   Enabled: true
@@ -300,9 +531,9 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 5
+      Distance: 3.871999979019165
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.06
+        Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
@@ -311,25 +542,30 @@ Visualization Manager:
         Y: 0
         Z: 0
       Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05
+      Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
-      Near Clip Distance: 0.01
-      Pitch: 0.65
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.41499999165534973
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.8
+      Yaw: 2.179999589920044
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1000
+  Height: 836
   Hide Left Dock: false
   Hide Right Dock: false
+  Left IR:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd000000010000000000000156000002eefc0200000005fb0000001000520069006700680074002000490052010000003b000000c90000002800fffffffb0000000e004c006500660074002000490052010000010a000000c90000002800fffffffb000000100044006900730070006c00610079007301000001d900000150000000c700fffffffb0000001200530065006c0065006300740069006f006e000000021c000000670000005c00fffffffb0000000a00560069006500770073000000026d000000bc000000a000ffffff0000049e000002ee00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Right IR:
+    collapsed: false
   Selection:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1600
-  X: 40
-  Y: 40
+  Width: 1530
+  X: 70
+  Y: 27

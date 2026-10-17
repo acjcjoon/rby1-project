@@ -1,4 +1,4 @@
-"""Jetson driver, D435i acquisition, control backend and dataset Qt UI."""
+"""Host driver, robot TF, optional D435i, control backend and base Qt UI."""
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -7,6 +7,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
     IncludeLaunchDescription,
+    OpaqueFunction,
     RegisterEventHandler,
 )
 from launch.conditions import IfCondition
@@ -18,6 +19,42 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
+def _boolean(context, name):
+    value = LaunchConfiguration(name).perform(context).strip().lower()
+    if value not in ('true', 'false'):
+        raise ValueError(name + ' must be true or false')
+    return value == 'true'
+
+
+def _description(context):
+    if not _boolean(context, 'start_description'):
+        return []
+    model = LaunchConfiguration('robot_model').perform(context).strip().lower()
+    if model not in ('a', 'm'):
+        raise ValueError('robot_model must be a or m')
+    version = LaunchConfiguration('robot_version').perform(context).strip()
+    share = Path(get_package_share_directory('rby1_description'))
+    urdf = share / 'urdf' / ('rby1' + model) / ('model_v' + version + '.urdf')
+    if not urdf.is_file():
+        raise ValueError('RBY1 URDF does not exist: ' + str(urdf))
+    return [
+        Node(
+            package='robot_state_publisher', executable='robot_state_publisher',
+            name='robot_state_publisher', output='screen',
+            parameters=[{'use_sim_time': False,
+                         'robot_description': urdf.read_text(encoding='utf-8')}],
+            remappings=[('joint_states', '/rby1/joint_states')],
+        ),
+        Node(
+            package='tf2_ros', executable='static_transform_publisher',
+            name='rby1_base_footprint', output='screen', arguments=[
+                '--x', '0', '--y', '0', '--z', '0',
+                '--roll', '0', '--pitch', '0', '--yaw', '0',
+                '--frame-id', 'base_footprint', '--child-frame-id', 'base'],
+        ),
+    ]
+
+
 def generate_launch_description():
     control_share = Path(get_package_share_directory('rby1_control'))
     driver_share = Path(get_package_share_directory('rby1_driver'))
@@ -27,7 +64,11 @@ def generate_launch_description():
         DeclareLaunchArgument('namespace', default_value='rby1'),
         DeclareLaunchArgument('robot_address', default_value='192.168.30.1:50051'),
         DeclareLaunchArgument('robot_model', default_value='m'),
+        DeclareLaunchArgument('robot_version', default_value='1_3'),
         DeclareLaunchArgument('start_driver', default_value='true'),
+        DeclareLaunchArgument('start_description', default_value='true'),
+        DeclareLaunchArgument('start_control', default_value='true'),
+        DeclareLaunchArgument('start_ui', default_value='true'),
         DeclareLaunchArgument('driver_config', default_value=str(
             driver_share / 'config/driver_parameters.yaml')),
         DeclareLaunchArgument('control_config', default_value=str(
@@ -63,6 +104,7 @@ def generate_launch_description():
     control = Node(
         package='rby1_control', executable='rby1_control', name='rby1_control',
         namespace=LaunchConfiguration('namespace'), output='screen',
+        condition=IfCondition(LaunchConfiguration('start_control')),
         parameters=[LaunchConfiguration('control_config'), {
             'robot_address': value('robot_address', str),
             'robot_model': value('robot_model', str),
@@ -78,6 +120,7 @@ def generate_launch_description():
     operator = Node(
         package='rby1_vslam', executable='mobile_base_qt', name='mobile_base_qt',
         namespace=LaunchConfiguration('namespace'), output='screen',
+        condition=IfCondition(LaunchConfiguration('start_ui')),
         parameters=[{
             'max_linear_speed': value('max_linear_speed', float),
             'max_angular_speed': value('max_angular_speed', float),
@@ -87,4 +130,6 @@ def generate_launch_description():
         target_action=node, on_exit=[EmitEvent(event=Shutdown(
             reason='Mobile-base stack process exited'))],
     )) for node in (driver, control, operator)]
-    return LaunchDescription(declarations + handlers + [camera, driver, control, operator])
+    return LaunchDescription(
+        declarations + handlers + [camera, driver, OpaqueFunction(function=_description),
+                                    control, operator])

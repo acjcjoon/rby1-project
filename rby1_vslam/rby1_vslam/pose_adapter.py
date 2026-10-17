@@ -15,7 +15,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
-from .geometry import compose, offset_covariance, xyz, xyzw
+from .geometry import compose, offset_covariance, planar_base_pose, xyz, xyzw
 from .pose_queue import PoseQueue
 
 
@@ -29,6 +29,7 @@ class PoseAdapter(Node):
             'output_odom_topic': '/rby1/vslam/odom',
             'output_slam_odom_topic': '/rby1/vslam/slam_odom',
             'publish_odom_tf': False,
+            'planar_base_motion': True,
             'max_input_age_sec': 0.5, 'tf_wait_sec': 0.15,
             'pose_queue_size': 32,
             'tracking_status_topic': '/rby1/vslam/tracking_status',
@@ -69,6 +70,9 @@ class PoseAdapter(Node):
         self.retry_timer.cancel()
         self._retry_active = False
         self.create_subscription(String, self.p['tracking_status_topic'], self.on_tracking, 5)
+        if self.p['planar_base_motion']:
+            self.get_logger().info(
+                'Planar base model enabled: output z/roll/pitch are constrained to zero')
 
     def on_tracking(self, message):
         try:
@@ -131,11 +135,12 @@ class PoseAdapter(Node):
                 if msg.child_frame_id != self.p['camera_frame'] or not msg.header.frame_id:
                     self._drop(kind, 'unexpected camera pose frame')
                     continue
-                # T_world_base(t) = T_world_camera(t) * T_camera_base(t).
+                # Use the complete acquisition-time moving-head transform.
                 transform = self.buffer.lookup_transform(
                     self.p['camera_frame'], self.p['base_frame'], stamp,
                     timeout=Duration(seconds=0.)).transform
-                pos, rot = compose(
+                pose_function = planar_base_pose if self.p['planar_base_motion'] else compose
+                pos, rot = pose_function(
                     xyz(msg.pose.pose.position), xyzw(msg.pose.pose.orientation),
                     xyz(transform.translation), xyzw(transform.rotation))
                 out = Odometry()

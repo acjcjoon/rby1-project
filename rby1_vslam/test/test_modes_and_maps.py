@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from rby1_vslam.geometry import compose, inverse, planar_correction, yaw
+from rby1_vslam.geometry import compose, inverse, planar_base_pose, planar_correction, yaw
 from rby1_vslam.map_tool import has_map_database, pose_quaternion, validate_path
 from rby1_vslam.modes import depth_module_profile, isaac_parameters, parse_tracking_mode
 
@@ -71,6 +71,26 @@ class GeometryTests(unittest.TestCase):
             for actual, expected in zip(compensated_position, base_position):
                 self.assertAlmostEqual(actual, expected)
             self.assertAlmostEqual(yaw(compensated_rotation), 0.4)
+
+    def test_planar_base_pose_preserves_moving_head_compensation(self):
+        base_position, base_rotation = (2.0, 3.0, 0.0), pose_quaternion(0, 0, 0.4)
+        for head_pitch in (0.0, 0.2, -0.3):
+            base_camera = ((0.1, 0.0, 1.5), pose_quaternion(0, head_pitch, 0))
+            camera_pose = compose(base_position, base_rotation, *base_camera)
+            result_position, result_rotation = planar_base_pose(
+                *camera_pose, *inverse(*base_camera))
+            for actual, expected in zip(result_position, base_position):
+                self.assertAlmostEqual(actual, expected)
+            self.assertAlmostEqual(yaw(result_rotation), 0.4)
+
+    def test_planar_base_pose_rejects_camera_pitch_lever_arm_drift(self):
+        camera_base = inverse((0.1, 0.0, 1.5), pose_quaternion(0, 0, 0))
+        result_position, result_rotation = planar_base_pose(
+            (0.1, 0.0, 1.5), pose_quaternion(0, 0.01, 0), *camera_base)
+        self.assertAlmostEqual(result_position[0], 0.0)
+        self.assertAlmostEqual(result_position[1], 0.0)
+        self.assertEqual(result_position[2], 0.0)
+        self.assertAlmostEqual(yaw(result_rotation), 0.0)
 
     def test_global_correction_matches_wheel_pose_in_map(self):
         correction = planar_correction((3, 4, 0), pose_quaternion(0, 0, math.pi / 2),

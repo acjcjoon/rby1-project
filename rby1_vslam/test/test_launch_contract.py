@@ -42,6 +42,13 @@ class LaunchTests(unittest.TestCase):
             folder.mkdir()
             (folder / 'package.xml').write_text(f'<package><version>{version}</version></package>')
             self.shares[name] = folder
+        for name in ('rby1_control', 'rby1_driver', 'rby1_description'):
+            folder = Path(self.temp.name) / name
+            folder.mkdir()
+            self.shares[name] = folder
+        urdf = Path(self.shares['rby1_description']) / 'urdf/rby1m/model_v1_3.urdf'
+        urdf.parent.mkdir(parents=True)
+        urdf.write_text('<robot name="rby1m"/>')
         stubs = {
             'ament_index_python': module('ament_index_python'),
             'ament_index_python.packages': module('ament_index_python.packages',
@@ -49,12 +56,15 @@ class LaunchTests(unittest.TestCase):
             'launch': module('launch', LaunchDescription=list),
             'launch.actions': module('launch.actions', DeclareLaunchArgument=Record,
                                      OpaqueFunction=Record, IncludeLaunchDescription=Record,
-                                     RegisterEventHandler=Record),
+                                     RegisterEventHandler=Record, EmitEvent=Record),
             'launch.conditions': module('launch.conditions', IfCondition=Record),
-            'launch.substitutions': module('launch.substitutions', LaunchConfiguration=Configuration),
+            'launch.substitutions': module('launch.substitutions', LaunchConfiguration=Configuration,
+                                           PythonExpression=Record),
             'launch.launch_description_sources': module('launch.launch_description_sources',
                                                          PythonLaunchDescriptionSource=Record),
-            'launch.event_handlers': module('launch.event_handlers', OnShutdown=Record),
+            'launch.event_handlers': module('launch.event_handlers', OnShutdown=Record,
+                                            OnProcessExit=Record),
+            'launch.events': module('launch.events', Shutdown=Record),
             'launch_ros': module('launch_ros'),
             'launch_ros.actions': module('launch_ros.actions', Node=Record, ComposableNodeContainer=Record),
             'launch_ros.descriptions': module('launch_ros.descriptions', ComposableNode=Record,
@@ -128,7 +138,17 @@ class LaunchTests(unittest.TestCase):
         parameters = camera.kwargs['parameters'][-1]
         self.assertEqual(parameters['depth_module.profile'], '640,360,30')
         self.assertFalse(parameters['enable_depth'])
+        self.assertFalse(parameters['enable_sync'])
         self.assertNotIn('depth_module.infra_profile', parameters)
+
+    def test_host_camera_disables_projector_and_sync(self):
+        script = (PACKAGE / 'run_d435i_host.sh').read_text()
+        config = (PACKAGE / 'config/d435i_host.yaml').read_text()
+        self.assertIn('config_file:="$CAMERA_CONFIG"', script)
+        self.assertIn('enable_sync:=false', script)
+        self.assertIn('depth_module.inter_cam_sync_mode:=0', script)
+        self.assertIn('depth_module.emitter_enabled: 0', config)
+        self.assertIn('depth_module.laser_power: 0.0', config)
 
     def test_jetson_passes_only_declared_arguments_to_its_children(self):
         launch = self.load('jetson.launch.py')
@@ -140,6 +160,34 @@ class LaunchTests(unittest.TestCase):
             child_name = Path(action.args[0].args[0]).name
             passed = dict(action.kwargs['launch_arguments'])
             self.assertTrue(set(passed) <= set(self.defaults(child_by_file[child_name])))
+
+    def test_split_host_and_jetson_launch_complete_base_tf_ownership(self):
+        host = self.load('mobile_base.launch.py')
+        host_context = self.defaults(host)
+        description = host._description(host_context)
+        self.assertEqual(description[0].kwargs['executable'], 'robot_state_publisher')
+        self.assertEqual(description[0].kwargs['remappings'], [
+            ('joint_states', '/rby1/joint_states')])
+        self.assertEqual(description[1].kwargs['executable'], 'static_transform_publisher')
+        self.assertIn('base_footprint', description[1].kwargs['arguments'])
+        self.assertIn('base', description[1].kwargs['arguments'])
+
+        jetson = self.load('jetson.launch.py')
+        actions = jetson.generate_launch_description()
+        executables = {action.kwargs.get('executable') for action in actions}
+        self.assertIn('pose_adapter', executables)
+        self.assertIn('map_origin_initializer', executables)
+        self.assertIn('localization_tf', executables)
+        adapter = next(action for action in actions
+                       if action.kwargs.get('executable') == 'pose_adapter')
+        planar_value = adapter.kwargs['parameters'][0]['planar_base_motion']
+        self.assertEqual(planar_value.args[0].name, 'planar_base_motion')
+
+    def test_rviz_displays_compensated_base_pose(self):
+        config = (PACKAGE / 'config/vslam.rviz').read_text()
+        self.assertIn('Name: Base SLAM Odometry', config)
+        self.assertIn('Value: /rby1/vslam/slam_odom', config)
+        self.assertIn('Name: Camera SLAM Path (raw)', config)
 
     def test_physical_stack_reuses_robot_nodes_and_passes_declared_arguments(self):
         launch = self.load('physical.launch.py')

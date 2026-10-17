@@ -2,6 +2,12 @@ from glob import glob
 from setuptools import find_packages, setup
 
 PACKAGE = 'rby1_vslam'
+SHELL_SCRIPTS = [
+    'recorder.sh',
+    'run_d435i_host.sh',
+    'run_isaac_vslam_docker.sh',
+    'run_mobile_base.sh',
+]
 
 setup(
     name=PACKAGE,
@@ -15,7 +21,7 @@ setup(
          glob('config/*.yaml') + glob('config/*.xml') + glob('config/*.rviz')),
         ('share/' + PACKAGE + '/docs', glob('docs/*.md')),
         ('share/' + PACKAGE + '/data', glob('data/*.yaml') + glob('data/*.md')),
-        ('share/' + PACKAGE + '/scripts', glob('*.sh')),
+        ('share/' + PACKAGE + '/scripts', SHELL_SCRIPTS),
     ],
     install_requires=['setuptools'],
     tests_require=['pytest'],
@@ -27,6 +33,7 @@ setup(
     entry_points={'console_scripts': [
         'tracking_monitor = rby1_vslam.tracking_monitor:main',
         'pose_adapter = rby1_vslam.pose_adapter:main',
+        'map_origin_initializer = rby1_vslam.map_origin_initializer:main',
         'localization_tf = rby1_vslam.localization_tf:main',
         'nav2_gate = rby1_vslam.nav2_gate:main',
         'map_tool = rby1_vslam.map_tool:main',

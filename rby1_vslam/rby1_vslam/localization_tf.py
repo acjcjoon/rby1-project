@@ -27,8 +27,10 @@ class LocalizationTF(Node):
         defaults = {
             'slam_odom_topic': '/rby1/vslam/slam_odom',
             'tracking_status_topic': '/rby1/vslam/tracking_status',
+            'origin_status_topic': '/rby1/vslam/map_origin_status',
             'status_topic': '/rby1/vslam/localization_status',
             'map_frame': 'vslam_map', 'odom_frame': 'odom', 'base_frame': 'base',
+            'require_origin_alignment': False,
             'pose_timeout_sec': 0.5, 'tracking_timeout_sec': 0.75,
             'max_correction_jump_m': 0.5, 'max_correction_jump_rad': 0.8,
         }
@@ -46,6 +48,8 @@ class LocalizationTF(Node):
         self.status_pub = self.create_publisher(String, self.p['status_topic'], 5)
         self.tracking_ok = False
         self.tracking_received = -math.inf
+        self.origin_session = ''
+        self.origin_aligned = not self.p['require_origin_alignment']
         self.session = ''
         self.pending = None
         self.correction = None
@@ -56,6 +60,8 @@ class LocalizationTF(Node):
         self.detail = 'waiting for VSLAM and timestamped wheel TF'
         self.create_subscription(Odometry, self.p['slam_odom_topic'], self.on_pose, qos_profile_sensor_data)
         self.create_subscription(String, self.p['tracking_status_topic'], self.on_tracking, 5)
+        if self.p['require_origin_alignment']:
+            self.create_subscription(String, self.p['origin_status_topic'], self.on_origin, 5)
         self.steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(0.02, self.tick, clock=self.steady)
 
@@ -72,9 +78,30 @@ class LocalizationTF(Node):
             self.pending = None
             self.correction = None
             self.last_pose_stamp = 0
+        if session != self.session and self.p['require_origin_alignment']:
+            self.origin_session = ''
+            self.origin_aligned = False
         self.session = session
         self.tracking_ok = ok
         self.tracking_received = time.monotonic()
+
+    def on_origin(self, msg):
+        try:
+            state = json.loads(msg.data)
+            session = state.get('session_id', '')
+            aligned = bool(session and state.get('aligned') is True)
+            if not isinstance(session, str):
+                raise ValueError('invalid origin session')
+        except (ValueError, TypeError, AttributeError):
+            session, aligned = '', False
+        newly_aligned = aligned and session == self.session and not self.origin_aligned
+        self.origin_session = session
+        self.origin_aligned = aligned and session == self.session
+        if newly_aligned:
+            # The next pose is the first one guaranteed to use the new map origin.
+            self.pending = None
+            self.correction = None
+            self.last_pose_stamp = 0
 
     def on_pose(self, msg):
         stamp = Time.from_msg(msg.header.stamp).nanoseconds
@@ -94,6 +121,11 @@ class LocalizationTF(Node):
             self.correction = None
             self.pending = None
             self.detail = 'local visual tracking unavailable'
+        elif (self.p['require_origin_alignment'] and not (
+                self.origin_aligned and self.origin_session == self.session)):
+            self.correction = None
+            self.pending = None
+            self.detail = 'waiting for cuVSLAM ground-aligned map origin'
         elif self.pending is not None:
             msg, received = self.pending
             stamp = Time.from_msg(msg.header.stamp)

@@ -7,7 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -29,7 +29,13 @@ def generate_launch_description():
         DeclareLaunchArgument('start_rviz', default_value='false'),
         DeclareLaunchArgument('tracking_timeout_sec', default_value='0.5'),
         DeclareLaunchArgument('pose_queue_size', default_value='32'),
+        DeclareLaunchArgument(
+            'planar_base_motion', default_value='true',
+            description='Constrain the mobile-base VSLAM pose to z=roll=pitch=0.'),
         DeclareLaunchArgument('base_frame', default_value='base'),
+        DeclareLaunchArgument('odom_frame', default_value='odom'),
+        DeclareLaunchArgument('start_localization_tf', default_value='false'),
+        DeclareLaunchArgument('start_map_origin_alignment', default_value='true'),
         DeclareLaunchArgument('publish_mount_tf', default_value='true'),
         DeclareLaunchArgument('mount_x', default_value='0.0464'),
         DeclareLaunchArgument('mount_y', default_value='0.0'),
@@ -59,7 +65,35 @@ def generate_launch_description():
             'use_sim_time': value('use_sim_time', bool),
             'base_frame': value('base_frame', str), 'camera_frame': 'd435_link',
             'publish_odom_tf': False,
+            'planar_base_motion': value('planar_base_motion', bool),
             'pose_queue_size': value('pose_queue_size', int),
+        }],
+    )
+    align_mapping_origin = PythonExpression([
+        "'", LaunchConfiguration('mode'), "' == 'mapping' and '",
+        LaunchConfiguration('start_map_origin_alignment'), "'.lower() == 'true'",
+    ])
+    origin = Node(
+        package='rby1_vslam', executable='map_origin_initializer',
+        name='map_origin_initializer', namespace='/rby1/vslam', output='screen',
+        parameters=[{
+            'use_sim_time': value('use_sim_time', bool),
+            'enabled': ParameterValue(align_mapping_origin, value_type=bool),
+            'odom_frame': value('odom_frame', str),
+            'camera_frame': 'd435_link',
+        }],
+    )
+    localization = Node(
+        package='rby1_vslam', executable='localization_tf', name='localization_tf',
+        namespace='/rby1/vslam', output='screen',
+        condition=IfCondition(LaunchConfiguration('start_localization_tf')),
+        parameters=[{
+            'use_sim_time': value('use_sim_time', bool),
+            'base_frame': value('base_frame', str),
+            'odom_frame': value('odom_frame', str),
+            'map_frame': 'vslam_map',
+            'require_origin_alignment': ParameterValue(
+                align_mapping_origin, value_type=bool),
         }],
     )
     mount = Node(
@@ -81,4 +115,5 @@ def generate_launch_description():
                    '--roll', '0', '--pitch', '0', '--yaw', '0',
                    '--frame-id', 'd435_camera_center', '--child-frame-id', 'd435_link'],
     )
-    return LaunchDescription(declarations + [camera, mount, center, isaac, adapter])
+    return LaunchDescription(
+        declarations + [camera, mount, center, isaac, adapter, origin, localization])

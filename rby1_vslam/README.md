@@ -37,7 +37,6 @@ export ROS_DOMAIN_ID=0
 ros2 launch rby1_vslam physical.launch.py tracking_mode:=0
 ```
 
-`bash rby1_vslam/run_vslam.sh tracking_mode:=0`도 같은 launch를 실행한다.
 `RBY1_WORKSPACE_SETUP`으로 다른 workspace의 `install/setup.bash`를 지정할 수 있다.
 기존 로봇 노드를 Jetson 호스트에서 계속 사용하면 컨테이너에서 다음과 같이 실행한다.
 
@@ -52,6 +51,53 @@ control 서비스가 컨테이너에서도 보이는지 먼저 확인한다.
 기존 카메라가 같은 토픽을 발행하면 `start_camera:=false`, mount TF가 이미 있으면
 `publish_mount_tf:=false`도 지정한다. GUI 없는 환경에서는 `start_ui:=false`를 사용한다.
 전원·서보·control manager·stream은 UI에서 켠다. Nav2 gate는 시작 시 OFF다.
+
+### 호스트 카메라 + bind-only Isaac Docker
+
+컨테이너에 `rby1_vslam`만 bind하고 카메라는 호스트에서 발행하는 구성에서는
+아래 호스트 터미널들을 사용한다. 양쪽 `ROS_DOMAIN_ID`가 같고 컨테이너가
+host network를 사용해야 한다.
+
+소스 bind는 복사를 대신하지만 `install/` 갱신까지 대신하지는 않는다. 코드가 바뀐 뒤
+아래처럼 호스트와 Docker를 각각 한 번 빌드한다. 삭제한 예전 `.sh`를 계속 찾던 빌드 오류는
+`setup.py` 설치 목록도 함께 정리했으므로 더 이상 발생하지 않는다.
+
+```bash
+# 호스트: base launch/UI 갱신
+cd /home/nvidia/rby1_ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select rby1_vslam
+
+# 호스트에서 실행하지만 빌드는 Docker 내부 install에 생성
+docker exec -it rby1-isaac-vslam bash -lc '
+  source /opt/ros/humble/setup.bash
+  source /workspaces/isaac_ros-dev/install/setup.bash
+  cd /workspaces/isaac_ros-dev
+  colcon build --symlink-install --packages-select rby1_vslam
+'
+```
+
+빌드 뒤 이미 열려 있던 터미널은 다시 source하거나 새 터미널로 연다. `cp`는 필요 없다.
+
+```bash
+# 호스트 터미널 1: 기존 base stack이 없을 때만 수동 주행 UI 시작
+RBY1_WORKSPACE_SETUP=/home/nvidia/rby1_ros2_ws/install/setup.bash \
+RBY1_ROS_DOMAIN_ID=10 \
+bash rby1_vslam/run_mobile_base.sh start_camera:=false \
+  max_linear_speed:=0.1 max_angular_speed:=0.2
+
+# 호스트 터미널 2: D435i stereo, sync와 IR dot projector 모두 OFF
+RBY1_D435_SERIAL=244222075961 RBY1_ROS_DOMAIN_ID=10 \
+bash rby1_vslam/run_d435i_host.sh 0
+
+# 호스트 터미널 3: Docker에서 cuVSLAM, base pose 변환, vslam_map->odom TF 시작
+bash rby1_vslam/run_isaac_vslam_docker.sh 0 start_rviz:=false
+```
+
+IMU를 사용할 때는 두 명령의 `0`을 모두 `1`로 맞춘다. 호스트 카메라 스크립트는
+`depth_module.emitter_enabled=0`, `laser_power=0`으로 IR dot projector를 끈다. 이 분리 구성에서는
+컨테이너에 `realsense2_camera`나 카메라 USB 장치가 없어도 된다. 기존 driver/control/UI가
+이미 실행 중이면 터미널 1을 중복 실행하지 않는다.
 
 ## 입력 모드
 
@@ -103,8 +149,8 @@ LiDAR가 실행 중이면 `use_scan:=true scan_topic:=/scan`을 지정한다.
 ## 녹화와 재생
 
 ```bash
-# 카메라/수동 이동만 실행; 두 명령의 번호를 맞춘다.
-bash rby1_vslam/run_mobile_base_mode1.sh
+# base stack과 호스트 카메라를 먼저 실행; 카메라/녹화 번호를 맞춘다.
+bash rby1_vslam/run_d435i_host.sh 1
 bash rby1_vslam/recorder.sh mode1
 ```
 
@@ -128,9 +174,29 @@ cuVSLAM은 움직이는 헤드의 `d435_link`를 추적하고, `pose_adapter`가
 중복을 방지한다. `localization_tf`만 `vslam_map → odom`을 발행하고 driver의
 `odom → base_footprint → base` 경로를 사용한다.
 
+모바일 베이스는 평면 운동이므로 `planar_base_motion:=true`가 기본이다. adapter는 단순히
+z만 잘라내지 않고, 촬영 시점의 움직이는 헤드 TF로 base yaw를 구한 다음 camera 높이
+레버암을 yaw-only 자세로 역산한다. 따라서 헤드를 움직여도 보상은 유지되고, cuVSLAM의
+작은 camera roll/pitch 오차가 약 1.5 m 높이 때문에 base XY 흔들림으로 증폭되는 현상을
+줄인다. 출력 `/rby1/vslam/odom`, `/rby1/vslam/slam_odom`은 z=roll=pitch=0이다.
+경사로나 비평면 주행 실험에서만 `planar_base_motion:=false`로 되돌린다. cuVSLAM 자체의
+ground constraint는 현재 base frame이 움직이는 헤드의 `d435_link`이므로 켜지 않는다.
+
+분리 실행 스크립트는 호스트에서 robot state TF를, Docker에서 camera mount TF,
+`pose_adapter`, `localization_tf`를 시작한다. TF 연결과 발행 주체는 검증했지만 장착값
+`[0.0464, 0, 0.066]`, pitch `-2°`는 `rby1_camera`의 기존 초기값이다. 정확한 지도 축척과
+base pose가 필요하면 실제 브래킷 기준으로 외부파라미터를 실측·보정해야 한다.
+
+mapping 시작 시 `map_origin_initializer`가 Isaac ROS 3.2의 `set_slam_pose` 서비스에
+현재 `odom → d435_link`를 한 번 전달한다. 따라서 cuVSLAM이 `d435_link`를 추적하더라도
+`vslam_map`의 XY 평면은 로봇 바닥과 맞고 카메라는 실제 높이에 표시된다. 터미널에
+`map origin aligned to odom ground`가 출력될 때까지 로봇과 헤드를 정지시킨다. 이 변경 전
+카메라 높이를 원점으로 만들어 저장한 지도는 좌표 기준이 다르므로 새로 생성한다.
+
 ```bash
 ros2 topic hz /d435/d435/infra1/image_rect_raw
 ros2 topic echo /rby1/vslam/tracking_status --once
+ros2 topic echo /rby1/vslam/map_origin_status --once
 ros2 topic echo /rby1/vslam/localization_status --once
 ros2 topic echo /rby1/vslam/navigation_status --once
 ros2 run tf2_ros tf2_echo vslam_map base

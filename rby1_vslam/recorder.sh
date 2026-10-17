@@ -16,7 +16,7 @@ usage() {
     "  mode2  color + aligned depth + RBY1 base" \
     "" \
     "Example:" \
-    "  bash rby1_vslam/run_mobile_base_mode1.sh" \
+    "  bash rby1_vslam/run_d435i_host.sh 1" \
     "  bash rby1_vslam/recorder.sh mode1" \
     "  bash rby1_vslam/recorder.sh mode2" \
     "" \
@@ -156,7 +156,7 @@ done
 if ((${#MISSING_TOPICS[@]} > 0)); then
   printf '[recorder] Missing %s required topic(s):\n' "${#MISSING_TOPICS[@]}" >&2
   printf '  %s\n' "${MISSING_TOPICS[@]}" >&2
-  die 'Start the matching rby1_vslam/run_mobile_base_modeN.sh and wait for the camera'
+  die 'Start run_mobile_base.sh with start_camera:=false and the matching run_d435i_host.sh mode'
 fi
 
 printf '[recorder] Required %s topics are visible.\n' "$MODE"
