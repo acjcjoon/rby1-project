@@ -2,7 +2,7 @@
 <package format="3">
   <name>rby1_vslam</name>
   <version>0.1.0</version>
-  <description>Jetson-local Isaac ROS 3.2 VSLAM and guarded Nav2 for RBY1.</description>
+  <description>RBY1 station navigation with wheel odometry and stationary visual correction.</description>
   <maintainer email="maintainer@example.com">RBY1 project</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
@@ -14,6 +14,8 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>rby1_control</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
@@ -24,17 +26,25 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>nav2_common</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
-  <exec_depend>nav2_mppi_controller</exec_depend>
-  <exec_depend>nav2_theta_star_planner</exec_depend>
+  <exec_depend>rby1_omni_controller</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nvblox_ros</exec_depend>
+  <exec_depend>nvblox_msgs</exec_depend>
+  <exec_depend>nvblox_nav2</exec_depend>
+  <exec_depend>nvblox_rviz_plugin</exec_depend>
+  <exec_depend>realsense_splitter</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

@@ -1,0 +1,260 @@
+# Detached camera: RGB mesh and continuous camera VO in vslam_odom.
+# Distance slice is optional; the initial camera origin is not the floor.
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /Global Options1
+    - /Nvblox1
+    - /Camera Motion1
+    Splitter Ratio: 0.55
+- Class: rviz_common/Views
+  Name: Views
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Alpha: 0.5
+    Cell Size: 1
+    Class: rviz_default_plugins/Grid
+    Color: 100; 100; 100
+    Enabled: true
+    Line Style:
+      Line Width: 0.029999999329447746
+      Value: Lines
+    Name: Grid
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 30
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Class: rviz_default_plugins/TF
+    Enabled: true
+    Frame Timeout: 15
+    Frames:
+      All Enabled: false
+      vslam_odom:
+        Value: true
+      d435_link:
+        Value: true
+      d435_depth_optical_frame:
+        Value: false
+      d435_color_optical_frame:
+        Value: false
+    Marker Scale: 0.3
+    Name: TF
+    Show Arrows: true
+    Show Axes: true
+    Show Names: false
+    Tree: {}
+    Update Interval: 0
+    Value: true
+  - Class: rviz_default_plugins/Axes
+    Enabled: true
+    Name: Camera Axes
+    Length: 0.2
+    Radius: 0.01
+    Reference Frame: d435_link
+    Value: true
+  - Class: rviz_common/Group
+    Displays:
+    - Ceiling Height: 1.5
+      Class: nvblox_rviz_plugin/NvbloxMesh
+      Cut Ceiling: false
+      Enabled: true
+      Name: RGB Mesh
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /nvblox_node/mesh
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: false
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 1.5
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: Distance Slice (optional)
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.05
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /nvblox_node/static_esdf_pointcloud
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
+    Enabled: true
+    Name: Nvblox
+  - Class: rviz_common/Group
+    Displays:
+    - Angle Tolerance: 0.10000000149011612
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.30000001192092896
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: false
+      Enabled: false
+      Keep: 300
+      Name: Camera Pose Trail (optional)
+      Position Tolerance: 0.019999999552965164
+      Shape:
+        Alpha: 1
+        Axes Length: 0.30000001192092896
+        Axes Radius: 0.02500000037252903
+        Color: 50; 150; 255
+        Head Length: 0.15000000596046448
+        Head Radius: 0.07000000029802322
+        Shaft Length: 0.25
+        Shaft Radius: 0.03500000014901161
+        Value: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /rby1/vslam/camera_odometry
+      Value: false
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 50; 130; 255
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Camera Path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /visual_slam/tracking/vo_path
+      Value: true
+    Enabled: true
+    Name: Camera Motion
+  - Class: rviz_common/Group
+    Displays:
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: RGB Camera
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /d435/d435/color/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Emitter ON Depth
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /rby1/nvblox/depth
+      Value: false
+    Enabled: true
+    Name: Sensors
+  Enabled: true
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: vslam_odom
+    Frame Rate: 20
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+    Line color: 128; 128; 0
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 4.0
+      Focal Point:
+        X: 1.5
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.5
+      Target Frame: vslam_odom
+      Value: Orbit (rviz)
+      Yaw: 2.5
+    Saved: null
+Window Geometry:
+  Height: 900
+  Width: 1500
+  Hide Left Dock: false
+  Hide Right Dock: false
+  X: 50
+  Y: 50

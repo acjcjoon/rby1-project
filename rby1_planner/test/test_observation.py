@@ -186,3 +186,15 @@ def test_observation_to_cartesian_target_requires_matching_frame():
             _observation(frame_id='camera'),
             target_frame='base',
         )
+
+
+def test_quaternion_to_rpy_round_trips_exact_gimbal_lock():
+    # Level hand pointing along -y: EE x = +z, y = +x, z = +y (pitch = -90).
+    q = (0.5, 0.5, 0.5, -0.5)
+    roll, pitch, yaw = quaternion_to_rpy_deg(q)
+    assert pitch == pytest.approx(-90.0)
+    assert roll == pytest.approx(0.0)
+    from rby1_planner.observation import rpy_deg_to_quaternion
+    back = rpy_deg_to_quaternion((roll, pitch, yaw))
+    dot = abs(sum(a * b for a, b in zip(q, back)))
+    assert dot == pytest.approx(1.0, abs=1e-9)

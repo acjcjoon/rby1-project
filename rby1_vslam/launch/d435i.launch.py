@@ -30,6 +30,9 @@ def _camera(context):
         raise ValueError('serial_no must be empty or a numeric D435i serial number')
     tracking_mode = parse_tracking_mode(
         LaunchConfiguration('tracking_mode').perform(context))
+    use_splitter = _boolean(context, 'use_realsense_splitter')
+    if use_splitter and uses_rgbd(tracking_mode):
+        raise ValueError('The emitter splitter requires stereo tracking_mode 0 or 1')
     publish_all_sensors = _boolean(context, 'publish_all_sensors')
     use_imu = publish_all_sensors or uses_imu(tracking_mode)
     use_rgbd = publish_all_sensors or uses_rgbd(tracking_mode)
@@ -38,6 +41,26 @@ def _camera(context):
         tracking_mode, publish_all_sensors,
         LaunchConfiguration('infra_profile').perform(context),
         LaunchConfiguration('depth_profile').perform(context))
+    splitter_parameters = {}
+    if use_splitter:
+        camera_fps = LaunchConfiguration('camera_fps').perform(context)
+        if camera_fps not in ('60', '90'):
+            raise ValueError('camera_fps must be 60 or 90 with use_realsense_splitter')
+        profile = f'640,480,{camera_fps}'
+        splitter_parameters = {
+            'enable_depth': True,
+            'enable_infra1': True,
+            'enable_infra2': True,
+            'enable_sync': False,
+            'align_depth.enable': False,
+            'depth_module.emitter_enabled': 1,
+            'depth_module.emitter_on_off': True,
+            'depth_module.laser_power': 150.0,
+            'depth_qos': 'SENSOR_DATA',
+            'depth_info_qos': 'SENSOR_DATA',
+            'infra_qos': 'SENSOR_DATA',
+            'infra_info_qos': 'SENSOR_DATA',
+        }
     return [Node(
         package='realsense2_camera', executable='realsense2_camera_node',
         # 4.51.1 publishes relative topics; this retains /d435/d435/infra1/... .
@@ -58,6 +81,7 @@ def _camera(context):
             'depth_module.emitter_enabled': 1 if use_rgbd else 0,
             'rgb_camera.profile': camera_profile(LaunchConfiguration('color_profile').perform(context)),
             'depth_module.profile': profile,
+            **splitter_parameters,
         }],
     )]
 
@@ -74,7 +98,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'publish_all_sensors', default_value='false',
             description='Publish color, depth, stereo IR and IMU together.'),
-        DeclareLaunchArgument('infra_profile', default_value='640,360,30'),
+        DeclareLaunchArgument('infra_profile', default_value='640,480,30'),
+        DeclareLaunchArgument('use_realsense_splitter', default_value='false'),
+        DeclareLaunchArgument('camera_fps', default_value='90'),
         DeclareLaunchArgument('color_profile', default_value='640,480,30'),
         DeclareLaunchArgument('depth_profile', default_value='640,480,30'),
         OpaqueFunction(function=_camera),

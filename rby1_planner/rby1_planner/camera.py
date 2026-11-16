@@ -570,7 +570,7 @@ class CameraClient:
                 # with the depth-image time. Therefore the detection stamp is
                 # not necessarily a valid lookup time for tag_depth/tag_pnp.
                 # Time(0) asks tf2 for one latest common time across the whole
-                # base -> ee_left -> processed-tag chain.
+                # base -> D405 hand (ee_right) -> processed-tag chain.
                 transform = self._tf_buffer.lookup_transform(
                     target_frame,
                     tag_frame,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host-side RBY1 driver, control and manual base UI. Camera is optional.
+# Host-side RBY1 driver, control and station UI. Camera is optional.
 set -Eeo pipefail
 
 ROS_SETUP="${RBY1_ROS_SETUP:-/opt/ros/humble/setup.bash}"

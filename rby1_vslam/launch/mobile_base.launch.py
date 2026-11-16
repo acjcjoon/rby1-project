@@ -17,6 +17,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from rby1_vslam.waypoint_store import default_waypoints_path
 
 
 def _boolean(context, name):
@@ -42,6 +43,9 @@ def _description(context):
             package='robot_state_publisher', executable='robot_state_publisher',
             name='robot_state_publisher', output='screen',
             parameters=[{'use_sim_time': False,
+                         # Upper limit: forward the ~100 Hz joint stream despite timing jitter.
+                         'publish_frequency': float(LaunchConfiguration(
+                             'robot_tf_publish_frequency').perform(context)),
                          'robot_description': urdf.read_text(encoding='utf-8')}],
             remappings=[('joint_states', '/rby1/joint_states')],
         ),
@@ -67,6 +71,8 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_version', default_value='1_3'),
         DeclareLaunchArgument('start_driver', default_value='true'),
         DeclareLaunchArgument('start_description', default_value='true'),
+        DeclareLaunchArgument('robot_tf_publish_frequency', default_value='200.0',
+                              description='Dynamic robot TF rate ceiling; actual rate follows joint_states.'),
         DeclareLaunchArgument('start_control', default_value='true'),
         DeclareLaunchArgument('start_ui', default_value='true'),
         DeclareLaunchArgument('driver_config', default_value=str(
@@ -75,6 +81,8 @@ def generate_launch_description():
             control_share / 'config/default.yaml')),
         DeclareLaunchArgument('max_linear_speed', default_value='0.2'),
         DeclareLaunchArgument('max_angular_speed', default_value='0.4'),
+        DeclareLaunchArgument('waypoints_file', default_value=str(
+            default_waypoints_path(vslam_share))),
         DeclareLaunchArgument('start_camera', default_value='true'),
         DeclareLaunchArgument('serial_no', default_value=''),
         DeclareLaunchArgument('camera_params_file', default_value=str(
@@ -124,6 +132,7 @@ def generate_launch_description():
         parameters=[{
             'max_linear_speed': value('max_linear_speed', float),
             'max_angular_speed': value('max_angular_speed', float),
+            'waypoints_file': value('waypoints_file', str),
         }],
     )
     handlers = [RegisterEventHandler(OnProcessExit(

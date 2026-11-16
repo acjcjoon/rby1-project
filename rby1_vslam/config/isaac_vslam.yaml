@@ -5,7 +5,8 @@
     # Isaac ROS 3.2 uses enable_imu_fusion, not 4.x tracking_mode.
     enable_imu_fusion: false
     rectified_images: true
-    enable_image_denoising: true
+    # The default launch applies a 3x3 median before these images arrive.
+    enable_image_denoising: false
     enable_localization_n_mapping: true
     enable_ground_constraint_in_odometry: false
     enable_ground_constraint_in_slam: false

@@ -21,10 +21,16 @@ def generate_launch_description():
         DeclareLaunchArgument('start_camera', default_value='true'),
         DeclareLaunchArgument('serial_no', default_value=''),
         DeclareLaunchArgument('tracking_mode', default_value='0'),
-        DeclareLaunchArgument('infra_profile', default_value='640,360,30'),
+        DeclareLaunchArgument('infra_profile', default_value='640,480,30'),
+        DeclareLaunchArgument('use_realsense_splitter', default_value='false'),
+        DeclareLaunchArgument(
+            'camera_fps', default_value='90',
+            description='Alternating IR/depth acquisition rate (90 or 60); split rates are half.'),
         DeclareLaunchArgument('camera_params_file', default_value=str(share / 'config/d435i.yaml')),
         DeclareLaunchArgument('vslam_params_file', default_value=str(share / 'config/isaac_vslam.yaml')),
         DeclareLaunchArgument('enable_image_denoising', default_value='false'),
+        DeclareLaunchArgument('enable_median_filter', default_value='true'),
+        DeclareLaunchArgument('median_kernel_size', default_value='3'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('start_rviz', default_value='false'),
         DeclareLaunchArgument('tracking_timeout_sec', default_value='0.5'),
@@ -35,6 +41,9 @@ def generate_launch_description():
         DeclareLaunchArgument('base_frame', default_value='base'),
         DeclareLaunchArgument('odom_frame', default_value='odom'),
         DeclareLaunchArgument('start_localization_tf', default_value='false'),
+        DeclareLaunchArgument('localization_params_file',
+                              default_value=str(share / 'config/localization.yaml')),
+        DeclareLaunchArgument('require_navigation_idle', default_value='true'),
         DeclareLaunchArgument('start_map_origin_alignment', default_value='true'),
         DeclareLaunchArgument('publish_mount_tf', default_value='true'),
         DeclareLaunchArgument('mount_x', default_value='0.0464'),
@@ -49,15 +58,23 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('start_camera')),
         launch_arguments={key: LaunchConfiguration(key) for key in (
             'serial_no', 'tracking_mode', 'infra_profile', 'camera_params_file', 'use_sim_time',
+            'use_realsense_splitter', 'camera_fps',
         )}.items(),
     )
     isaac = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(share / 'launch/isaac.launch.py')),
         launch_arguments={key: LaunchConfiguration(key) for key in (
             'mode', 'map_path', 'tracking_mode', 'vslam_params_file', 'use_sim_time',
-            'enable_image_denoising', 'tracking_timeout_sec',
+            'enable_image_denoising', 'enable_median_filter', 'median_kernel_size',
+            'tracking_timeout_sec',
             'start_rviz',
+            'use_realsense_splitter',
         )}.items(),
+    )
+    splitter = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(str(share / 'launch/realsense_splitter.launch.py')),
+        condition=IfCondition(LaunchConfiguration('use_realsense_splitter')),
+        launch_arguments={'use_sim_time': LaunchConfiguration('use_sim_time')}.items(),
     )
     adapter = Node(
         package='rby1_vslam', executable='pose_adapter', name='pose_adapter',
@@ -87,11 +104,12 @@ def generate_launch_description():
         package='rby1_vslam', executable='localization_tf', name='localization_tf',
         namespace='/rby1/vslam', output='screen',
         condition=IfCondition(LaunchConfiguration('start_localization_tf')),
-        parameters=[{
+        parameters=[LaunchConfiguration('localization_params_file'), {
             'use_sim_time': value('use_sim_time', bool),
             'base_frame': value('base_frame', str),
             'odom_frame': value('odom_frame', str),
             'map_frame': 'vslam_map',
+            'require_navigation_idle': value('require_navigation_idle', bool),
             'require_origin_alignment': ParameterValue(
                 align_mapping_origin, value_type=bool),
         }],
@@ -116,4 +134,4 @@ def generate_launch_description():
                    '--frame-id', 'd435_camera_center', '--child-frame-id', 'd435_link'],
     )
     return LaunchDescription(
-        declarations + [camera, mount, center, isaac, adapter, origin, localization])
+        declarations + [camera, mount, center, splitter, isaac, adapter, origin, localization])

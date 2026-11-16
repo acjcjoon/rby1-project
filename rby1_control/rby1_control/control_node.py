@@ -18,7 +18,7 @@ import math
 from pathlib import Path
 import threading
 import time
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Sequence, Tuple
 
 from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
@@ -45,17 +45,27 @@ from .manipulator_controller import JOINT_NAMES, ManipulatorController
 from .mobile_base_controller import MobileBaseController
 from .robot_session import RobotSession
 from .state_manager import StateManager
-from .command_model import CommandKind, TaskCommand
+from .command_model import (
+    CommandKind,
+    JointImpedance,
+    STREAM_PATH_KINDS,
+    TaskCommand,
+    impedance_from_dict,
+)
+from .arm_kinematics import ArmKinematics, pose_to_transform
+from .stream_path import StreamPathPlan, build_stream_path_plan
 
 try:
     from rby1_msgs.action import (
         Rby1CartesianCommand,
         Rby1JointCommand,
+        StreamJoint,
     )
     from rby1_msgs.msg import (
         CartesianCommand,
         JointCommand,
         RobotState,
+        StreamJointCommand,
         ToolFlangeState,
     )
     from rby1_msgs.srv import (
@@ -68,6 +78,8 @@ try:
 except ImportError:
     Rby1CartesianCommand = None  # type: ignore[assignment]
     Rby1JointCommand = None  # type: ignore[assignment]
+    StreamJoint = None  # type: ignore[assignment]
+    StreamJointCommand = None  # type: ignore[assignment]
     CartesianCommand = None  # type: ignore[assignment]
     JointCommand = None  # type: ignore[assignment]
     RobotState = None  # type: ignore[assignment]
@@ -143,6 +155,26 @@ class RBY1ControlNode(Node):
 
         # Manipulation interfaces exposed by rby1_driver.
         self.declare_parameter('joint_action', 'robot_joint')
+        # Streamed Cartesian path (Task linear_path_* steps): arm IK on the
+        # SDK model, joint targets through the driver's stream_joint action.
+        self.declare_parameter('stream_joint_action', 'stream_joint')
+        self.declare_parameter(
+            'stream_path_model_file',
+            'rby1m_v1_3_sdk_model.urdf',
+        )
+        self.declare_parameter('stream_path_ik_max_iterations', 30)
+        self.declare_parameter('stream_path_ik_position_tolerance_m', 0.0005)
+        self.declare_parameter(
+            'stream_path_ik_orientation_tolerance_rad',
+            0.002,
+        )
+        self.declare_parameter('stream_path_max_joint_step_rad', 0.05)
+        self.declare_parameter('stream_path_rate_hz', 20.0)
+        self.declare_parameter('stream_path_tick_minimum_time_sec', 0.1)
+        self.declare_parameter('stream_path_watchdog_sec', 0.25)
+        self.declare_parameter('stream_path_settle_sec', 0.3)
+        self.declare_parameter('stream_path_linear_velocity_limit', 0.1)
+        self.declare_parameter('stream_path_angular_velocity_limit', 0.5)
         self.declare_parameter(
             'cartesian_action',
             'robot_cartesian',
@@ -234,6 +266,31 @@ class RBY1ControlNode(Node):
             'left_cartesian_target_link',
             'ee_left',
         )
+        # Torso Cartesian frame: its last link relative to the base.
+        self.declare_parameter(
+            'torso_cartesian_ref_link',
+            'base',
+        )
+        self.declare_parameter(
+            'torso_cartesian_target_link',
+            'link_torso_5',
+        )
+
+        # Joint impedance (Task steps and Joint-tab commands with impedance).
+        # After an impedance command completes, send a position goal to the
+        # measured joint state so no spring force remains on the arm.
+        self.declare_parameter('impedance_reanchor_enabled', True)
+        self.declare_parameter('impedance_reanchor_minimum_time_sec', 0.3)
+        # Cartesian impedance: the TCP target is solved to a joint target on
+        # the SDK model (stream_path_model_file) and tracked with joint
+        # impedance. Targets farther than this from the measured TCP pose
+        # are rejected; approach with position control first.
+        self.declare_parameter('cartesian_impedance_max_translation_m', 0.1)
+        self.declare_parameter('cartesian_impedance_max_rotation_deg', 20.0)
+        # Goal watchdog: a Joint/Cartesian goal still active after
+        # expected_duration * scale + margin is cancelled and reported.
+        self.declare_parameter('motion_goal_timeout_scale', 3.0)
+        self.declare_parameter('motion_goal_timeout_margin_sec', 2.0)
 
         # Backend behavior.
         self.declare_parameter('use_rby1_services', True)
@@ -419,7 +476,49 @@ class RBY1ControlNode(Node):
                     ).value
                 ),
             ),
+            'torso': (
+                str(
+                    self.get_parameter(
+                        'torso_cartesian_ref_link'
+                    ).value
+                ),
+                str(
+                    self.get_parameter(
+                        'torso_cartesian_target_link'
+                    ).value
+                ),
+            ),
         }
+
+        self.impedance_reanchor_enabled = bool(
+            self.get_parameter('impedance_reanchor_enabled').value
+        )
+        self.impedance_reanchor_minimum_time_sec = self._positive_float(
+            self.get_parameter(
+                'impedance_reanchor_minimum_time_sec'
+            ).value,
+            fallback=0.3,
+        )
+        self.cartesian_impedance_max_translation_m = self._positive_float(
+            self.get_parameter(
+                'cartesian_impedance_max_translation_m'
+            ).value,
+            fallback=0.1,
+        )
+        self.cartesian_impedance_max_rotation_deg = self._positive_float(
+            self.get_parameter(
+                'cartesian_impedance_max_rotation_deg'
+            ).value,
+            fallback=20.0,
+        )
+        self.motion_goal_timeout_scale = self._positive_float(
+            self.get_parameter('motion_goal_timeout_scale').value,
+            fallback=3.0,
+        )
+        self.motion_goal_timeout_margin_sec = self._positive_float(
+            self.get_parameter('motion_goal_timeout_margin_sec').value,
+            fallback=2.0,
+        )
 
         requested_services = bool(
             self.get_parameter('use_rby1_services').value
@@ -621,6 +720,88 @@ class RBY1ControlNode(Node):
         self._gripper_power_off_pending = False
         self._gripper_home_pending = False
 
+        # Streamed Cartesian path settings.
+        self.stream_joint_action_name = str(
+            self.get_parameter('stream_joint_action').value
+        )
+        self.stream_path_ik_max_iterations = max(
+            1,
+            int(self.get_parameter('stream_path_ik_max_iterations').value),
+        )
+        self.stream_path_ik_position_tolerance_m = self._positive_float(
+            self.get_parameter('stream_path_ik_position_tolerance_m').value,
+            0.0005,
+        )
+        self.stream_path_ik_orientation_tolerance_rad = self._positive_float(
+            self.get_parameter(
+                'stream_path_ik_orientation_tolerance_rad'
+            ).value,
+            0.002,
+        )
+        self.stream_path_max_joint_step_rad = self._positive_float(
+            self.get_parameter('stream_path_max_joint_step_rad').value,
+            0.05,
+        )
+        self.stream_path_kinematics: Optional[ArmKinematics] = None
+        self.stream_path_model_path: Optional[Path] = None
+        self._stream_path_kinematics_error: Optional[str] = None
+        model_file = str(
+            self.get_parameter('stream_path_model_file').value
+        ).strip()
+        if model_file:
+            model_path = Path(model_file)
+            if not model_path.is_absolute():
+                share_path = (
+                    Path(get_package_share_directory('rby1_control'))
+                    / 'config'
+                    / model_path
+                )
+                # A symlink install only exposes files listed at build time;
+                # fall back to the package source tree for a new model file.
+                source_path = (
+                    Path(__file__).resolve().parents[1]
+                    / 'config'
+                    / model_path
+                )
+                model_path = share_path if share_path.exists() else source_path
+            self.stream_path_model_path = model_path
+            try:
+                self.stream_path_kinematics = ArmKinematics.from_model_file(
+                    model_path,
+                )
+            except Exception as exc:
+                self._stream_path_kinematics_error = (
+                    f'{model_path}: {exc}'
+                )
+        else:
+            self._stream_path_kinematics_error = (
+                'stream_path_model_file is empty'
+            )
+        self.stream_path_rate_hz = self._positive_float(
+            self.get_parameter('stream_path_rate_hz').value,
+            20.0,
+        )
+        self.stream_path_tick_minimum_time_sec = self._positive_float(
+            self.get_parameter('stream_path_tick_minimum_time_sec').value,
+            0.1,
+        )
+        self.stream_path_watchdog_sec = self._positive_float(
+            self.get_parameter('stream_path_watchdog_sec').value,
+            0.25,
+        )
+        self.stream_path_settle_sec = self._positive_float(
+            self.get_parameter('stream_path_settle_sec').value,
+            0.3,
+        )
+        self.stream_path_linear_velocity_limit = self._positive_float(
+            self.get_parameter('stream_path_linear_velocity_limit').value,
+            0.1,
+        )
+        self.stream_path_angular_velocity_limit = self._positive_float(
+            self.get_parameter('stream_path_angular_velocity_limit').value,
+            0.5,
+        )
+
         # Shared state and event ownership.
         self._lock = threading.RLock()
         self._events: Deque[Tuple[str, str]] = deque(maxlen=300)
@@ -676,13 +857,11 @@ class RBY1ControlNode(Node):
         )
 
         self._cartesian_snapshot_pending = {
-            'right_arm': False,
-            'left_arm': False,
+            group: False for group in self.cartesian_links
         }
 
         self._cartesian_request_pending = {
-            'right_arm': False,
-            'left_arm': False,
+            group: False for group in self.cartesian_links
         }
 
         # Keep one manipulation command active at a time.
@@ -692,6 +871,15 @@ class RBY1ControlNode(Node):
         self._active_motion_groups: Tuple[str, ...] = ()
         self._active_goal_handle = None
         self._active_task_command_id: Optional[str] = None
+        # 'position', 'impedance_joint', 'impedance_cartesian' or 'reanchor'
+        # while a manipulation goal is active; reported as 'idle' otherwise.
+        self._active_control_mode = 'position'
+        # Set for impedance goals; drives the re-anchor step on completion.
+        self._active_impedance_context: Optional[Dict[str, object]] = None
+        # Goal watchdog deadline (monotonic) for the active manipulation goal.
+        self._active_motion_deadline: Optional[float] = None
+        self._motion_timeout_latched = False
+        self._active_motion_started_at: Optional[float] = None
         self._task_command_sequence = 0
         self._task_commands: Dict[str, TaskCommandState] = {}
         self._active_gripper_task_id: Optional[str] = None
@@ -705,6 +893,10 @@ class RBY1ControlNode(Node):
         # Action-level cancellation state for press-and-hold Cartesian jogging.
         self._cancel_motion_on_accept = False
         self._active_cancel_requested = False
+
+        # Streamed Cartesian path in progress (see _start_stream_path_task_command).
+        self._stream_path: Optional[Dict[str, object]] = None
+        self._stream_path_timer = None
 
         # Prepare Robot state machine.
         self._prepare_stage = 'idle'
@@ -772,6 +964,7 @@ class RBY1ControlNode(Node):
 
         self.joint_action_client = None
         self.cartesian_action_client = None
+        self.stream_joint_action_client = None
         self.cartesian_pose_client = None
         self.cancel_control_client = None
         self.joint_state_subs = []
@@ -847,6 +1040,12 @@ class RBY1ControlNode(Node):
                 Rby1CartesianCommand,
                 self.cartesian_action_name,
             )
+            if StreamJoint is not None:
+                self.stream_joint_action_client = ActionClient(
+                    self,
+                    StreamJoint,
+                    self.stream_joint_action_name,
+                )
 
             for group, topic in self.joint_state_topics.items():
                 subscription = self.create_subscription(
@@ -902,6 +1101,19 @@ class RBY1ControlNode(Node):
             f'cmd_raw={self.mobile_base_controller.cmd_raw_topic}, '
             f'cmd_vel={self.mobile_base_controller.cmd_vel_topic}',
         )
+        if self.stream_path_kinematics is not None:
+            self._push_event(
+                'info',
+                f'Stream path kinematics loaded from '
+                f'{self.stream_path_model_path} '
+                f'({self.stream_path_kinematics.dof} DOF).',
+            )
+        else:
+            self._push_event(
+                'warning',
+                'Stream path kinematics unavailable; stream path Task steps '
+                f'will be rejected: {self._stream_path_kinematics_error}',
+            )
 
     @staticmethod
     def _positive_float(
@@ -1240,7 +1452,7 @@ class RBY1ControlNode(Node):
             )
 
     def _poll_cartesian_state(self) -> None:
-        """Request current right/left end-effector poses asynchronously."""
+        """Request the current TCP pose of every Cartesian group."""
 
         if (
             not self.services_enabled
@@ -1252,7 +1464,7 @@ class RBY1ControlNode(Node):
         if not self.cartesian_pose_client.service_is_ready():
             return
 
-        for arm in ('right_arm', 'left_arm'):
+        for arm in self.cartesian_links:
             if self._cartesian_request_pending[arm]:
                 continue
 
@@ -1625,6 +1837,19 @@ class RBY1ControlNode(Node):
         )
         return False
 
+    def _cartesian_guard_applies_locked(self) -> bool:
+        """True while the active goal originates from a Cartesian command.
+
+        Covers the driver's Cartesian action and the joint goals this node
+        derives from a Cartesian impedance target (``cartesian_guard`` in
+        the impedance context). Call with ``self._lock`` held.
+        """
+
+        if self._active_motion_mode == 'cartesian':
+            return True
+        context = self._active_impedance_context
+        return bool(context is not None and context.get('cartesian_guard'))
+
     def _enforce_active_cartesian_joint_safety(
         self,
         *,
@@ -1632,10 +1857,23 @@ class RBY1ControlNode(Node):
     ) -> bool:
         """Stop the active CS goal on a soft-limit or feedback violation."""
 
+        path = getattr(self, '_stream_path', None)
+        if path is not None:
+            # A streamed path is checked with the same soft-limit policy on
+            # every JointState sample and by the runtime safety timer.
+            arm = str(path['arm'])
+            if group_filter is not None and group_filter != arm:
+                return False
+            reason = self._cartesian_joint_safety_reason(arm)
+            if reason is None:
+                return False
+            self._abort_stream_path(f'Cartesian joint safety stop: {reason}')
+            return True
+
         with self._lock:
             if (
                 not self._motion_busy
-                or self._active_motion_mode != 'cartesian'
+                or not self._cartesian_guard_applies_locked()
                 or self._cartesian_safety_stop_latched
             ):
                 return False
@@ -1657,7 +1895,7 @@ class RBY1ControlNode(Node):
         with self._lock:
             if (
                 not self._motion_busy
-                or self._active_motion_mode != 'cartesian'
+                or not self._cartesian_guard_applies_locked()
                 or self._cartesian_safety_stop_latched
             ):
                 return
@@ -1691,6 +1929,8 @@ class RBY1ControlNode(Node):
         # timer independently catches a stopped or delayed feedback stream.
         if self._enforce_active_cartesian_joint_safety():
             return
+        if self._enforce_motion_goal_deadline():
+            return
 
         command, command_stale = self._current_command()
         with self._lock:
@@ -1711,6 +1951,42 @@ class RBY1ControlNode(Node):
         self._push_event('error', f'Runtime safety stop: {reason}.')
         self.stop(publish_immediately=True)
         self.cancel_motion()
+
+    def _enforce_motion_goal_deadline(self) -> bool:
+        """Cancel a manipulation goal that outlived its expected duration.
+
+        The driver waits for the robot without a timeout, so a command the
+        robot never finishes would otherwise stay active until an operator
+        cancels it. Returns True when a cancel was issued.
+        """
+
+        now = time.monotonic()
+        with self._lock:
+            deadline = self._active_motion_deadline
+            if (
+                not self._motion_busy
+                or deadline is None
+                or self._motion_timeout_latched
+                or now < deadline
+            ):
+                return False
+            self._motion_timeout_latched = True
+            label = self._active_motion_kind
+            task_id = self._active_task_command_id
+            started = self._active_motion_started_at
+        elapsed = now - started if started is not None else 0.0
+        message = (
+            f'Motion goal timed out after {elapsed:.1f} s: {label}; '
+            'cancelling'
+        )
+        self._push_event('error', message)
+        self._set_task_command_result(
+            task_id,
+            TaskCommandStatus.FAILED,
+            message,
+        )
+        self.cancel_active_motion()
+        return True
 
     def _motion_command_allowed(self) -> bool:
         """Common safety gate before sending a manipulation goal."""
@@ -1745,6 +2021,7 @@ class RBY1ControlNode(Node):
         group: str,
         index: int,
         delta_deg: float,
+        impedance=None,
     ) -> None:
         """Jog one joint by sending a full-group absolute target."""
 
@@ -1776,6 +2053,7 @@ class RBY1ControlNode(Node):
             group,
             current_copy,
             self.joint_jog_minimum_time_sec,
+            impedance=impedance,
         )
 
     def _validate_joint_targets(
@@ -1850,10 +2128,13 @@ class RBY1ControlNode(Node):
         group: str,
         targets_deg: List[float],
         minimum_time: float,
+        impedance=None,
     ) -> None:
         """Send an absolute joint-position command.
 
         GUI values are degrees.  The ROS action receives radians.
+        ``impedance`` (a JointImpedance wire dict) switches the goal to joint
+        impedance; completion is followed by the re-anchor step.
         """
 
         expected_dof = {
@@ -1906,6 +2187,21 @@ class RBY1ControlNode(Node):
         ):
             return
 
+        try:
+            joint_impedance = self._parse_impedance(impedance)
+            if joint_impedance is not None:
+                if not isinstance(joint_impedance, JointImpedance):
+                    raise ValueError(
+                        'joint commands accept only joint impedance'
+                    )
+                joint_impedance = joint_impedance.bind(group)
+        except ValueError as exc:
+            self._push_event(
+                'error',
+                f'Joint impedance rejected: {exc}.',
+            )
+            return
+
         if not self._motion_command_allowed():
             return
         if not self._joint_feedback_ready(group):
@@ -1941,8 +2237,19 @@ class RBY1ControlNode(Node):
         )
         command.velocity_limit = self.manual_joint_velocity_limit
         command.acceleration_limit = self.manual_joint_acceleration_limit
-        command.use_impedance = False
         command.use_group_joint = False
+
+        impedance_context = None
+        if joint_impedance is not None:
+            self._apply_joint_impedance(command, group, joint_impedance)
+            impedance_context = self._joint_impedance_started(
+                (group,),
+                [f'{group} q={self._format_values(values_deg, 2)} deg'],
+                joint_impedance,
+                command.minimum_time,
+            )
+        else:
+            command.use_impedance = False
 
         goal = Rby1JointCommand.Goal()
         setattr(goal, group, command)
@@ -1950,9 +2257,22 @@ class RBY1ControlNode(Node):
         self._send_motion_goal(
             client=self.joint_action_client,
             goal=goal,
-            label=f'Joint {group}',
+            label=(
+                f'Joint impedance {group}'
+                if joint_impedance is not None
+                else f'Joint {group}'
+            ),
             motion_mode='joint',
             motion_groups=(group,),
+            control_mode=(
+                'impedance_joint'
+                if joint_impedance is not None
+                else 'position'
+            ),
+            impedance_context=impedance_context,
+            expected_duration_sec=float(command.minimum_time) + (
+                joint_impedance.hold_time if joint_impedance is not None else 0.0
+            ),
         )
 
     def jog_cartesian(
@@ -1961,6 +2281,7 @@ class RBY1ControlNode(Node):
         axis_index: int,
         delta: float,
         reference_frame: str = 'base',
+        impedance=None,
     ) -> None:
         """Jog one Cartesian component from the latest measured pose.
 
@@ -2062,6 +2383,7 @@ class RBY1ControlNode(Node):
             self.cartesian_jog_minimum_time_sec,
             reference_frame='base',
             log_rpy=target_rpy,
+            impedance=impedance,
         )
 
     def move_cartesian(
@@ -2070,6 +2392,7 @@ class RBY1ControlNode(Node):
         target: List[float],
         minimum_time: float,
         reference_frame: str = 'base',
+        impedance=None,
     ) -> None:
         """Send an absolute Cartesian target.
 
@@ -2119,6 +2442,7 @@ class RBY1ControlNode(Node):
             minimum_time,
             reference_frame=reference_frame,
             log_rpy=(values[3], values[4], values[5]),
+            impedance=impedance,
         )
 
     def _move_cartesian_quaternion(
@@ -2129,8 +2453,15 @@ class RBY1ControlNode(Node):
         minimum_time: float,
         reference_frame: str = 'base',
         log_rpy: Optional[Tuple[float, float, float]] = None,
+        impedance=None,
     ) -> None:
-        """Send an absolute Cartesian target using a quaternion directly."""
+        """Send an absolute Cartesian target using a quaternion directly.
+
+        With ``impedance`` (a JointImpedance wire dict) the target is solved
+        to a joint target on the arm model and sent as a joint impedance
+        goal; the same preflight, distance caps and re-anchor as a Task
+        contact step apply.
+        """
 
         if arm not in ('right_arm', 'left_arm'):
             self._push_event(
@@ -2206,6 +2537,31 @@ class RBY1ControlNode(Node):
 
         configured_ref, target_link = self.cartesian_links[arm]
 
+        if impedance is not None:
+            try:
+                joint_impedance = self._parse_impedance(impedance)
+                if not isinstance(joint_impedance, JointImpedance):
+                    raise ValueError(
+                        'Cartesian commands accept only joint impedance'
+                    )
+                if log_rpy is None:
+                    log_rpy = self._quaternion_to_rpy_deg(qx, qy, qz, qw)
+                self._send_cartesian_impedance_goal(
+                    arm,
+                    list(position) + [float(value) for value in log_rpy],
+                    (qx, qy, qz, qw),
+                    joint_impedance,
+                    minimum_time_value,
+                    task_id=None,
+                    label=f'Cartesian impedance {arm}',
+                )
+            except ValueError as exc:
+                self._push_event(
+                    'error',
+                    f'Cartesian impedance rejected: {exc}.',
+                )
+            return
+
         # The current UI exposes Base as the operator reference frame.
         # Keep the verified configured link unless a future UI explicitly
         # introduces a selectable frame.
@@ -2265,6 +2621,7 @@ class RBY1ControlNode(Node):
             label=f'Cartesian {arm}',
             motion_mode='cartesian',
             motion_groups=(arm,),
+            expected_duration_sec=float(command.minimum_time),
         )
 
     # ==================================================================
@@ -2284,6 +2641,11 @@ class RBY1ControlNode(Node):
                 motion_active=bool(
                     self._motion_busy
                     or self._active_gripper_task_id is not None
+                ),
+                control_mode=(
+                    self._active_control_mode
+                    if self._motion_busy
+                    else 'idle'
                 ),
                 joint_groups={
                     group: tuple(values) if values is not None else None
@@ -2313,6 +2675,8 @@ class RBY1ControlNode(Node):
             CommandKind.GRIPPER_SET,
         ):
             return self._start_gripper_task_command(command)
+        if command.kind in STREAM_PATH_KINDS:
+            return self._start_stream_path_task_command(command)
         if command.kind not in (
             CommandKind.JOINT_ABSOLUTE,
             CommandKind.JOINT_ABSOLUTE_MULTI,
@@ -2349,12 +2713,21 @@ class RBY1ControlNode(Node):
 
             goal = Rby1JointCommand.Goal()
             group_labels = []
+            joint_impedance = (
+                command.impedance
+                if isinstance(command.impedance, JointImpedance)
+                else None
+            )
+            target_descriptions = []
             for group, target_values in joint_targets:
                 if not self._joint_feedback_ready(group):
                     raise RuntimeError(
                         f'fresh, name-ordered {group} Joint state is required'
                     )
                 values_deg = list(target_values)
+                target_descriptions.append(
+                    f'{group} q={self._format_values(values_deg, 2)} deg'
+                )
                 if not self._validate_joint_targets(group, values_deg):
                     self._task_commands[command_id] = TaskCommandState(
                         TaskCommandStatus.FAILED,
@@ -2397,24 +2770,55 @@ class RBY1ControlNode(Node):
                 message.acceleration_limit = float(
                     command.acceleration_limit
                 )
-                message.use_impedance = False
+                if joint_impedance is not None:
+                    self._apply_joint_impedance(
+                        message,
+                        group,
+                        joint_impedance,
+                    )
+                else:
+                    message.use_impedance = False
                 message.use_group_joint = False
                 setattr(goal, group, message)
                 group_labels.append(group)
 
             label = ' + '.join(group_labels)
+            impedance_context = None
+            if joint_impedance is not None:
+                impedance_context = self._joint_impedance_started(
+                    tuple(group_labels),
+                    target_descriptions,
+                    joint_impedance,
+                    float(command.minimum_time),
+                )
             self._send_motion_goal(
                 client=self.joint_action_client,
                 goal=goal,
-                label=f'Task Joint {label}',
+                label=(
+                    f'Task Joint impedance {label}'
+                    if joint_impedance is not None
+                    else f'Task Joint {label}'
+                ),
                 task_id=command_id,
                 motion_mode='joint',
                 motion_groups=tuple(group_labels),
+                control_mode=(
+                    'impedance_joint'
+                    if joint_impedance is not None
+                    else 'position'
+                ),
+                impedance_context=impedance_context,
+                expected_duration_sec=float(command.minimum_time) + (
+                    joint_impedance.hold_time
+                    if joint_impedance is not None
+                    else 0.0
+                ),
             )
         else:
+            # ``arm`` is any Cartesian group: an arm or the torso.
             arm = str(command.group)
             if arm not in self.cartesian_links:
-                raise ValueError(f'unknown Cartesian arm: {arm}')
+                raise ValueError(f'unknown Cartesian group: {arm}')
             if not self._cartesian_feedback_ready(arm):
                 raise RuntimeError(
                     f'fresh {arm} Cartesian state is required'
@@ -2429,6 +2833,29 @@ class RBY1ControlNode(Node):
                     message,
                 )
                 raise RuntimeError(message)
+            if command.impedance is not None:
+                values = command.values
+                quaternion = self._rpy_deg_to_quaternion(*values[3:6])
+                try:
+                    self._send_cartesian_impedance_goal(
+                        arm,
+                        values,
+                        quaternion,
+                        command.impedance,
+                        float(command.minimum_time),
+                        task_id=command_id,
+                        label=f'Task Cartesian impedance {arm}',
+                    )
+                except ValueError as exc:
+                    message_text = f'Cartesian impedance rejected: {exc}'
+                    self._task_commands[command_id] = TaskCommandState(
+                        TaskCommandStatus.FAILED,
+                        message_text,
+                    )
+                    self._push_event('error', message_text)
+                    raise ValueError(message_text) from exc
+                return command_id
+
             if (
                 self.cartesian_action_client is None
                 or Rby1CartesianCommand is None
@@ -2474,9 +2901,785 @@ class RBY1ControlNode(Node):
                 task_id=command_id,
                 motion_mode='cartesian',
                 motion_groups=(arm,),
+                expected_duration_sec=float(command.minimum_time),
             )
 
         return command_id
+
+    # ==================================================================
+    # Streamed Cartesian path (Task linear_path_* steps)
+    #
+    # The Task runner enables the driver's persistent stream before the step
+    # and disables it afterwards. This backend accepts the path only while
+    # robot_state reports the stream as active, validates it against the
+    # configured velocity limits, solves the arm IK for every waypoint up
+    # front, then every tick solves the interpolated target and sends the
+    # joint positions through the stream_joint action (the driver's own
+    # stream_cartesian IK does not converge on this robot). Every tick
+    # re-checks the live safety state, the IK result, the Cartesian joint
+    # soft limits, and the per-tick joint step; a rejected or aborted
+    # target, a stalled tick, or a dropped stream stops the path.
+    # ==================================================================
+    def _start_stream_path_task_command(self, command: TaskCommand) -> str:
+        if command.kind is not CommandKind.LINEAR_PATH_STREAM_ABSOLUTE:
+            raise ValueError(
+                'backend accepts only resolved absolute stream paths'
+            )
+        if not self._motion_command_allowed():
+            raise RuntimeError('robot rejected the Task motion command')
+        arm = str(command.group)
+        if arm not in self.cartesian_links:
+            raise ValueError(f'unknown Cartesian arm: {arm}')
+        kinematics = self.stream_path_kinematics
+        if kinematics is None or arm not in kinematics.arms:
+            raise RuntimeError(
+                'stream path kinematics unavailable: '
+                f'{self._stream_path_kinematics_error or arm}'
+            )
+        if (
+            self.stream_joint_action_client is None
+            or StreamJoint is None
+            or StreamJointCommand is None
+            or JointCommand is None
+            or not self.stream_joint_action_client.server_is_ready()
+        ):
+            raise RuntimeError('Stream Joint action server is unavailable')
+        if self.stream_enabled is not True:
+            raise RuntimeError(
+                'stream control is not active; it must be ON before a '
+                'stream path step'
+            )
+        if not self._cartesian_feedback_ready(arm):
+            raise RuntimeError(f'fresh {arm} Cartesian state is required')
+        for group in ('torso', arm):
+            if not self._joint_feedback_ready(group):
+                raise RuntimeError(
+                    f'fresh, name-ordered {group} JointState is required'
+                )
+        if not self._cartesian_joint_preflight_ready(arm):
+            raise RuntimeError(
+                f'{arm} JointState violates the Cartesian preflight safety '
+                'policy'
+            )
+        with self._lock:
+            start_pose = tuple(
+                float(value) for value in self._cartesian_state[arm]
+            )
+            groups_deg = {
+                group: (list(values) if values is not None else None)
+                for group, values in self._joint_groups_deg.items()
+            }
+        try:
+            plan = build_stream_path_plan(
+                start_pose,
+                command.waypoints,
+                float(command.minimum_time),
+                float(command.linear_velocity),
+                float(command.angular_velocity),
+                backend_linear_velocity_limit=(
+                    self.stream_path_linear_velocity_limit
+                ),
+                backend_angular_velocity_limit=(
+                    self.stream_path_angular_velocity_limit
+                ),
+            )
+        except ValueError as exc:
+            self._push_event('error', f'Stream path {arm} rejected: {exc}.')
+            raise RuntimeError(f'stream path rejected: {exc}') from exc
+
+        # Pre-flight: solve every waypoint before anything moves so an
+        # unreachable or limit-violating point rejects the step up front.
+        q_measured = kinematics.joint_vector_from_groups(groups_deg)
+        q_seed = q_measured
+        preflight_iterations = 0
+        for index, waypoint in enumerate(command.waypoints):
+            target = pose_to_transform(
+                waypoint[0],
+                waypoint[1],
+                waypoint[2],
+                *self._rpy_deg_to_quaternion(*waypoint[3:6]),
+            )
+            result = self._solve_stream_path_ik(arm, q_seed, target)
+            reason = self._stream_path_solution_reason(arm, result)
+            if reason is not None:
+                message = (
+                    f'Stream path {arm} rejected at waypoint '
+                    f'{index + 1}/{len(command.waypoints)}: {reason}'
+                )
+                self._push_event('error', f'{message}.')
+                raise RuntimeError(message)
+            preflight_iterations = max(preflight_iterations, result.iterations)
+            q_seed = result.q_full
+
+        self._task_command_sequence += 1
+        command_id = f'task-{self._task_command_sequence}'
+        self._task_commands[command_id] = TaskCommandState(
+            TaskCommandStatus.PENDING,
+            'Stream path running',
+        )
+
+        self._motion_busy = True
+        self._active_motion_kind = f'Stream path {arm}'
+        self._active_motion_mode = 'stream_path'
+        self._active_motion_groups = (arm,)
+        self._active_goal_handle = None
+        self._active_task_command_id = command_id
+        self._active_control_mode = 'position'
+        self._active_impedance_context = None
+        self._cancel_motion_on_accept = False
+        self._active_cancel_requested = False
+        self._cartesian_safety_stop_latched = False
+
+        self._stream_path = {
+            'id': command_id,
+            'task_id': command_id,
+            'arm': arm,
+            'plan': plan,
+            'linear_velocity': float(command.linear_velocity),
+            'angular_velocity': float(command.angular_velocity),
+            'started_at': time.monotonic(),
+            'last_tick_at': None,
+            'finished_at': None,
+            'sent': 0,
+            'accepted': 0,
+            # Seed for the next tick's IK and reference for the step check.
+            'q_commanded': q_measured,
+        }
+        self._stream_path_timer = self.create_timer(
+            1.0 / self.stream_path_rate_hz,
+            self._stream_path_tick,
+        )
+        self._push_event(
+            'info',
+            f'Stream path {arm} started: {len(command.waypoints)} waypoints, '
+            f'{plan.duration_sec:.2f} s, path {plan.linear_distance_m:.3f} m '
+            f'/ {math.degrees(plan.angular_distance_rad):.1f} deg, '
+            f'{self.stream_path_rate_hz:g} Hz, tick minimum_time '
+            f'{self.stream_path_tick_minimum_time_sec:.3f} s, limits '
+            f'{float(command.linear_velocity):.3f} m/s / '
+            f'{float(command.angular_velocity):.3f} rad/s; IK pre-flight '
+            f'passed (max {preflight_iterations} iterations); start TCP '
+            f'{self._format_values(start_pose, 4)}.',
+        )
+        self._stream_path_tick()
+        return command_id
+
+    def _solve_stream_path_ik(self, arm: str, q_seed, target):
+        return self.stream_path_kinematics.solve(
+            arm,
+            q_seed,
+            target,
+            max_iterations=self.stream_path_ik_max_iterations,
+            position_tolerance_m=self.stream_path_ik_position_tolerance_m,
+            orientation_tolerance_rad=(
+                self.stream_path_ik_orientation_tolerance_rad
+            ),
+        )
+
+    def _stream_path_solution_reason(
+        self,
+        arm: str,
+        result,
+        *,
+        previous_q_arm=None,
+    ) -> Optional[str]:
+        """Return why an IK solution must not be streamed, or ``None``."""
+
+        if not result.converged:
+            return (
+                f'IK did not converge in {result.iterations} iterations '
+                f'(position error {result.position_error_m * 1000.0:.2f} mm, '
+                f'orientation error '
+                f'{math.degrees(result.orientation_error_rad):.3f} deg)'
+            )
+        try:
+            violation = self.joint_limit_policy.first_violation(
+                arm,
+                result.q_arm_deg,
+                margin_deg=self.cartesian_joint_limit_margin_deg,
+            )
+        except JointLimitPolicyError as exc:
+            return f'joint-limit check failed: {exc}'
+        if violation is not None:
+            return (
+                f'{violation.joint_name} target {violation.value_deg:+.2f} deg '
+                f'outside the CS soft limit [{violation.lower_deg:+.2f}, '
+                f'{violation.upper_deg:+.2f}] deg'
+            )
+        if previous_q_arm is not None:
+            step = max(
+                abs(float(current) - float(previous))
+                for current, previous in zip(result.q_arm_rad, previous_q_arm)
+            )
+            if step > self.stream_path_max_joint_step_rad:
+                return (
+                    f'joint step {math.degrees(step):.2f} deg exceeds the '
+                    'per-tick limit '
+                    f'{math.degrees(self.stream_path_max_joint_step_rad):.2f} '
+                    'deg'
+                )
+        return None
+
+    def _stream_path_tick(self) -> None:
+        path = self._stream_path
+        if path is None:
+            return
+        now = time.monotonic()
+        last_tick_at = path['last_tick_at']
+        if last_tick_at is not None:
+            gap = now - float(last_tick_at)
+            if gap > self.stream_path_watchdog_sec:
+                self._abort_stream_path(
+                    f'tick watchdog: {gap:.3f} s since the last target '
+                    f'(limit {self.stream_path_watchdog_sec:.3f} s)'
+                )
+                return
+        if self.stream_enabled is not True:
+            self._abort_stream_path(
+                'stream control is no longer active',
+                driver_cancel=False,
+            )
+            return
+        reason = self._live_motion_safety_reason(now=now)
+        if reason is not None:
+            self._abort_stream_path(f'runtime safety: {reason}')
+            return
+        arm = str(path['arm'])
+        reason = self._cartesian_joint_safety_reason(arm, now=now)
+        if reason is not None:
+            self._abort_stream_path(f'Cartesian joint safety stop: {reason}')
+            return
+
+        plan: StreamPathPlan = path['plan']  # type: ignore[assignment]
+        elapsed = now - float(path['started_at'])
+        target = pose_to_transform(*plan.target_at(elapsed))
+        kinematics = self.stream_path_kinematics
+        q_previous = path['q_commanded']
+        result = self._solve_stream_path_ik(arm, q_previous, target)
+        reason = self._stream_path_solution_reason(
+            arm,
+            result,
+            previous_q_arm=kinematics.arm_values(q_previous, arm),
+        )
+        if reason is not None:
+            self._abort_stream_path(f'IK target rejected: {reason}')
+            return
+
+        message = JointCommand()
+        message.position = [float(value) for value in result.q_arm_rad]
+        message.minimum_time = float(self.stream_path_tick_minimum_time_sec)
+        message.use_impedance = False
+        message.use_group_joint = False
+        stream_command = StreamJointCommand()
+        setattr(stream_command, arm, message)
+        goal = StreamJoint.Goal()
+        goal.command = stream_command
+
+        try:
+            future = self.stream_joint_action_client.send_goal_async(goal)
+        except Exception as exc:
+            self._abort_stream_path(f'stream target send failed: {exc}')
+            return
+        path['q_commanded'] = result.q_full
+        path['last_tick_at'] = now
+        path['sent'] = int(path['sent']) + 1
+        self._pending_futures.append(future)
+        future.add_done_callback(
+            lambda done, path_id=path['id']:
+            self._stream_path_goal_response(done, path_id)
+        )
+
+        if elapsed >= plan.duration_sec:
+            if path['finished_at'] is None:
+                path['finished_at'] = now
+            elif now - float(path['finished_at']) >= self.stream_path_settle_sec:
+                self._finish_stream_path(
+                    TaskCommandStatus.SUCCEEDED,
+                    f'Stream path {arm} completed: {int(path["sent"])} targets '
+                    f'sent, {int(path["accepted"])} accepted; final target '
+                    f'{self._format_values(plan.final_pose, 4)}; measured '
+                    f'{self._measured_description((arm,))}',
+                )
+
+    def _stream_path_goal_response(self, future, path_id: str) -> None:
+        self._discard_future(future)
+        path = self._stream_path
+        if path is None or path['id'] != path_id:
+            return
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self._abort_stream_path(f'stream target request failed: {exc}')
+            return
+        if goal_handle is None or not goal_handle.accepted:
+            self._abort_stream_path(
+                'stream target rejected by the driver (hardware control '
+                'active?)'
+            )
+            return
+        path['accepted'] = int(path['accepted']) + 1
+        result_future = goal_handle.get_result_async()
+        self._pending_futures.append(result_future)
+        result_future.add_done_callback(
+            lambda done, identifier=path_id:
+            self._stream_path_result(done, identifier)
+        )
+
+    def _stream_path_result(self, future, path_id: str) -> None:
+        self._discard_future(future)
+        path = self._stream_path
+        if path is None or path['id'] != path_id:
+            return
+        try:
+            result = future.result().result
+        except Exception as exc:
+            self._abort_stream_path(f'stream target result failed: {exc}')
+            return
+        if not bool(result.success):
+            # The driver aborts a joint stream target when the stream is
+            # inactive, a trajectory is executing, or a non-stream command
+            # owns the part. Stop sending immediately; continuing would skip
+            # over the rejected point.
+            self._abort_stream_path(
+                'stream target aborted by the driver (stream state or part '
+                'ownership; see the driver log)'
+            )
+
+    def _abort_stream_path(
+        self,
+        reason: str,
+        status: TaskCommandStatus = TaskCommandStatus.FAILED,
+        *,
+        driver_cancel: bool = True,
+    ) -> None:
+        """Stop streaming, close the stream, and finish the Task command."""
+
+        if getattr(self, '_stream_path', None) is None:
+            return
+        self._push_event(
+            'error' if status is TaskCommandStatus.FAILED else 'warning',
+            f'Stream path stopped: {reason}.',
+        )
+        self._finish_stream_path(status, f'Stream path stopped: {reason}')
+        # Closing the stream makes the driver drop the command stream so the
+        # arm holds at the last accepted target instead of continuing.
+        if self.stream_enabled is not False:
+            self.request_stream(False)
+        if driver_cancel:
+            self._request_driver_motion_cancel(
+                self._cartesian_safety_driver_cancel_done,
+            )
+
+    def _finish_stream_path(
+        self,
+        status: TaskCommandStatus,
+        message: str,
+    ) -> None:
+        path = self._stream_path
+        if path is None:
+            return
+        self._stream_path = None
+        timer = self._stream_path_timer
+        self._stream_path_timer = None
+        if timer is not None:
+            timer.cancel()
+            try:
+                self.destroy_timer(timer)
+            except Exception:
+                pass
+        task_id = str(path['task_id'])
+        self._motion_busy = False
+        self._active_motion_kind = None
+        self._active_motion_mode = None
+        self._active_motion_groups = ()
+        self._active_goal_handle = None
+        self._active_task_command_id = None
+        self._active_impedance_context = None
+        self._cancel_motion_on_accept = False
+        self._active_cancel_requested = False
+        self._cartesian_safety_stop_latched = False
+        self._set_task_command_result(task_id, status, message)
+        if status is TaskCommandStatus.SUCCEEDED:
+            self._push_event('info', message)
+
+    def stream_path_active(self) -> bool:
+        """Return whether a streamed Cartesian path is being sent."""
+
+        return self._stream_path is not None
+
+    # ------------------------------------------------------------------
+    # Impedance helpers shared by Task commands and the manual Joint-tab
+    # commands (jog/move).  A manual command carries the same wire dict as
+    # a Task step; both end with the re-anchor step in _motion_result_done.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_impedance(impedance):
+        """Return a JointImpedance from a wire dict (or pass one through)."""
+
+        if impedance is None or isinstance(impedance, JointImpedance):
+            return impedance
+        return impedance_from_dict(impedance)
+
+    @staticmethod
+    def _apply_joint_impedance(
+        message,
+        group: str,
+        joint_impedance: JointImpedance,
+    ) -> None:
+        message.use_impedance = True
+        message.stiffness = [
+            float(value) for value in joint_impedance.stiffness_for(group)
+        ]
+        message.damping_ratio = float(joint_impedance.damping_ratio)
+        message.torque_limit = float(joint_impedance.torque_limit)
+        if joint_impedance.hold_time > 0.0:
+            # Keep the impedance target active after the trajectory ends
+            # (contact dwell); the re-anchor follows completion.
+            message.control_hold_time = float(joint_impedance.hold_time)
+
+    def _joint_impedance_started(
+        self,
+        groups: Tuple[str, ...],
+        target_descriptions: List[str],
+        joint_impedance: JointImpedance,
+        minimum_time: float,
+    ) -> Dict[str, object]:
+        label = ' + '.join(groups)
+        target_description = '; '.join(target_descriptions)
+        self._push_event(
+            'info',
+            f'Impedance [joint] {label} started: target '
+            f'{target_description}; stiffness='
+            + '; '.join(
+                f'{group} '
+                f'{self._format_values(joint_impedance.stiffness_for(group), 0)}'
+                for group in groups
+            )
+            + f'; torque_limit={joint_impedance.torque_limit:g} Nm; '
+            f'damping_ratio={joint_impedance.damping_ratio:g}; '
+            f'minimum_time={float(minimum_time):.2f} s',
+        )
+        return {
+            'phase': 'impedance',
+            'mode': 'joint',
+            'groups': tuple(groups),
+            'target_description': target_description,
+            'start_description': self._measured_joint_description(groups),
+        }
+
+    # ------------------------------------------------------------------
+    # Cartesian impedance.  The driver's Cartesian impedance builder has no
+    # trajectory (it springs to the target), so a Cartesian step that carries
+    # impedance is solved to a joint target on the SDK arm model and sent as
+    # a joint impedance goal: a real trajectory, force bounded by the joint
+    # torque limit, and the same re-anchor as every impedance goal.
+    # ------------------------------------------------------------------
+    def _cartesian_impedance_joint_target(
+        self,
+        arm: str,
+        values: Sequence[float],
+        quaternion: Tuple[float, float, float, float],
+    ) -> Dict[str, object]:
+        """Solve the IK for a Cartesian impedance target or raise ValueError.
+
+        ``values`` is the base-frame target ``[x, y, z, roll, pitch, yaw]``
+        (deg) and ``quaternion`` its orientation. Checks, in order: IK model
+        available, fresh torso and arm JointState, distance from the measured
+        TCP pose within the configured caps, IK convergence, CS soft limits
+        of the solved target, and the hard joint limits.
+        """
+
+        kinematics = self.stream_path_kinematics
+        if kinematics is None:
+            raise ValueError(
+                'arm IK model is unavailable '
+                f'({self._stream_path_kinematics_error})'
+            )
+        for group in ('torso', arm):
+            if not self._joint_feedback_ready(group):
+                raise ValueError(
+                    f'fresh, name-ordered {group} JointState is required'
+                )
+        with self._lock:
+            current = self._cartesian_state.get(arm)
+            current_pose = (
+                tuple(float(value) for value in current)
+                if current is not None
+                else None
+            )
+            groups_deg = {
+                group: (list(values_deg) if values_deg is not None else None)
+                for group, values_deg in self._joint_groups_deg.items()
+            }
+        if current_pose is None:
+            raise ValueError(f'{arm} measured TCP pose is unavailable')
+
+        distance_m = math.sqrt(sum(
+            (float(values[index]) - current_pose[index]) ** 2
+            for index in range(3)
+        ))
+        if distance_m > self.cartesian_impedance_max_translation_m:
+            raise ValueError(
+                f'target is {distance_m:.3f} m from the measured TCP pose '
+                f'(limit {self.cartesian_impedance_max_translation_m:.3f} m); '
+                'approach with position control first'
+            )
+        current_quaternion = self._rpy_deg_to_quaternion(*current_pose[3:6])
+        dot = abs(sum(
+            float(a) * float(b)
+            for a, b in zip(current_quaternion, quaternion)
+        ))
+        angle_deg = math.degrees(2.0 * math.acos(min(1.0, dot)))
+        if angle_deg > self.cartesian_impedance_max_rotation_deg:
+            raise ValueError(
+                f'target orientation is {angle_deg:.1f} deg from the measured '
+                f'TCP pose (limit '
+                f'{self.cartesian_impedance_max_rotation_deg:.1f} deg)'
+            )
+
+        q_measured = kinematics.joint_vector_from_groups(groups_deg)
+        target = pose_to_transform(
+            float(values[0]),
+            float(values[1]),
+            float(values[2]),
+            *quaternion,
+        )
+        result = self._solve_stream_path_ik(arm, q_measured, target)
+        reason = self._stream_path_solution_reason(arm, result)
+        if reason is not None:
+            raise ValueError(reason)
+        q_arm_deg = [float(value) for value in result.q_arm_deg]
+        if not self._validate_joint_targets(arm, q_arm_deg):
+            raise ValueError('IK target violates the joint limits')
+        return {
+            'q_arm_deg': q_arm_deg,
+            'iterations': int(result.iterations),
+            'position_error_m': float(result.position_error_m),
+            'orientation_error_rad': float(result.orientation_error_rad),
+            'distance_m': distance_m,
+            'angle_deg': angle_deg,
+        }
+
+    def _send_cartesian_impedance_goal(
+        self,
+        arm: str,
+        values: Sequence[float],
+        quaternion: Tuple[float, float, float, float],
+        joint_impedance: JointImpedance,
+        minimum_time: float,
+        *,
+        task_id: Optional[str],
+        label: str,
+    ) -> None:
+        """Solve and send a Cartesian impedance target as a joint goal.
+
+        Raises ValueError with the rejection reason before anything moves.
+        """
+
+        joint_impedance = joint_impedance.bind(arm)
+        if (
+            self.joint_action_client is None
+            or Rby1JointCommand is None
+            or JointCommand is None
+            or not self.joint_action_client.server_is_ready()
+        ):
+            raise ValueError('Joint action server is unavailable')
+
+        plan = self._cartesian_impedance_joint_target(arm, values, quaternion)
+        q_arm_deg = list(plan['q_arm_deg'])
+
+        message = JointCommand()
+        message.position = [math.radians(value) for value in q_arm_deg]
+        message.minimum_time = max(0.1, float(minimum_time))
+        message.velocity_limit = float(self.manual_joint_velocity_limit)
+        message.acceleration_limit = float(
+            self.manual_joint_acceleration_limit
+        )
+        self._apply_joint_impedance(message, arm, joint_impedance)
+        message.use_group_joint = False
+        goal = Rby1JointCommand.Goal()
+        setattr(goal, arm, message)
+
+        target_description = (
+            f'{arm} TCP={self._format_values(values, 3)} (base m/deg)'
+        )
+        self._push_event(
+            'info',
+            f'Impedance [cartesian] {arm} started: target '
+            f'{target_description} -> IK q='
+            f'{self._format_values(q_arm_deg, 2)} deg '
+            f'({plan["iterations"]} iterations, residual '
+            f'{plan["position_error_m"] * 1000.0:.2f} mm / '
+            f'{math.degrees(plan["orientation_error_rad"]):.3f} deg); '
+            f'offset from measured {plan["distance_m"]:.3f} m / '
+            f'{plan["angle_deg"]:.1f} deg; stiffness='
+            f'{self._format_values(joint_impedance.stiffness_for(arm), 0)}; '
+            f'torque_limit={joint_impedance.torque_limit:g} Nm; '
+            f'damping_ratio={joint_impedance.damping_ratio:g}; '
+            f'hold={joint_impedance.hold_time:.2f} s; '
+            f'minimum_time={message.minimum_time:.2f} s',
+        )
+        impedance_context = {
+            'phase': 'impedance',
+            'mode': 'cartesian',
+            'groups': (arm,),
+            'target_description': target_description,
+            'start_description': self._measured_joint_description((arm,)),
+            # The runtime CS soft-limit guard watches this joint goal too.
+            'cartesian_guard': True,
+        }
+        self._send_motion_goal(
+            client=self.joint_action_client,
+            goal=goal,
+            label=label,
+            task_id=task_id,
+            motion_mode='joint',
+            motion_groups=(arm,),
+            control_mode='impedance_cartesian',
+            impedance_context=impedance_context,
+            expected_duration_sec=(
+                message.minimum_time + joint_impedance.hold_time
+            ),
+        )
+
+    def _measured_joint_description(self, groups: Tuple[str, ...]) -> str:
+        parts = []
+        with self._lock:
+            for group in groups:
+                joints = self._joint_groups_deg.get(group)
+                if joints is not None:
+                    parts.append(
+                        f'{group} q={self._format_values(joints, 2)} deg'
+                    )
+        return '; '.join(parts) if parts else 'unavailable'
+
+    @staticmethod
+    def _format_values(values, digits: int) -> str:
+        return '[' + ', '.join(
+            f'{float(value):.{digits}f}' for value in values
+        ) + ']'
+
+    def _start_reanchor(
+        self,
+        context: Dict[str, object],
+        task_id: Optional[str],
+        finish_code: str,
+        *,
+        failed: bool = False,
+    ) -> None:
+        """Hold the measured joint state with position control.
+
+        Called when an impedance goal completed successfully. The controller
+        reference is moved from the (possibly unreachable) impedance target
+        to the joint state actually reached, so no spring force remains while
+        the next Task step is prepared. The Task command stays pending until
+        this goal finishes.
+        """
+
+        groups = tuple(str(group) for group in context.get('groups', ()))
+        label = ' + '.join(groups)
+        original = str(context.get('target_description', ''))
+        start = str(context.get('start_description', 'unavailable'))
+
+        if not self.impedance_reanchor_enabled:
+            self._push_event(
+                'warning',
+                f'Re-anchor {label} skipped: disabled by configuration; '
+                'the controller keeps the impedance target.',
+            )
+            self._set_task_command_result(
+                task_id,
+                TaskCommandStatus.FAILED if failed else TaskCommandStatus.SUCCEEDED,
+                finish_code,
+            )
+            return
+
+        safety_reason = self._live_motion_safety_reason()
+        if safety_reason is not None:
+            message_text = f'Re-anchor {label} aborted: {safety_reason}.'
+            self._push_event('error', message_text)
+            self._set_task_command_result(
+                task_id,
+                TaskCommandStatus.FAILED,
+                message_text,
+            )
+            return
+
+        if (
+            self.joint_action_client is None
+            or Rby1JointCommand is None
+            or JointCommand is None
+            or not self.joint_action_client.server_is_ready()
+        ):
+            message_text = (
+                f'Re-anchor {label} aborted: Joint action server is '
+                'unavailable.'
+            )
+            self._push_event('error', message_text)
+            self._set_task_command_result(
+                task_id,
+                TaskCommandStatus.FAILED,
+                message_text,
+            )
+            return
+
+        goal = Rby1JointCommand.Goal()
+        new_targets = []
+        for group in groups:
+            if not self._joint_feedback_ready(group):
+                message_text = (
+                    f'Re-anchor {label} aborted: fresh {group} joint state '
+                    'is unavailable; the controller keeps the impedance '
+                    'target.'
+                )
+                self._push_event('error', message_text)
+                self._set_task_command_result(
+                    task_id,
+                    TaskCommandStatus.FAILED,
+                    message_text,
+                )
+                return
+            with self._lock:
+                values_deg = list(self._joint_groups_deg.get(group) or ())
+            message = JointCommand()
+            message.position = [
+                math.radians(float(value)) for value in values_deg
+            ]
+            message.minimum_time = float(
+                self.impedance_reanchor_minimum_time_sec
+            )
+            message.velocity_limit = float(self.manual_joint_velocity_limit)
+            message.acceleration_limit = float(
+                self.manual_joint_acceleration_limit
+            )
+            message.use_impedance = False
+            message.use_group_joint = False
+            setattr(goal, group, message)
+            new_targets.append(
+                f'{group} q={self._format_values(values_deg, 2)} deg'
+            )
+
+        self._push_event(
+            'info',
+            f'Re-anchor {label}: impedance target {original} -> position '
+            f'target {"; ".join(new_targets)} (measured joint state; '
+            f'before impedance {start})',
+        )
+        self._send_motion_goal(
+            client=self.joint_action_client,
+            goal=goal,
+            label=f'Re-anchor {label}',
+            task_id=task_id,
+            motion_mode='joint',
+            motion_groups=groups,
+            control_mode='reanchor',
+            impedance_context={
+                'phase': 'reanchor',
+                'groups': groups,
+                'failed_code': finish_code if failed else None,
+            },
+            expected_duration_sec=self.impedance_reanchor_minimum_time_sec,
+        )
 
     def _start_gripper_task_command(self, command: TaskCommand) -> str:
         if self._active_gripper_task_id is not None:
@@ -2650,6 +3853,9 @@ class RBY1ControlNode(Node):
         task_id: Optional[str] = None,
         motion_mode: Optional[str] = None,
         motion_groups: Tuple[str, ...] = (),
+        control_mode: str = 'position',
+        impedance_context: Optional[Dict[str, object]] = None,
+        expected_duration_sec: Optional[float] = None,
     ) -> None:
         self._motion_busy = True
         self._active_motion_kind = label
@@ -2657,6 +3863,17 @@ class RBY1ControlNode(Node):
         self._active_motion_groups = tuple(motion_groups)
         self._active_goal_handle = None
         self._active_task_command_id = task_id
+        self._active_control_mode = str(control_mode)
+        self._active_impedance_context = impedance_context
+        self._active_motion_started_at = time.monotonic()
+        self._motion_timeout_latched = False
+        self._active_motion_deadline = (
+            self._active_motion_started_at
+            + float(expected_duration_sec) * self.motion_goal_timeout_scale
+            + self.motion_goal_timeout_margin_sec
+            if expected_duration_sec is not None
+            else None
+        )
         self._cancel_motion_on_accept = False
         self._active_cancel_requested = False
         self._cartesian_safety_stop_latched = False
@@ -2767,12 +3984,16 @@ class RBY1ControlNode(Node):
     ) -> None:
         self._discard_future(future)
 
+        impedance_context = self._active_impedance_context
+        motion_groups = self._active_motion_groups
         self._motion_busy = False
         self._active_motion_kind = None
         self._active_motion_mode = None
         self._active_motion_groups = ()
         self._active_goal_handle = None
         self._active_task_command_id = None
+        self._active_impedance_context = None
+        self._active_motion_deadline = None
         self._cancel_motion_on_accept = False
         self._active_cancel_requested = False
         self._cartesian_safety_stop_latched = False
@@ -2792,7 +4013,50 @@ class RBY1ControlNode(Node):
             )
             return
 
+        phase = (
+            str(impedance_context.get('phase', ''))
+            if impedance_context is not None
+            else ''
+        )
+        group_label = ' + '.join(motion_groups)
+
         if bool(result.success):
+            if phase == 'impedance':
+                self._push_event(
+                    'info',
+                    f'Impedance [{impedance_context.get("mode")}] '
+                    f'{group_label} finished ({result.finish_code}); '
+                    f'measured: {self._measured_description(motion_groups)}',
+                )
+                # The Task command stays pending until the re-anchor goal
+                # (or its skip/abort path) sets the final result.
+                self._start_reanchor(
+                    impedance_context,
+                    task_id,
+                    str(result.finish_code),
+                )
+                return
+            if phase == 'reanchor':
+                self._push_event(
+                    'info',
+                    f'Re-anchor {group_label} done ({result.finish_code}); '
+                    'control idle',
+                )
+                failed_code = impedance_context.get('failed_code')
+                if failed_code:
+                    # The impedance goal itself was cancelled or failed; the
+                    # re-anchor only restored a clean controller state.
+                    self._set_task_command_result(
+                        task_id,
+                        TaskCommandStatus.FAILED,
+                        str(failed_code),
+                    )
+                    self._push_event(
+                        'warning',
+                        f'{label}: impedance goal ended with {failed_code}; '
+                        'controller re-anchored',
+                    )
+                    return
             self._set_task_command_result(
                 task_id,
                 TaskCommandStatus.SUCCEEDED,
@@ -2804,6 +4068,28 @@ class RBY1ControlNode(Node):
                 f'{result.finish_code}',
             )
         else:
+            if phase == 'impedance':
+                self._push_event(
+                    'warning',
+                    f'Impedance [{impedance_context.get("mode")}] '
+                    f'{group_label} finished unsuccessfully '
+                    f'({result.finish_code}); re-anchoring to the measured '
+                    'joint state',
+                )
+                # Even a cancelled impedance goal leaves the controller with
+                # an impedance target; re-anchor before reporting failure.
+                self._start_reanchor(
+                    impedance_context,
+                    task_id,
+                    str(result.finish_code),
+                    failed=True,
+                )
+                return
+            elif phase == 'reanchor':
+                self._push_event(
+                    'warning',
+                    f'Re-anchor {group_label} failed ({result.finish_code})',
+                )
             self._set_task_command_result(
                 task_id,
                 TaskCommandStatus.FAILED,
@@ -2815,12 +4101,35 @@ class RBY1ControlNode(Node):
                 f'{result.finish_code}',
             )
 
+    def _measured_description(self, groups: Tuple[str, ...]) -> str:
+        parts = []
+        with self._lock:
+            for group in groups:
+                tcp = self._cartesian_state.get(group)
+                if tcp is not None:
+                    parts.append(
+                        f'{group} TCP={self._format_values(tcp, 3)}'
+                    )
+                joints = self._joint_groups_deg.get(group)
+                if joints is not None:
+                    parts.append(
+                        f'{group} q={self._format_values(joints, 2)} deg'
+                    )
+        return '; '.join(parts) if parts else 'unavailable'
+
     def is_motion_busy(self) -> bool:
         """Return whether a Joint/Cartesian action is currently active."""
         return bool(self._motion_busy)
 
     def cancel_active_motion(self) -> None:
         """Cancel only the current action goal, preserving stream state."""
+
+        if getattr(self, '_stream_path', None) is not None:
+            self._abort_stream_path(
+                'canceled by operator',
+                TaskCommandStatus.CANCELED,
+            )
+            return
 
         if not self._motion_busy:
             self._cancel_motion_on_accept = False
@@ -2981,6 +4290,13 @@ class RBY1ControlNode(Node):
         the safety-oriented common cancel path for Joint/Cartesian control.
         """
 
+        # A streamed path is stopped here first: the driver's cancel below
+        # closes the stream, but this backend must also stop sending targets.
+        self._abort_stream_path(
+            'motion cancel requested',
+            TaskCommandStatus.CANCELED,
+            driver_cancel=False,
+        )
         # Gripper commands use a topic rather than the driver's motion action.
         # Stop their local trajectory before any service availability return.
         self._cancel_gripper_motion()
@@ -3008,6 +4324,7 @@ class RBY1ControlNode(Node):
             self._active_motion_groups = ()
             self._active_goal_handle = None
             self._active_task_command_id = None
+            self._active_impedance_context = None
             self._cancel_motion_on_accept = False
             self._active_cancel_requested = False
             self._set_task_command_result(
@@ -3827,6 +5144,10 @@ class RBY1ControlNode(Node):
             'cartesian_action': bool(
                 self.cartesian_action_client
                 and self.cartesian_action_client.server_is_ready()
+            ),
+            'stream_joint_action': bool(
+                self.stream_joint_action_client
+                and self.stream_joint_action_client.server_is_ready()
             ),
         }
 

@@ -21,9 +21,15 @@ from .control_commands import (
     TaskDefinition,
     compile_task_source,
     delete_catalog_task,
+    impedance_tag_for,
     load_catalog,
 )
 from .task_runner import PlannerTaskRunner as TaskRunner
+
+
+# Backend events worth echoing into the Scenario Log so the operator can
+# follow an impedance step and its re-anchor without reading the terminal.
+BACKEND_EVENT_PREFIXES = ("Impedance", "Re-anchor")
 
 
 class ScenarioPanel(QWidget):
@@ -114,6 +120,7 @@ class ScenarioPanel(QWidget):
         self.tcp_arm = QComboBox()
         self.tcp_arm.addItem("Right Arm TCP (ee_right)", "right_arm")
         self.tcp_arm.addItem("Left Arm TCP (ee_left)", "left_arm")
+        self.tcp_arm.addItem("Torso TCP (link_torso_5)", "torso")
         self._style_combo_popup(self.tcp_arm)
         self.tcp_arm.setToolTip(
             "TCP is the selected arm end-effector pose relative to base."
@@ -203,6 +210,35 @@ class ScenarioPanel(QWidget):
         }.get(level, "")
         self.log_view.appendPlainText(prefix + message)
         self.on_log(level, message)
+
+    def append_backend_events(self, events) -> None:
+        """Echo impedance/re-anchor backend events into the Scenario Log."""
+
+        for level, message in events:
+            text = str(message)
+            body = text.split("] ", 1)[1] if text.startswith("[") else text
+            if body.startswith(BACKEND_EVENT_PREFIXES):
+                self.log_view.appendPlainText(
+                    {"error": "[ERROR] ", "warning": "[WARN] "}.get(level, "")
+                    + "[backend] " + text
+                )
+
+    def _step_impedance_suffix(self, command) -> str:
+        impedance = getattr(command, "impedance", None)
+        if impedance is None:
+            return ""
+        # Camera steps have no kind; they resolve to Cartesian commands.
+        kind = getattr(command, "kind", CommandKind.LINEAR_ABSOLUTE)
+        tag = impedance_tag_for(kind, impedance)
+        hold = (
+            f", hold={impedance.hold_time:.2f} s"
+            if impedance.hold_time > 0.0
+            else ""
+        )
+        return (
+            f"  [{tag}: torque_limit={impedance.torque_limit:g} Nm, "
+            f"damping_ratio={impedance.damping_ratio:g}{hold}]"
+        )
 
     def _runner_status(self, message: str) -> None:
         if message.startswith("Task failed"):
@@ -300,6 +336,15 @@ class ScenarioPanel(QWidget):
                 )
             elif command.kind is CommandKind.DELAY:
                 detail = f"{float(command.seconds or 0.0):.3f} s"
+            elif getattr(command, "waypoints", ()):
+                last = [round(float(v), 4) for v in command.waypoints[-1]]
+                detail = (
+                    f"{command.group}; {len(command.waypoints)} waypoints; "
+                    f"duration={float(command.minimum_time):.2f} s; "
+                    f"v<={float(command.linear_velocity):.3f} m/s; "
+                    f"w<={float(command.angular_velocity):.3f} rad/s; "
+                    f"last={last}"
+                )
             elif command.joint_targets:
                 detail = "; ".join(
                     f"{group} {list(values)}"
@@ -307,7 +352,10 @@ class ScenarioPanel(QWidget):
                 )
             else:
                 detail = f"{command.group}  {list(command.values)}"
-            lines.append(f"{index}. {command.kind.value}: {detail}")
+            lines.append(
+                f"{index}. {command.kind.value}: {detail}"
+                + self._step_impedance_suffix(command)
+            )
         self.task_preview.setPlainText("\n".join(lines))
 
     def run_selected(self) -> None:

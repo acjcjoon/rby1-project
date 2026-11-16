@@ -1,3 +1,11 @@
 schema_version: 1
 frame_id: vslam_map
-waypoints: []
+waypoints:
+- name: Point 1
+  x: 2.1982888574003914
+  y: 0.3056392824270601
+  yaw: 0.3502435132564279
+- name: Point 2
+  x: 1.0284156621934453
+  y: -0.1465667376134101
+  yaw: 0.3465558537377441

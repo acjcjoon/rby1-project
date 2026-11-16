@@ -17,7 +17,12 @@ from .backend_contract import (
     TaskCommandStatus,
     VelocityCommand,
 )
-from .command_model import CommandKind, TaskCommand
+from .command_model import (
+    CommandKind,
+    TaskCommand,
+    impedance_from_dict,
+    impedance_to_dict,
+)
 
 
 PROTOCOL_VERSION = 1
@@ -87,6 +92,12 @@ def task_command_to_dict(command: TaskCommand) -> dict:
         "angular_velocity": command.angular_velocity,
         "acceleration_scaling": command.acceleration_scaling,
         "seconds": command.seconds,
+        "impedance": impedance_to_dict(command.impedance),
+        "waypoints": (
+            [list(values) for values in command.waypoints]
+            if command.waypoints
+            else None
+        ),
     }
     return {
         key: value
@@ -104,6 +115,9 @@ def task_command_from_dict(payload: Mapping[str, Any]) -> TaskCommand:
     raw_targets = payload.get("joint_targets", {})
     if not isinstance(raw_targets, Mapping):
         raise ValueError("joint_targets must be an object")
+    raw_waypoints = payload.get("waypoints", ())
+    if not isinstance(raw_waypoints, (list, tuple)):
+        raise ValueError("waypoints must be a list")
 
     return TaskCommand(
         kind=CommandKind(str(payload.get("kind", ""))),
@@ -124,6 +138,8 @@ def task_command_from_dict(payload: Mapping[str, Any]) -> TaskCommand:
         angular_velocity=payload.get("angular_velocity"),
         acceleration_scaling=payload.get("acceleration_scaling"),
         seconds=payload.get("seconds"),
+        impedance=impedance_from_dict(payload.get("impedance")),
+        waypoints=tuple(tuple(values) for values in raw_waypoints),
     )
 
 
@@ -265,6 +281,7 @@ def task_backend_state_to_dict(state: TaskBackendState) -> dict:
         "cartesian_updated_at": dict(state.cartesian_updated_at),
         "driver_safety_verified": state.driver_safety_verified,
         "driver_safety_updated_at": state.driver_safety_updated_at,
+        "control_mode": state.control_mode,
     }
 
 
@@ -297,6 +314,7 @@ def task_backend_state_from_dict(payload: Mapping[str, Any]) -> TaskBackendState
         driver_safety_updated_at=_optional_float(
             payload.get("driver_safety_updated_at")
         ),
+        control_mode=str(payload.get("control_mode", "idle")),
     )
 
 

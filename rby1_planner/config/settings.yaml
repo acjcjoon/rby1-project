@@ -9,14 +9,15 @@ locations:
     side: left
     tag_0:
       offset: [-0.05, 0.06100, -0.009]
-  # 아래 장비들은 실제 위치/방향/tag 보정 전의 자리표시자이다.
-  # enabled: false인 동안 Planner가 실제 이송에 사용하지 않는다.
-  ZS:
-    enabled: false
+  # ZSSW / AP / ZS 좌표 원점은 ZSSW, 축은 base 180° 회전 배치의 base 축이다.
+  # (LH1 / LH2 는 회전 전 base 축 기준이라 이 셋과 섞어 이동하면 안 된다.)
+  ZSSW:
     position: [0.0, 0.0]
     side: left
     tag_4:
       offset: [0.0, 0.0, 0.0]
+  # 아래 장비들은 실제 위치/방향/tag 보정 전의 자리표시자이다.
+  # enabled: false인 동안 Planner가 실제 이송에 사용하지 않는다.
   MPR:
     enabled: false
     position: [0.0, 0.0]
@@ -36,3 +37,45 @@ locations:
     tag_7:
       offset: [0.0, 0.0, 0.0]
   current_location: LH1
+  # 경유 지점 (태그 없음): ZSSW 에서 base -x 로 0.90 m.
+  AP:
+    position: [-0.75, 0.0]
+    side: left
+  # AP 에서 base +y 로 0.80 m. 허리 정면(front)에서 왼손으로 tag_2 기준 내려놓는다.
+  # tag_2 offset 은 LH1/LH2 값을 임시로 옮긴 것이다 (보정 전).
+  ZS:
+    position: [-0.75, 0.70]
+    side: front
+    tag_2:
+      offset: [-0.05, 0.06100, -0.009]
+
+
+
+
+# 임피던스 프리셋. Task 에서 impedance=True 이면 "default", impedance="contact" 처럼
+# 이름을 주면 그 프리셋을 쓴다. 값을 고치고 UI 에서 Reload Tasks 만 하면 반영된다.
+# Joint 탭 Impedance 입력란의 초기값도 "default" 에서 읽는다.
+#   stiffness     : 관절별 강성 [Nm/rad], 팔 7개 (0 ~ 1000)
+#   damping_ratio : 감쇠비 (0 < x <= 5)
+#   torque_limit  : 관절 토크 상한 [Nm] (0 < x <= 50). 누르는 힘의 상한이자 팔이
+#                   자세를 버티는 힘의 상한이다. 팔을 수평으로 뻗은 자세에서는
+#                   어깨 중력 토크만 20~25 Nm 이므로 그보다 낮으면 팔이 처진다.
+#   hold_time     : 목표 도달 후 임피던스 목표를 유지하는 시간 [s] (0 ~ 10)
+impedance_presets:
+  default:
+    stiffness: [80.0, 80.0, 60.0, 60.0, 30.0, 30.0, 20.0]
+    damping_ratio: 1.0
+    torque_limit: 10.0
+    hold_time: 0.0
+  contact:
+    stiffness: [80.0, 80.0, 60.0, 60.0, 30.0, 30.0, 20.0]
+    damping_ratio: 1.0
+    torque_limit: 5.0
+    hold_time: 0.5
+  # 문 열기(door_open_right_arm_impedance): 팔 자중 + 문 저항을 버텨야 한다.
+  # 손이 처지면 올리고, 손잡이를 너무 세게 끌면(문과 다투면) 내린다.
+  door:
+    stiffness: [240.0, 240.0, 180.0, 180.0, 90.0, 90.0, 60.0]
+    damping_ratio: 1.0
+    torque_limit: 25.0
+    hold_time: 0.0

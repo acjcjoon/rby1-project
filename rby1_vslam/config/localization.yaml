@@ -1,0 +1,33 @@
+/rby1/vslam/localization_tf:
+  ros__parameters:
+    map_frame: vslam_map
+    odom_frame: odom
+    base_frame: base
+    wheel_base_frame: base_footprint
+    wheel_odom_topic: /rby1/odom
+    # Globally referenced VO-derived base pose, after acquisition-time head TF.
+    slam_odom_topic: /rby1/vslam/slam_odom
+    localization_odom_topic: /rby1/vslam/localization_odom
+    require_navigation_idle: true
+    wheel_timeout_sec: 0.5
+    pose_timeout_sec: 0.5
+    tracking_timeout_sec: 0.75
+    navigation_timeout_sec: 0.75
+    # Station mode is explicit. Hold the base and head still during this window.
+    stationary_hold_sec: 0.75
+    stationary_linear_mps: 0.01
+    stationary_angular_rps: 0.02
+    stationary_position_tolerance_m: 0.015
+    stationary_yaw_tolerance_rad: 0.02
+    convergence_window_sec: 1.5
+    convergence_min_samples: 15
+    convergence_position_tolerance_m: 0.015
+    convergence_yaw_tolerance_rad: 0.015
+    # Reject implausible station corrections; never modify map->odom in transit.
+    max_correction_jump_m: 0.5
+    max_correction_jump_rad: 0.8
+    # Reject discontinuous wheel origins and require a new station initialization.
+    max_wheel_linear_mps: 1.5
+    max_wheel_angular_rps: 3.0
+    wheel_jump_tolerance_m: 0.05
+    wheel_jump_tolerance_rad: 0.1

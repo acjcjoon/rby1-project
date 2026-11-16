@@ -1,0 +1,25 @@
+/nvblox_node:
+  ros__parameters:
+    # Loaded after nvblox.yaml only by handheld_nvblox.launch.py.
+    # cuVSLAM owns the moving camera pose in this mode. There is no robot TF.
+    global_frame: vslam_odom
+    use_color: true
+    integrate_color_rate_hz: 10.0
+    map_clearing_frame_id: d435_link
+    map_clearing_radius_m: 8.0
+    esdf_slice_bounds_visualization_attachment_frame_id: d435_link
+    workspace_height_bounds_visualization_attachment_frame_id: d435_link
+    layer_visualization_exclusion_height_m: 10.0
+    layer_visualization_exclusion_radius_m: 8.0
+    max_back_projection_distance: 4.0
+    static_mapper:
+      # Require accumulated evidence before showing a mesh surface. This does
+      # not replace pose/extrinsic calibration or improve raw depth accuracy.
+      mesh_integrator_min_weight: 1.0
+      # Stereo-only VO initializes its own world orientation. This optional
+      # slice is relative to the initial camera origin, not a floor costmap.
+      esdf_slice_height: 0.0
+      esdf_slice_min_height: -0.3
+      esdf_slice_max_height: 0.3
+      layer_streamer_exclusion_height_m: 10.0
+      layer_streamer_exclusion_radius_m: 8.0

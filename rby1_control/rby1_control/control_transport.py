@@ -214,12 +214,14 @@ class ControlTransport:
                 str(arguments.get('group', '')),
                 int(arguments.get('joint_index', -1)),
                 float(arguments.get('delta_deg', 0.0)),
+                impedance=arguments.get('impedance'),
             )
         elif operation == 'move_joint_group':
             self.move_joint_group(
                 str(arguments.get('group', '')),
                 list(arguments.get('targets_deg', ())),
                 float(arguments.get('minimum_time', 3.0)),
+                impedance=arguments.get('impedance'),
             )
         elif operation == 'jog_cartesian':
             self.jog_cartesian(
@@ -227,6 +229,7 @@ class ControlTransport:
                 int(arguments.get('axis_index', -1)),
                 float(arguments.get('delta', 0.0)),
                 reference_frame=str(arguments.get('reference_frame', 'base')),
+                impedance=arguments.get('impedance'),
             )
         elif operation == 'move_cartesian':
             self.move_cartesian(
@@ -234,6 +237,7 @@ class ControlTransport:
                 list(arguments.get('target', ())),
                 float(arguments.get('minimum_time', 3.0)),
                 reference_frame=str(arguments.get('reference_frame', 'base')),
+                impedance=arguments.get('impedance'),
             )
         elif operation == 'cancel_active_motion':
             self.cancel_active_motion()

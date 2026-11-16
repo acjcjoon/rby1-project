@@ -124,7 +124,7 @@ def test_invalid_location_names_are_rejected(settings_file, start, end):
     'locations: {A: null, B: {position: [0, 1], side: left}}',
     'locations: {A: {position: [0, 0], side: right}, B: {side: left}}',
     'locations: {A: {position: [0, 0], side: right}, B: {position: [0], side: left}}',
-    'locations: {A: {position: [0, 0], side: right}, B: {position: [0, 1], side: front}}',
+    'locations: {A: {position: [0, 0], side: right}, B: {position: [0, 1], side: up}}',
     'locations: {A: {position: [0, 0], side: right}, B: {position: [0, 1]}}',
     'locations: {A: {position: [0, 0], side: right}, B: {position: [true, 1], side: left}}',
     'locations: {A: {position: [0, 0], side: right}, B: {position: [.nan, 1], side: left}}',

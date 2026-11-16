@@ -28,7 +28,8 @@ its correlated result, then disables the stream. Navigation publishes only
 
 Demo7 uses D435 tag observations in `base` and the current
 `base <- d405_camera_center` TF to align the wrist camera horizontally. Its
-subsequent D405 approach/contact, gripper close, and lift still target `ee_left`.
+subsequent D405 approach/contact, gripper close, and lift target the hand that
+carries the D405 (`D405_ARM` in `task.py`, currently the right arm / `ee_right`).
 The torso and arm stay fixed relative to base during navigation; Z is not
 controlled by this base step.
 

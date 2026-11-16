@@ -85,6 +85,50 @@ Removed packages: `rby1_control_ui`, `rby1_state_monitor`.
 The current production camera path uses `AprilTagDetectionArray` plus TF, so no
 runtime publisher/subscriber is forced onto the compatibility message.
 
+## Impedance control
+
+`JointImpedance(stiffness, damping_ratio, torque_limit, hold_time)` is the
+only impedance type. Where it is accepted and what the backend sends:
+
+| Where | Backend goal | Completion |
+| --- | --- | --- |
+| Joint builders (`joint_absolute`, `joint_relative`, `joint_absolute_multi`, `whole_body_joint_absolute`) with `impedance=` | `JointCommand.use_impedance` on the authored joint target | trajectory end + `hold_time` |
+| Contact helpers (`press`, `grasp`, `place_on_surface`, `camera_press`, `camera_grasp`, `camera_place_on_surface`) with `impedance=` | the TCP target is solved on the SDK arm model (`arm_kinematics.py`, torso fixed) and sent as `JointCommand.use_impedance` on the solved joint target | trajectory end + `hold_time` |
+| Joint tab, `Control: Impedance` (arms only) | same two paths for Joint Space and Cartesian Space jogs / MOVE | same |
+
+Plain `linear_*` and `camera_linear_*` builders stay position-controlled; the
+driver's Cartesian impedance builder (a spring to the target pose with no
+trajectory) is never used.
+
+Rules enforced along the pipeline:
+
+- `control_commands.py` / `command_model.py` validate ranges, bind stiffness
+  vectors to the commanded group and require a Cartesian step's impedance to
+  be bound to its arm (`right_arm` / `left_arm`). `Task.build()` requires every
+  arm that ran a Cartesian contact step to end the Task with a later
+  position-controlled step (`check_impedance_exit`); the helpers append that
+  retreat themselves.
+- The wire format carries one optional `impedance` object (`type: joint`,
+  now with `hold_time`) on Task commands and on the manual commands
+  (`jog_joint`, `move_joint_group`, `jog_cartesian`, `move_cartesian`), plus a
+  `control_mode` field (`idle`, `position`, `impedance_joint`,
+  `impedance_cartesian`, `reanchor`) in the backend state.
+- For a Cartesian impedance target `RBY1ControlNode` checks, before anything
+  moves: IK model loaded, fresh torso and arm JointState, distance from the
+  measured TCP pose within `cartesian_impedance_max_translation_m` /
+  `_rotation_deg`, IK convergence (stream-path tolerances), the solved target
+  inside the CS soft limits (`cartesian_joint_limit_margin_deg`) and the hard
+  joint limits. The runtime CS soft-limit guard also watches these joint
+  goals. A rejection fails the step with the reason; nothing is sent.
+- After any impedance goal ends, successfully or cancelled, the node sends a
+  position goal to the measured joint state (re-anchor) before reporting the
+  result; the log shows the original target, the joint state before the
+  impedance goal and the re-anchored target, then idle. A cancelled goal is
+  still reported as failed after the re-anchor.
+- Every manipulation goal has a watchdog: a goal still active after
+  `expected_duration * motion_goal_timeout_scale + motion_goal_timeout_margin_sec`
+  is cancelled with an error event (the driver itself waits without timeout).
+
 ## Supporting changes outside the six requested package operations
 
 The following supporting files were changed because the requested runtime

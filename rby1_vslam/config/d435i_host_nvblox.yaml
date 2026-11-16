@@ -1,0 +1,15 @@
+# Flat parameter file for the host RealSense 4.58.x rs_launch.py.
+# Use run_d435i_host.sh --nvblox to select matching IR/depth profiles.
+# Firmware toggles the projector; the Isaac ROS splitter uses metadata to select
+# emitter-OFF stereo for VO and emitter-ON native depth for nvblox.
+depth_module.emitter_enabled: 1
+depth_module.emitter_on_off: true
+depth_module.laser_power: 150.0
+depth_module.hdr_enabled: false
+infra_qos: SENSOR_DATA
+infra_info_qos: SENSOR_DATA
+depth_qos: SENSOR_DATA
+depth_info_qos: SENSOR_DATA
+# Only published when the camera wrapper is run with --color.
+color_qos: SENSOR_DATA
+color_info_qos: SENSOR_DATA

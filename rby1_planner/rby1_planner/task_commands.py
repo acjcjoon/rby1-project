@@ -23,12 +23,27 @@ import yaml
 from .control_commands import (
     BODY_JOINT_GROUPS,
     CARTESIAN_ARMS,
+    CARTESIAN_GROUPS,
     JOINT_GROUP_DOF,
     CommandKind,
+    Impedance,
+    JointImpedance,
+    STREAM_PATH_KINDS,
     Task as _CanonicalTask,
     TaskCommand,
     TaskDefinition,
+    DEFAULT_IMPEDANCE_PRESET,
+    ImpedanceSpec,
+    arc_waypoints,
+    resolve_impedance,
+    set_impedance_preset_loader,
+    check_impedance_exit,
+    impedance_from_dict,
+    impedance_tag,
+    impedance_tag_for,
+    impedance_to_dict,
     list_sum,
+    _values,
 )
 
 from .observation import (
@@ -101,6 +116,9 @@ class CameraLinearAbsoluteStep:
         0.0,
         1.0,
     )
+    # Set by the camera contact helpers only: the resolved target is tracked
+    # through the arm IK with joint impedance.
+    impedance: Optional[JointImpedance] = None
 
     def __post_init__(self) -> None:
         group = str(self.group).strip()
@@ -211,6 +229,7 @@ class CameraLinearAbsoluteStep:
             linear_velocity=linear_velocity,
             angular_velocity=angular_velocity,
             acceleration_scaling=acceleration_scaling,
+            impedance=self.impedance,
         )
 
         object.__setattr__(self, 'group', group)
@@ -258,7 +277,13 @@ class CameraLinearAbsoluteStep:
             linear_velocity=self.linear_velocity,
             angular_velocity=self.angular_velocity,
             acceleration_scaling=self.acceleration_scaling,
+            impedance=self.impedance,
         )
+
+    def impedance_exit_role(self) -> tuple[str, tuple[str, ...]]:
+        if self.impedance is not None:
+            return ('contact', (self.group,))
+        return ('position', (self.group,))
 
     def resolve_observation(
         self,
@@ -289,6 +314,9 @@ class CameraLinearAbsoluteStep:
 @dataclass(frozen=True)
 class CameraLinearAbsolutePrintStep(CameraLinearAbsoluteStep):
     """Resolve and print the final TCP target without commanding motion."""
+
+    def impedance_exit_role(self) -> tuple[str, tuple[str, ...]]:
+        return ('other', ())
 
 
 @dataclass(frozen=True)
@@ -485,8 +513,34 @@ class RewindStep:
             raise ValueError('rewind repeat_count must be a positive integer')
 
 
+@dataclass(frozen=True)
+class BackgroundGripperStep:
+    """Gripper command the runner starts without waiting for it to finish.
+
+    The next Task step (typically an arm motion) starts right away, so the
+    gripper moves while the arm moves. The runner still watches the command:
+    a failure fails the Task on the next tick, the next background gripper
+    step waits until this one has finished (the backend runs one gripper
+    command at a time), and the Task does not complete while it is pending.
+
+    Only for gestures with empty hands. Never use it to grasp or release an
+    object: the following motion does not wait for the grip.
+    """
+
+    command: TaskCommand
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command, TaskCommand) or self.command.kind not in (
+            CommandKind.GRIPPER_OPEN,
+            CommandKind.GRIPPER_CLOSE,
+            CommandKind.GRIPPER_SET,
+        ):
+            raise ValueError('background step requires a gripper command')
+
+
 DynamicTaskStep = Union[
     TaskCommand,
+    BackgroundGripperStep,
     CameraFrameLinearAbsoluteStep,
     CameraLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
@@ -518,6 +572,7 @@ class DynamicTaskDefinition:
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    BackgroundGripperStep,
                     RewindStep,
                 ),
             )
@@ -542,6 +597,7 @@ class DynamicTaskDefinition:
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    BackgroundGripperStep,
                     RewindStep,
                 ),
             )
@@ -558,6 +614,38 @@ RunnableTaskDefinition = Union[TaskDefinition, DynamicTaskDefinition]
 
 class Task(_CanonicalTask):
     """Canonical Task builder extended with planner-only commands."""
+
+    def open_gripper_background(
+        self,
+        side: str = 'both',
+        speed: Optional[float] = None,
+    ) -> 'Task':
+        """Start opening the gripper and continue with the next step at once.
+
+        See :class:`BackgroundGripperStep`; for empty-hand gestures only.
+        """
+        command = _CanonicalTask('gripper').open_gripper(side, speed).task_list[0]
+        self.task_list.append(BackgroundGripperStep(command))
+        return self
+
+    def close_gripper_background(
+        self,
+        side: str = 'both',
+        speed: Optional[float] = None,
+        *,
+        settle_time_sec: float = 0.3,
+    ) -> 'Task':
+        """Start closing the gripper and continue with the next step at once.
+
+        See :class:`BackgroundGripperStep`; for empty-hand gestures only.
+        """
+        command = _CanonicalTask('gripper').close_gripper(
+            side,
+            speed,
+            settle_time_sec=settle_time_sec,
+        ).task_list[0]
+        self.task_list.append(BackgroundGripperStep(command))
+        return self
 
     def move_to(
         self,
@@ -672,6 +760,7 @@ class Task(_CanonicalTask):
             0.0,
             1.0,
         ),
+        impedance: ImpedanceSpec = None,
     ) -> 'Task':
         """Add a Cartesian target that will be captured during execution.
 
@@ -690,6 +779,11 @@ class Task(_CanonicalTask):
         yaw. It requires ``yaw_only=True`` and affects EE orientation only:
         the X/Y offset is always rotated by the detected object yaw, not by
         the selected equivalent EE yaw.
+
+        Position control by default. ``impedance=True`` (the "default"
+        preset), a preset name or a ``JointImpedance`` tracks the resolved
+        target with joint impedance (arms only); a later position-controlled
+        step of the same arm is then required in the same Task.
         """
 
         return self._append_camera_linear_absolute(
@@ -711,6 +805,7 @@ class Task(_CanonicalTask):
             object_to_end_effector_orientation_xyzw=(
                 object_to_end_effector_orientation_xyzw
             ),
+            impedance=impedance,
         )
 
     def camera_linear_absolute_print(
@@ -842,9 +937,16 @@ class Task(_CanonicalTask):
         object_to_end_effector_orientation_xyzw: Sequence[object],
         controlled_frame: Optional[str] = None,
         preserve_end_effector_orientation: bool = True,
+        impedance: ImpedanceSpec = None,
     ) -> 'Task':
         probe = _CanonicalTask('_camera_command_validation')
-        probe.linear_absolute(arm, (0.0,) * 6, tcp_motion)
+        probe._linear(
+            CommandKind.LINEAR_ABSOLUTE,
+            arm,
+            (0.0,) * 6,
+            tcp_motion,
+            impedance,
+        )
         motion = probe.task_list[0]
         step_options: dict[str, object] = {}
         if controlled_frame is not None:
@@ -875,8 +977,103 @@ class Task(_CanonicalTask):
             object_to_end_effector_orientation_xyzw=tuple(
                 object_to_end_effector_orientation_xyzw
             ),
+            impedance=motion.impedance,
             **step_options,
         ))
+        return self
+
+    # ------------------------------------------------------------------
+    # Camera contact patterns: tag-relative contact with impedance, an
+    # optional gripper action, then a position-controlled retreat.
+    # ``camera_options`` are the ``camera_linear_absolute`` keywords.
+    # ------------------------------------------------------------------
+    def _camera_contact(
+        self,
+        arm: str,
+        object_id: str,
+        tcp_motion: Sequence[object],
+        impedance: ImpedanceSpec,
+        camera_options: dict,
+    ) -> 'Task':
+        impedance = resolve_impedance(impedance)
+        if impedance is None:
+            raise ValueError(
+                'camera contact helpers require impedance (True, a preset '
+                'name or JointImpedance)'
+            )
+        if arm not in CARTESIAN_ARMS:
+            raise ValueError(
+                f'Cartesian impedance supports only {list(CARTESIAN_ARMS)}'
+            )
+        bound = impedance.bind(arm)
+        self.camera_linear_absolute(arm, object_id, tcp_motion, **camera_options)
+        self.task_list[-1] = replace(self.task_list[-1], impedance=bound)
+        return self
+
+    def camera_press(
+        self,
+        arm: str,
+        object_id: str,
+        tcp_motion: Sequence[object],
+        *,
+        impedance: ImpedanceSpec,
+        retreat: Sequence[object],
+        **camera_options: object,
+    ) -> 'Task':
+        """Push toward a tag-relative target with impedance, then retreat."""
+
+        self._camera_contact(arm, object_id, tcp_motion, impedance, camera_options)
+        self.linear_relative(
+            arm,
+            tuple(_values(retreat, 3, 'retreat offset')) + (0.0, 0.0, 0.0),
+            tcp_motion,
+        )
+        return self
+
+    def camera_grasp(
+        self,
+        arm: str,
+        object_id: str,
+        tcp_motion: Sequence[object],
+        *,
+        impedance: ImpedanceSpec,
+        gripper_side: str,
+        retreat: Sequence[object],
+        gripper_speed: Optional[float] = None,
+        **camera_options: object,
+    ) -> 'Task':
+        """Reach a tag-relative grasp pose compliantly, close and lift."""
+
+        self._camera_contact(arm, object_id, tcp_motion, impedance, camera_options)
+        self.close_gripper(gripper_side, gripper_speed)
+        self.linear_relative(
+            arm,
+            tuple(_values(retreat, 3, 'retreat offset')) + (0.0, 0.0, 0.0),
+            tcp_motion,
+        )
+        return self
+
+    def camera_place_on_surface(
+        self,
+        arm: str,
+        object_id: str,
+        tcp_motion: Sequence[object],
+        *,
+        impedance: ImpedanceSpec,
+        gripper_side: str,
+        retreat: Sequence[object],
+        gripper_speed: Optional[float] = None,
+        **camera_options: object,
+    ) -> 'Task':
+        """Lower a held object onto a tag-relative pose, release and lift."""
+
+        self._camera_contact(arm, object_id, tcp_motion, impedance, camera_options)
+        self.open_gripper(gripper_side, gripper_speed)
+        self.linear_relative(
+            arm,
+            tuple(_values(retreat, 3, 'retreat offset')) + (0.0, 0.0, 0.0),
+            tcp_motion,
+        )
         return self
 
     def extend(
@@ -902,6 +1099,7 @@ class Task(_CanonicalTask):
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    BackgroundGripperStep,
                     RewindStep,
                 ),
             )
@@ -913,6 +1111,7 @@ class Task(_CanonicalTask):
 
     def build(self) -> RunnableTaskDefinition:
         commands = tuple(self.task_list)
+        check_impedance_exit(commands)
         if any(
             isinstance(
                 command,
@@ -920,6 +1119,7 @@ class Task(_CanonicalTask):
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    BackgroundGripperStep,
                     RewindStep,
                 ),
             )
@@ -1047,6 +1247,43 @@ def _load_tag_approach_offset(object_id: str) -> tuple[float, float, float]:
     return float(offset[0]), float(offset[1]), float(offset[2])
 
 
+def load_impedance_preset(name: str = DEFAULT_IMPEDANCE_PRESET) -> JointImpedance:
+    """settings.yaml 의 impedance_presets 에서 이름으로 임피던스를 읽는다.
+
+    값은 Reload Tasks 때마다 다시 읽힌다. stiffness 는 관절 수만큼의 벡터이며
+    (팔 7개) 실제 사용하는 스텝의 그룹에 바인딩된다.
+    """
+    presets = _load_task_settings().get('impedance_presets')
+    if not isinstance(presets, dict) or not presets:
+        raise ValueError('settings.yaml has no impedance_presets section')
+    key = str(name).strip()
+    raw = presets.get(key)
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f'impedance preset {key!r} is not defined in settings.yaml '
+            f'(available: {sorted(presets)})'
+        )
+    unknown = set(raw) - {'stiffness', 'damping_ratio', 'torque_limit', 'hold_time'}
+    if unknown:
+        raise ValueError(
+            f'impedance preset {key!r} has unknown keys {sorted(unknown)}'
+        )
+    if 'stiffness' not in raw:
+        raise ValueError(f'impedance preset {key!r} needs stiffness')
+    try:
+        return JointImpedance(
+            stiffness=list(raw['stiffness']),
+            damping_ratio=raw.get('damping_ratio', 1.0),
+            torque_limit=raw.get('torque_limit', 10.0),
+            hold_time=raw.get('hold_time', 0.0),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'impedance preset {key!r}: {exc}') from exc
+
+
+set_impedance_preset_loader(load_impedance_preset)
+
+
 def _load_move_locations() -> dict:
     """공통 설정에서 이동 지점 항목만 검증한다."""
     settings = _load_task_settings()
@@ -1092,6 +1329,9 @@ def _location_tags(locations: dict) -> dict[str, tuple[str, dict]]:
             key for key in location
             if isinstance(key, str) and key.startswith('tag_')
         ]
+        if not tag_ids:
+            # 태그 없는 경유 지점(예: AP): 이동에만 쓰고 파지/배치에는 쓸 수 없다.
+            continue
         if len(tag_ids) != 1:
             raise ValueError(
                 f'Location {location_name!r} must contain exactly one tag_* mapping'
@@ -1128,7 +1368,10 @@ def _location_tag_id(locations: dict, name: str) -> str:
         raise ValueError(
             f'Location {name!r} is disabled until its position and tag are calibrated'
         )
-    return _location_tags(locations)[name][0]
+    tags = _location_tags(locations)
+    if name not in tags:
+        raise ValueError(f'Location {name!r} has no tag_* mapping (waypoint only)')
+    return tags[name][0]
 
 
 def _load_location_tag_id(name: str) -> str:
@@ -1160,17 +1403,21 @@ def _move_location(locations: dict, name: str) -> tuple[float, float, str]:
     ):
         raise ValueError(f'Location {name!r} position must contain finite numbers')
     side = location.get('side')
-    if side not in ('left', 'right'):
-        raise ValueError(f'Location {name!r} side must be left or right')
+    if side not in ('left', 'right', 'front'):
+        raise ValueError(f'Location {name!r} side must be left, right, or front')
     return float(position[0]), float(position[1]), side
 
 __all__ = [
     'BODY_JOINT_GROUPS',
+    'BackgroundGripperStep',
     'CARTESIAN_ARMS',
+    'CARTESIAN_GROUPS',
     'CameraFrameLinearAbsoluteStep',
     'CameraLinearAbsolutePrintStep',
     'CameraLinearAbsoluteStep',
     'CameraMoveToTagStep',
+    'Impedance',
+    'JointImpedance',
     'JOINT_GROUP_DOF',
     'CommandKind',
     'DynamicTaskDefinition',
@@ -1178,9 +1425,18 @@ __all__ = [
     'MoveToStep',
     'RewindStep',
     'RunnableTaskDefinition',
+    'STREAM_PATH_KINDS',
     'Task',
     'TaskCommand',
     'TaskDefinition',
+    'arc_waypoints',
+    'check_impedance_exit',
     'get_object_position',
+    'impedance_from_dict',
+    'impedance_tag',
+    'impedance_tag_for',
+    'impedance_to_dict',
     'list_sum',
+    'load_impedance_preset',
+    'resolve_impedance',
 ]

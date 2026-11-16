@@ -95,3 +95,46 @@ def test_planner_task_state_rejects_invalid_timeout_hint(value):
             'status': 'pending',
             'timeout_remaining_sec': value,
         })
+
+
+def test_stream_path_command_round_trips_waypoints():
+    command = TaskCommand(
+        kind=CommandKind.LINEAR_PATH_STREAM_RELATIVE,
+        group="right_arm",
+        waypoints=((0.01, 0.0, 0.0, 0.0, 0.0, 0.0), (0.02, 0.01, 0.0, 0.0, 0.0, 0.0)),
+        minimum_time=4.0,
+        linear_velocity=0.05,
+        angular_velocity=0.3,
+    )
+    payload = task_command_to_dict(command)
+    assert payload["waypoints"] == [
+        [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.02, 0.01, 0.0, 0.0, 0.0, 0.0],
+    ]
+    restored = task_command_from_dict(payload)
+    assert restored == command
+    assert restored.waypoints == command.waypoints
+
+
+def test_task_builder_linear_path_relative_validates_inputs():
+    from rby1_planner.control_commands import Task
+
+    task = Task("path").linear_path_relative(
+        "right_arm",
+        [(0.0, 0.01, 0.0, 0.0, 0.0, 0.0), [0.0, 0.02, 0.0, 0.0, 0.0, 0.0]],
+        (3.0, 0.05, 0.3),
+    )
+    command = task.task_list[0]
+    assert command.kind is CommandKind.LINEAR_PATH_STREAM_RELATIVE
+    assert command.waypoints == (
+        (0.0, 0.01, 0.0, 0.0, 0.0, 0.0),
+        (0.0, 0.02, 0.0, 0.0, 0.0, 0.0),
+    )
+    assert command.minimum_time == pytest.approx(3.0)
+    assert command.timeout_seconds == pytest.approx(3.0 * 1.5 + 10.0)
+    with pytest.raises(ValueError, match="at least one waypoint"):
+        Task("empty").linear_path_relative("right_arm", [], (3.0, 0.05, 0.3))
+    with pytest.raises(ValueError, match="6 values"):
+        Task("short").linear_path_relative("right_arm", [(0.0, 0.0)], (3.0, 0.05, 0.3))
+    with pytest.raises(ValueError, match="unknown Cartesian arm"):
+        Task("arm").linear_path_relative("torso", [(0.0,) * 6], (3.0, 0.05, 0.3))

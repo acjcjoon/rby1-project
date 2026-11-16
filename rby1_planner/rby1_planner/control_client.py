@@ -17,7 +17,7 @@ from .backend_contract import (
     TaskCommandStatus,
     VelocityCommand,
 )
-from .control_commands import TaskCommand
+from .control_commands import TaskCommand, impedance_to_dict
 from .control_protocol import (
     COMMAND_KIND,
     EVENT_KIND,
@@ -370,14 +370,32 @@ class ControlClient:
             arguments['speed'] = float(speed)
         self._send('close_gripper', arguments)
 
-    def jog_joint(self, group: str, joint_index: int, delta_deg: float) -> None:
+    @staticmethod
+    def _with_impedance(arguments: Dict[str, object], impedance) -> Dict[str, object]:
+        # Manual (Joint tab) joint motions carry the same impedance wire dict
+        # as a Task step; None keeps the backend on position control.
+        payload = impedance_to_dict(impedance)
+        if payload is not None:
+            arguments['impedance'] = payload
+        return arguments
+
+    def jog_joint(
+        self,
+        group: str,
+        joint_index: int,
+        delta_deg: float,
+        impedance=None,
+    ) -> None:
         self._send(
             'jog_joint',
-            {
-                'group': str(group),
-                'joint_index': int(joint_index),
-                'delta_deg': float(delta_deg),
-            },
+            self._with_impedance(
+                {
+                    'group': str(group),
+                    'joint_index': int(joint_index),
+                    'delta_deg': float(delta_deg),
+                },
+                impedance,
+            ),
         )
 
     def move_joint_group(
@@ -385,14 +403,18 @@ class ControlClient:
         group: str,
         targets_deg,
         minimum_time: float,
+        impedance=None,
     ) -> None:
         self._send(
             'move_joint_group',
-            {
-                'group': str(group),
-                'targets_deg': [float(value) for value in targets_deg],
-                'minimum_time': float(minimum_time),
-            },
+            self._with_impedance(
+                {
+                    'group': str(group),
+                    'targets_deg': [float(value) for value in targets_deg],
+                    'minimum_time': float(minimum_time),
+                },
+                impedance,
+            ),
         )
 
     def jog_cartesian(
@@ -401,15 +423,19 @@ class ControlClient:
         axis_index: int,
         delta: float,
         reference_frame: str = 'base',
+        impedance=None,
     ) -> None:
         self._send(
             'jog_cartesian',
-            {
-                'arm': str(arm),
-                'axis_index': int(axis_index),
-                'delta': float(delta),
-                'reference_frame': str(reference_frame),
-            },
+            self._with_impedance(
+                {
+                    'arm': str(arm),
+                    'axis_index': int(axis_index),
+                    'delta': float(delta),
+                    'reference_frame': str(reference_frame),
+                },
+                impedance,
+            ),
         )
 
     def move_cartesian(
@@ -418,15 +444,19 @@ class ControlClient:
         target,
         minimum_time: float,
         reference_frame: str = 'base',
+        impedance=None,
     ) -> None:
         self._send(
             'move_cartesian',
-            {
-                'arm': str(arm),
-                'target': [float(value) for value in target],
-                'minimum_time': float(minimum_time),
-                'reference_frame': str(reference_frame),
-            },
+            self._with_impedance(
+                {
+                    'arm': str(arm),
+                    'target': [float(value) for value in target],
+                    'minimum_time': float(minimum_time),
+                    'reference_frame': str(reference_frame),
+                },
+                impedance,
+            ),
         )
 
     def is_motion_busy(self) -> bool:

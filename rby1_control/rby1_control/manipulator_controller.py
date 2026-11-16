@@ -7,6 +7,10 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 
+# |sin(pitch)| at or above this is treated as exact gimbal lock in
+# quaternion_to_rpy_deg (see there). Far below any real measurement noise.
+GIMBAL_LOCK_EPSILON = 1.0e-12
+
 JOINT_NAMES = {
     'right_arm': tuple(f'right_arm_{index}' for index in range(7)),
     'left_arm': tuple(f'left_arm_{index}' for index in range(7)),
@@ -29,6 +33,7 @@ class ManipulatorController:
         self.cartesian_state: Dict[str, Optional[List[float]]] = {
             'right_arm': None,
             'left_arm': None,
+            'torso': None,
         }
         self.cartesian_updated_at = {
             arm: None for arm in self.cartesian_state
@@ -105,11 +110,23 @@ class ManipulatorController:
         z: float,
         w: float,
     ) -> Tuple[float, float, float]:
+        sinp = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+        pitch = math.asin(sinp)
+        if abs(sinp) >= 1.0 - GIMBAL_LOCK_EPSILON:
+            # Exact gimbal lock (|pitch| = 90 deg): roll and yaw are not
+            # separately defined and the generic atan2 terms all vanish, which
+            # would silently drop the combined rotation. Take roll = 0 and put
+            # the whole remaining rotation into yaw so that
+            # rpy_deg_to_quaternion() reproduces this orientation exactly.
+            roll = 0.0
+            yaw = math.atan2(
+                2.0 * (w * z - x * y),
+                1.0 - 2.0 * (x * x + z * z),
+            )
+            return tuple(math.degrees(value) for value in (roll, pitch, yaw))
         sinr_cosp = 2.0 * (w * x + y * z)
         cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
         roll = math.atan2(sinr_cosp, cosr_cosp)
-        sinp = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
-        pitch = math.asin(sinp)
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         yaw = math.atan2(siny_cosp, cosy_cosp)

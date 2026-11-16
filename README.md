@@ -5,6 +5,8 @@ Current package ownership and runtime data flow are documented in
 `rby1_state_monitor` packages have been removed; use `rby1_planner` for the
 operator UI and the single `rby1_control` node for robot-facing control.
 
+VSLAM 스테이션 주행과 실행 명령은 [rby1_vslam/README.md](rby1_vslam/README.md)를 참고한다.
+
 ## 2026-07-27
 ### Contributor
 - Woo, Kim, Hur

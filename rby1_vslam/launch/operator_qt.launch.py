@@ -1,10 +1,11 @@
-"""Jetson Qt/RViz operator for manual drive and named Nav2 poses."""
+"""Station operator with live poses, base controls and named station goals."""
 
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -25,7 +26,10 @@ def generate_launch_description():
         },
     )
     return LaunchDescription([
+        DeclareLaunchArgument('start_rviz', default_value='false'),
         DeclareLaunchArgument('base_frame', default_value='base'),
+        DeclareLaunchArgument('max_linear_speed', default_value='0.2'),
+        DeclareLaunchArgument('max_angular_speed', default_value='0.4'),
         DeclareLaunchArgument(
             'waypoints_file',
             default_value=str(default_waypoints_path(
@@ -35,6 +39,7 @@ def generate_launch_description():
         Node(
             package='rviz2',
             executable='rviz2',
+            condition=IfCondition(LaunchConfiguration('start_rviz')),
             name='planner_rviz',
             namespace='/rby1/vslam/nav2',
             output='screen',
@@ -46,7 +51,7 @@ def generate_launch_description():
         Node(
             package='rby1_vslam',
             executable='waypoint_ui',
-            name='waypoint_ui',
+            name='station_operator',
             namespace='/rby1/vslam',
             output='screen',
             emulate_tty=True,
@@ -56,6 +61,10 @@ def generate_launch_description():
                     LaunchConfiguration('base_frame'), value_type=str),
                 'waypoints_file': ParameterValue(
                     LaunchConfiguration('waypoints_file'), value_type=str),
+                'max_linear_speed': ParameterValue(
+                    LaunchConfiguration('max_linear_speed'), value_type=float),
+                'max_angular_speed': ParameterValue(
+                    LaunchConfiguration('max_angular_speed'), value_type=float),
             }],
         ),
     ])

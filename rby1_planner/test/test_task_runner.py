@@ -1205,3 +1205,132 @@ def test_camera_lookup_exception_fails_without_backend_motion():
     assert not runner.active
     assert backend.commands == []
     assert 'camera transport failed' in messages[-1]
+
+
+def test_stream_path_step_turns_stream_on_resolves_and_turns_off():
+    node = FakeNode()
+    backend = FakeBackend()
+    backend.cartesian = {'right_arm': (0.4, -0.2, 0.9, 0.0, 0.0, -90.0)}
+    runner = PlannerTaskRunner(node, backend, clock=lambda: backend.now)
+    task = (
+        Task('arc')
+        .linear_path_relative(
+            'right_arm',
+            [(0.0, 0.01, 0.0, 0.0, 0.0, 0.0), (0.01, 0.02, 0.0, 0.0, 0.0, 0.0)],
+            (3.0, 0.05, 0.3),
+        )
+        .joint_absolute('right_arm', [0.0] * 7, [2.0, 1.0, 1.0])
+        .build()
+    )
+
+    # Normal mode is stream OFF; the path step asks for ON and waits.
+    runner.start(task)
+    assert backend.stream_requests == [True]
+    assert backend.commands == []
+    runner.tick()
+    assert backend.commands == []
+    backend.stream_enabled = True
+    runner.tick()
+
+    # The relative path is resolved once from the measured start pose.
+    assert len(backend.commands) == 1
+    resolved = backend.commands[0]
+    assert resolved.kind is CommandKind.LINEAR_PATH_STREAM_ABSOLUTE
+    assert resolved.waypoints == (
+        pytest.approx((0.4, -0.19, 0.9, 0.0, 0.0, -90.0)),
+        pytest.approx((0.41, -0.18, 0.9, 0.0, 0.0, -90.0)),
+    )
+    assert resolved.minimum_time == pytest.approx(3.0)
+
+    # Completion requests stream OFF and the next regular step waits for it.
+    runner.tick()
+    assert backend.stream_requests == [True, False]
+    assert len(backend.commands) == 1
+    runner.tick()
+    assert len(backend.commands) == 1
+    backend.stream_enabled = False
+    runner.tick()
+    assert len(backend.commands) == 2
+    assert backend.commands[1].kind is CommandKind.JOINT_ABSOLUTE
+    runner.tick()
+    assert not runner.active
+
+
+def test_stream_path_failure_requests_stream_off_and_fails_task():
+    node = FakeNode()
+    backend = FakeBackend()
+    results = []
+    runner = PlannerTaskRunner(
+        node,
+        backend,
+        clock=lambda: backend.now,
+        on_finished=results.append,
+    )
+    task = Task('arc').linear_path_relative(
+        'right_arm',
+        [(0.0, 0.01, 0.0, 0.0, 0.0, 0.0)],
+        (3.0, 0.05, 0.3),
+    ).build()
+    runner.start(task)
+    backend.stream_enabled = True
+    runner.tick()
+    command_id = next(iter(backend.command_states))
+    backend.command_states[command_id] = TaskCommandState(
+        TaskCommandStatus.FAILED,
+        'Stream path stopped: runtime safety: collision state is active',
+    )
+    runner.tick()
+    assert not runner.active
+    assert results[-1].status is TaskRunStatus.FAILED
+    assert 'collision state' in results[-1].message
+    assert backend.stream_requests == [True, False]
+    assert backend.stop_calls >= 1
+
+
+def test_stream_path_requires_fresh_cartesian_state():
+    node = FakeNode()
+    backend = FakeBackend()
+    backend.cartesian = {}
+    results = []
+    runner = PlannerTaskRunner(
+        node,
+        backend,
+        clock=lambda: backend.now,
+        on_finished=results.append,
+    )
+    task = Task('arc').linear_path_relative(
+        'right_arm',
+        [(0.0, 0.01, 0.0, 0.0, 0.0, 0.0)],
+        (3.0, 0.05, 0.3),
+    ).build()
+    runner.start(task)
+    backend.stream_enabled = True
+    runner.tick()
+    assert not runner.active
+    assert results[-1].status is TaskRunStatus.FAILED
+    assert 'Cartesian state' in results[-1].message
+
+
+def test_torso_linear_relative_resolves_from_the_torso_tcp():
+    node = FakeNode()
+    backend = FakeBackend()
+    backend.cartesian = {
+        'right_arm': (0.4, -0.2, 0.9, 0.0, 0.0, -90.0),
+        'torso': (0.0, 0.0, 1.10, 0.0, 0.0, 0.0),
+    }
+    runner = PlannerTaskRunner(node, backend, clock=lambda: backend.now)
+    task = Task('torso_up').linear_relative(
+        'torso',
+        (0.0, 0.0, 0.05, 0.0, 0.0, 0.0),
+        [3.0, 0.1, 0.3, 0.5],
+    ).build()
+
+    runner.start(task)
+
+    assert backend.stream_requests == []
+    resolved = backend.commands[0]
+    assert resolved.kind is CommandKind.LINEAR_ABSOLUTE
+    assert resolved.group == 'torso'
+    assert resolved.values == pytest.approx((0.0, 0.0, 1.15, 0.0, 0.0, 0.0))
+    runner.tick()
+    assert not runner.active

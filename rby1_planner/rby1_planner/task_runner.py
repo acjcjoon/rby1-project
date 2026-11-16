@@ -23,6 +23,7 @@ from .navigation_protocol import (
     NavigationCommandStatus,
 )
 from .task_commands import (
+    BackgroundGripperStep,
     CameraFrameLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
     CameraLinearAbsoluteStep,
@@ -32,8 +33,10 @@ from .task_commands import (
     MoveToStep,
     RewindStep,
     RunnableTaskDefinition,
+    STREAM_PATH_KINDS,
     TaskCommand,
     TaskDefinition,
+    impedance_tag_for,
     list_sum,
 )
 from .task_lifecycle import TaskProgress, TaskRunResult, TaskRunStatus
@@ -49,6 +52,8 @@ class PlannerTaskRunner:
     MOTION_TIMEOUT_MARGIN_SEC = 5.0
     CAMERA_IDLE_TIMEOUT_SEC = 3.0
     NAVIGATION_FINALIZATION_MARGIN_SEC = 5.0
+    # Time budget for the backend's post-impedance re-anchor goal.
+    IMPEDANCE_REANCHOR_MARGIN_SEC = 3.0
 
     def __init__(
         self,
@@ -134,6 +139,10 @@ class PlannerTaskRunner:
         self._last_camera_yaw_symmetry_deg: Optional[float] = None
         self._pending_camera_navigation_goal = None
         self._run_number = 0
+        # Gripper command started by a BackgroundGripperStep and still running
+        # while later steps execute.
+        self._background_command_id: Optional[str] = None
+        self._background_deadline = 0.0
 
     @property
     def active(self) -> bool:
@@ -177,6 +186,8 @@ class PlannerTaskRunner:
         self._last_camera_yaw_symmetry_deg = None
         self._pending_camera_navigation_goal = None
         self._run_number = 1
+        self._background_command_id = None
+        self._background_deadline = 0.0
         self.on_active_changed(True)
         self.on_status(f'Task started: {task.name}')
         self.on_progress(TaskProgress(
@@ -223,9 +234,13 @@ class PlannerTaskRunner:
                     self._command_id is None
                     and self._navigation_command_id is None
                     and self._camera_idle_deadline is None
+                    # A background gripper command keeps the backend busy on
+                    # purpose; it is polled right below instead.
+                    and self._background_command_id is None
                 ),
             )
             now = self.clock()
+            self._poll_background_command(now)
 
             if self._camera_idle_deadline is not None:
                 if not self._tick_camera_idle_barrier(state, now):
@@ -279,14 +294,27 @@ class PlannerTaskRunner:
                         f'motion command did not complete: {detail}'
                     )
                 self._log_camera_target_and_actual(state)
+                completed_command = self._active_command
                 self._command_id = None
                 self._active_command = None
                 self._complete_step()
+                if (
+                    completed_command is not None
+                    and completed_command.kind in STREAM_PATH_KINDS
+                ):
+                    # Return to the normal (stream OFF) mode before the next
+                    # step; the next tick waits for the confirmed transition.
+                    self._request_stream_transition(False, now)
+                    return
                 if self._next_step_is_camera():
                     self._begin_camera_idle_barrier(state, now)
                     return
 
             if self._index >= len(self._task.commands):
+                if self._background_command_id is not None:
+                    # Finish only after the background gripper has finished,
+                    # so its result is checked and the backend is idle.
+                    return
                 name = self._task.name
                 self._finish()
                 message = f'Task completed: {name}'
@@ -360,6 +388,25 @@ class PlannerTaskRunner:
                 )
                 return
 
+            if isinstance(command, BackgroundGripperStep):
+                if self._background_command_id is not None:
+                    # The backend runs one gripper command at a time; the
+                    # poll at the top of the tick clears this when it ends.
+                    return
+                self._background_command_id = self.backend.start_task_command(
+                    command.command,
+                )
+                self._background_deadline = now + self._command_timeout_seconds(
+                    command.command,
+                    state,
+                )
+                self.on_status(
+                    f'Task step {self._index + 1}/{len(self._task.commands)}: '
+                    f'{command.command.kind.value} (background, not waiting)'
+                )
+                self._complete_step()
+                return
+
             if command.kind is CommandKind.BASE_VELOCITY:
                 if state.stream_enabled is not True:
                     self._request_stream_transition(True, now)
@@ -381,6 +428,14 @@ class PlannerTaskRunner:
                 )
                 return
 
+            if command.kind in STREAM_PATH_KINDS:
+                # The driver stream is enabled for this step only. The
+                # backend refuses the path unless robot_state reports the
+                # stream as active, so wait for the confirmed transition.
+                if state.stream_enabled is not True:
+                    self._request_stream_transition(True, now)
+                    return
+
             resolved = self._resolve(command, state)
             self._command_id = self.backend.start_task_command(resolved)
             self._active_command = resolved
@@ -388,12 +443,39 @@ class PlannerTaskRunner:
                 resolved,
                 state,
             )
+            path_suffix = (
+                f' ({len(resolved.waypoints)} waypoints, '
+                f'{float(resolved.minimum_time):.2f} s, stream)'
+                if resolved.kind in STREAM_PATH_KINDS
+                else ''
+            )
             self.on_status(
                 f'Task step {self._index + 1}/{len(self._task.commands)}: '
                 f'{command.kind.value}'
+                + path_suffix
+                + self._impedance_status_suffix(command, resolved)
             )
         except Exception as exc:
             self._fail(str(exc))
+
+    def _impedance_status_suffix(
+        self,
+        authored,
+        resolved: TaskCommand,
+    ) -> str:
+        if resolved.impedance is None:
+            return ''
+        tag = impedance_tag_for(resolved.kind, resolved.impedance)
+        impedance = resolved.impedance
+        hold = (
+            f', hold={impedance.hold_time:.2f} s'
+            if impedance.hold_time > 0.0
+            else ''
+        )
+        return (
+            f' [{tag}: torque_limit={impedance.torque_limit:g} Nm, '
+            f'damping_ratio={impedance.damping_ratio:g}{hold}]'
+        )
 
     def _tick_camera_linear_absolute(
         self,
@@ -463,6 +545,7 @@ class PlannerTaskRunner:
             f'Task step {self._index + 1}/{len(self._task.commands)}: '
             f'camera_linear_absolute [{command.camera_source}] resolved '
             f'{command.object_id!r}'
+            + self._impedance_status_suffix(command, resolved)
         )
 
     def _tick_camera_move_to_tag(
@@ -932,9 +1015,12 @@ class PlannerTaskRunner:
             isinstance(command, MoveToStep)
             or (
                 isinstance(command, TaskCommand)
-                and command.kind in (
-                    CommandKind.BASE_VELOCITY,
-                    CommandKind.DELAY,
+                and (
+                    command.kind in (
+                        CommandKind.BASE_VELOCITY,
+                        CommandKind.DELAY,
+                    )
+                    or command.kind in STREAM_PATH_KINDS
                 )
             )
         )
@@ -1036,6 +1122,31 @@ class PlannerTaskRunner:
         self._stream_target = enabled
         self._stream_deadline = now + 3.0
 
+    def _poll_background_command(self, now: float) -> None:
+        """Check the running background gripper command; raise if it failed."""
+
+        command_id = self._background_command_id
+        if command_id is None:
+            return
+        command_state = self.backend.poll_task_command(command_id)
+        if command_state.status is TaskCommandStatus.PENDING:
+            timeout_remaining = command_state.timeout_remaining_sec
+            if timeout_remaining is not None:
+                self._background_deadline = max(
+                    self._background_deadline,
+                    now + timeout_remaining + self.MOTION_TIMEOUT_MARGIN_SEC,
+                )
+            if now > self._background_deadline:
+                raise RuntimeError('background gripper command timed out')
+            return
+        if command_state.status is not TaskCommandStatus.SUCCEEDED:
+            detail = command_state.message or command_state.status.value
+            raise RuntimeError(
+                f'background gripper command did not complete: {detail}'
+            )
+        self._background_command_id = None
+        self._background_deadline = 0.0
+
     def _rewind(self, command: RewindStep) -> None:
         if self._task is None:
             raise RuntimeError('rewind requires an active Task')
@@ -1106,6 +1217,8 @@ class PlannerTaskRunner:
             return 'camera_linear_absolute_print'
         if isinstance(command, CameraLinearAbsoluteStep):
             return 'camera_linear_absolute'
+        if isinstance(command, BackgroundGripperStep):
+            return f'{command.command.kind.value}_background'
         if isinstance(command, MoveToStep):
             return 'move_to'
         if isinstance(command, RewindStep):
@@ -1125,7 +1238,20 @@ class PlannerTaskRunner:
                 command_cancel_requested = True
             except Exception as exc:
                 self.on_status(f'Task cancel warning: {exc}')
-        if self._base_deadline is not None or self._stream_target is True:
+        if self._background_command_id is not None:
+            try:
+                self.backend.cancel_task_command(self._background_command_id)
+            except Exception as exc:
+                self.on_status(f'Task cancel warning: {exc}')
+        stream_path_active = (
+            self._active_command is not None
+            and self._active_command.kind in STREAM_PATH_KINDS
+        )
+        if (
+            self._base_deadline is not None
+            or self._stream_target is True
+            or stream_path_active
+        ):
             self.backend.stop(publish_immediately=True)
             try:
                 self.backend.request_stream(False)
@@ -1163,6 +1289,8 @@ class PlannerTaskRunner:
         self._last_camera_yaw_symmetry_deg = None
         self._pending_camera_navigation_goal = None
         self._run_number = 0
+        self._background_command_id = None
+        self._background_deadline = 0.0
         if was_active:
             self.on_active_changed(False)
 
@@ -1209,6 +1337,23 @@ class PlannerTaskRunner:
                 command,
                 kind=CommandKind.LINEAR_ABSOLUTE,
                 values=tuple(list_sum(current, command.values)),
+            )
+        if command.kind is CommandKind.LINEAR_PATH_STREAM_RELATIVE:
+            group = str(command.group)
+            current = state.cartesian.get(group)
+            updated = state.cartesian_updated_at.get(group)
+            if current is None:
+                raise RuntimeError('fresh Cartesian state is required')
+            self._require_fresh(updated, state.captured_at, 'Cartesian state')
+            # Every offset is taken from the single measured start pose so
+            # the path shape does not depend on tracking of earlier points.
+            return replace(
+                command,
+                kind=CommandKind.LINEAR_PATH_STREAM_ABSOLUTE,
+                waypoints=tuple(
+                    tuple(list_sum(current, waypoint))
+                    for waypoint in command.waypoints
+                ),
             )
         return command
 
@@ -1288,6 +1433,11 @@ class PlannerTaskRunner:
                 gripper_expected += float(command.seconds or 0.0)
             expected = max(expected, gripper_expected)
 
+        if command.impedance is not None:
+            # An impedance goal holds for hold_time and then ends with the
+            # backend's re-anchor goal.
+            expected += float(command.impedance.hold_time)
+            expected += self.IMPEDANCE_REANCHOR_MARGIN_SEC
         state_aware_timeout = (
             expected * self.MOTION_TIMEOUT_SCALE
             + self.MOTION_TIMEOUT_MARGIN_SEC

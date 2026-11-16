@@ -8,6 +8,7 @@ from .qt_compat import QLabel, QWidget
 from .scenario_ui import ScenarioPanel
 
 from .task_commands import (
+    BackgroundGripperStep,
     CameraFrameLinearAbsoluteStep,
     CameraLinearAbsolutePrintStep,
     CameraLinearAbsoluteStep,
@@ -128,6 +129,19 @@ class PlannerScenarioPanel(ScenarioPanel):
                 )
                 lines.append(f'{index}. rewind: {repeat}')
                 continue
+            if isinstance(command, BackgroundGripperStep):
+                inner = command.command
+                speed = (
+                    f'{float(inner.velocity_limit):.3f} ratio/s'
+                    if inner.velocity_limit is not None
+                    else 'default'
+                )
+                lines.append(
+                    f'{index}. {inner.kind.value} (background): '
+                    f'{inner.group}; speed={speed}; next step starts '
+                    'without waiting'
+                )
+                continue
             if isinstance(command, MoveToStep):
                 lines.append(
                     f'{index}. move_to: x={command.x:.3f} m, '
@@ -177,6 +191,7 @@ class PlannerScenarioPanel(ScenarioPanel):
                 )
                 lines.append(
                     f'{index}. {step_name}: {detail}'
+                    + self._step_impedance_suffix(command)
                 )
                 continue
             if command.kind in (
@@ -209,6 +224,15 @@ class PlannerScenarioPanel(ScenarioPanel):
                 )
             elif command.kind is CommandKind.DELAY:
                 detail = f'{float(command.seconds or 0.0):.3f} s'
+            elif getattr(command, 'waypoints', ()):
+                last = [round(float(v), 4) for v in command.waypoints[-1]]
+                detail = (
+                    f'{command.group}; {len(command.waypoints)} waypoints; '
+                    f'duration={float(command.minimum_time):.2f} s; '
+                    f'v<={float(command.linear_velocity):.3f} m/s; '
+                    f'w<={float(command.angular_velocity):.3f} rad/s; '
+                    f'last={last}'
+                )
             elif command.joint_targets:
                 detail = '; '.join(
                     f'{group} {list(values)}'
@@ -216,7 +240,10 @@ class PlannerScenarioPanel(ScenarioPanel):
                 )
             else:
                 detail = f'{command.group}  {list(command.values)}'
-            lines.append(f'{index}. {command.kind.value}: {detail}')
+            lines.append(
+                f'{index}. {command.kind.value}: {detail}'
+                + self._step_impedance_suffix(command)
+            )
         self.task_preview.setPlainText('\n'.join(lines))
 
 

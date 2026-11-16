@@ -1,0 +1,7 @@
+<library path="rby1_omni_controller">
+  <class name="rby1_omni_controller::OmniPursuitController"
+         type="rby1_omni_controller::OmniPursuitController"
+         base_class_type="nav2_core::Controller">
+    <description>Omnidirectional pursuit with transit heading hold and station yaw alignment.</description>
+  </class>
+</library>

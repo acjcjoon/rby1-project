@@ -265,3 +265,57 @@ def test_task_command_state_rejects_invalid_timeout_hint(value):
             "status": "pending",
             "timeout_remaining_sec": value,
         })
+
+
+def test_stream_path_command_round_trips_waypoints():
+    command = TaskCommand(
+        kind=CommandKind.LINEAR_PATH_STREAM_RELATIVE,
+        group="right_arm",
+        waypoints=((0.01, 0.0, 0.0, 0.0, 0.0, 0.0), (0.02, 0.01, 0.0, 0.0, 0.0, 0.0)),
+        minimum_time=4.0,
+        linear_velocity=0.05,
+        angular_velocity=0.3,
+    )
+    payload = task_command_to_dict(command)
+    assert payload["waypoints"] == [
+        [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.02, 0.01, 0.0, 0.0, 0.0, 0.0],
+    ]
+    assert "values" not in payload or payload["values"] == []
+    restored = task_command_from_dict(json.loads(json.dumps(payload)))
+    assert restored == command
+    assert restored.waypoints == command.waypoints
+
+
+def test_non_path_command_rejects_waypoints_and_path_requires_them():
+    with pytest.raises(ValueError, match="only stream path"):
+        TaskCommand(
+            kind=CommandKind.LINEAR_ABSOLUTE,
+            group="right_arm",
+            values=(0.0,) * 6,
+            minimum_time=1.0,
+            linear_velocity=0.1,
+            angular_velocity=0.1,
+            acceleration_scaling=0.5,
+            waypoints=((0.0,) * 6,),
+        )
+    with pytest.raises(ValueError, match="at least one waypoint"):
+        TaskCommand(
+            kind=CommandKind.LINEAR_PATH_STREAM_ABSOLUTE,
+            group="right_arm",
+            minimum_time=1.0,
+            linear_velocity=0.1,
+            angular_velocity=0.1,
+        )
+    with pytest.raises(ValueError, match="joint/delay fields"):
+        TaskCommand(
+            kind=CommandKind.LINEAR_PATH_STREAM_ABSOLUTE,
+            group="right_arm",
+            waypoints=((0.0,) * 6,),
+            minimum_time=1.0,
+            linear_velocity=0.1,
+            angular_velocity=0.1,
+            acceleration_scaling=0.5,
+        )
+    with pytest.raises(ValueError, match="waypoints must be a list"):
+        task_command_from_dict({"kind": "linear_path_stream_absolute", "waypoints": "x"})

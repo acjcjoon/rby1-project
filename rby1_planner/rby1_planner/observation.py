@@ -201,6 +201,10 @@ def quaternion_multiply(left: Quaternion, right: Quaternion) -> Quaternion:
     ))
 
 
+# |sin(pitch)| at or above this is treated as exact gimbal lock (see below).
+GIMBAL_LOCK_EPSILON = 1.0e-12
+
+
 def quaternion_to_rpy_deg(
     orientation_xyzw: Iterable[object],
 ) -> RollPitchYawDegrees:
@@ -214,13 +218,28 @@ def quaternion_to_rpy_deg(
 
     x, y, z, w = normalize_quaternion(orientation_xyzw)
 
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
     sinp = 2.0 * (w * y - z * x)
     sinp = max(-1.0, min(1.0, sinp))
     pitch = math.asin(sinp)
+
+    if abs(sinp) >= 1.0 - GIMBAL_LOCK_EPSILON:
+        # Exact gimbal lock (|pitch| = 90 deg): the generic roll/yaw atan2
+        # terms all vanish and the combined rotation would be lost. Use
+        # roll = 0 and carry the remaining rotation in yaw so that
+        # rpy_deg_to_quaternion() reproduces the orientation exactly. This
+        # matches ManipulatorController.quaternion_to_rpy_deg.
+        return (
+            0.0,
+            math.degrees(pitch),
+            math.degrees(math.atan2(
+                2.0 * (w * z - x * y),
+                1.0 - 2.0 * (x * x + z * z),
+            )),
+        )
+
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
 
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)

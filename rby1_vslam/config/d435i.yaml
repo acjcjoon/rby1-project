@@ -5,7 +5,7 @@
     enable_infra1: true
     enable_infra2: true
     # release/4.51.1-isaac uses one profile for the depth/IR module (Y8 IR).
-    depth_module.profile: '640,360,30'
+    depth_module.profile: '640,480,60'
     depth_module.emitter_enabled: 0
     depth_module.enable_auto_exposure: true
     enable_color: false

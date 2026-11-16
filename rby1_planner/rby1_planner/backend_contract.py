@@ -110,3 +110,6 @@ class TaskBackendState:
     cartesian_updated_at: Mapping[str, Optional[float]]
     driver_safety_verified: bool
     driver_safety_updated_at: Optional[float]
+    # Manipulator control mode reported by the backend: "idle", "position",
+    # "impedance_joint" or "reanchor".
+    control_mode: str = "idle"

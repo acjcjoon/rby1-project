@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fast DDS 2.6 / ROS 2 Humble. Applied per process through
+     FASTRTPS_DEFAULT_PROFILES_FILE; this does not change system settings.
+     The camera sends two 307200-byte IR images and a 614400-byte depth image
+     at each 90 Hz tick. Give its SHM transport room for several frames.
+     Keep UDPv4 available for discovery and peers on other machines. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>rby1_camera_shm</transport_id>
+      <type>SHM</type>
+      <segment_size>33554432</segment_size>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>rby1_camera_udp</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="rby1_camera_transport" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>rby1_camera_shm</transport_id>
+        <transport_id>rby1_camera_udp</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

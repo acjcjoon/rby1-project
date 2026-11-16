@@ -83,13 +83,33 @@
     right_cartesian_target_link: ee_right
     left_cartesian_ref_link: base
     left_cartesian_target_link: ee_left
+    # Torso Cartesian steps (linear_absolute/relative with group "torso").
+    torso_cartesian_ref_link: base
+    torso_cartesian_target_link: link_torso_5
+
+    # Joint impedance (Task steps with impedance= and the Joint tab's
+    # Control: Impedance mode).
+    # After an impedance command completes, hold the measured joint state
+    # with position control so no spring force remains.
+    impedance_reanchor_enabled: true
+    impedance_reanchor_minimum_time_sec: 0.3
+    # Cartesian impedance (contact helpers, Joint tab CS Impedance mode):
+    # the TCP target is solved to a joint target on stream_path_model_file
+    # and tracked with joint impedance. Targets farther than this from the
+    # measured TCP pose are rejected; approach with position control first.
+    cartesian_impedance_max_translation_m: 0.1
+    cartesian_impedance_max_rotation_deg: 20.0
+    # Goal watchdog: a manipulation goal still active after
+    # expected_duration * scale + margin is cancelled with an error event.
+    motion_goal_timeout_scale: 3.0
+    motion_goal_timeout_margin_sec: 2.0
 
     cartesian_state_period_sec: 0.25
     # Joint-space policy used by both JS hard-limit validation and the CS
     # runtime guard. Relative paths resolve inside this package's config dir.
     joint_limits_file: joint_limits_rby1m_v1_3.yaml
     # CS only: inset both physical bounds by this many degrees.
-    cartesian_joint_limit_margin_deg: 5.0
+    cartesian_joint_limit_margin_deg: 1.0
     # CS only: stop if the active arm's JointState is older than this value.
     cartesian_joint_state_timeout_sec: 0.1
     joint_jog_minimum_time_sec: 1.0
@@ -101,3 +121,35 @@
     manual_cartesian_linear_velocity_limit: 0.05
     manual_cartesian_angular_velocity_limit: 0.2
     manual_cartesian_acceleration_scaling: 0.2
+
+    # Streamed Cartesian path (Task linear_path_relative / linear_path_absolute
+    # steps). The Task runner turns the driver stream on only for these steps
+    # and off again before the next step. The driver's own stream_cartesian
+    # IK does not converge on this robot, so this node solves the arm IK on
+    # the SDK dynamics model and streams joint targets through stream_joint.
+    # Keep stream_path_rate_hz at or below the driver's stream_hz
+    # (rby1_driver driver_parameters.yaml, 30).
+    stream_joint_action: stream_joint
+    # Robot description as served by the SDK (Robot.get_robot_model()).
+    # Relative paths resolve inside this package's config dir.
+    stream_path_model_file: rby1m_v1_3_sdk_model.urdf
+    stream_path_rate_hz: 20.0
+    # Horizon handed to the driver with every target. Slightly longer than one
+    # tick so consecutive targets blend instead of stopping at each one.
+    stream_path_tick_minimum_time_sec: 0.1
+    # Stop the path if this backend fails to send a target within this time.
+    # The driver's own 1 s stream timeout is only the last line of defense.
+    stream_path_watchdog_sec: 0.25
+    # Keep sending the final target for this long before reporting success.
+    stream_path_settle_sec: 0.3
+    # Hard caps: a path whose own velocity limits exceed these is rejected.
+    stream_path_linear_velocity_limit: 0.1
+    stream_path_angular_velocity_limit: 0.5
+    # IK acceptance: every waypoint is solved before motion starts and every
+    # tick target again while streaming. A target that does not converge
+    # within these tolerances stops the path.
+    stream_path_ik_max_iterations: 30
+    stream_path_ik_position_tolerance_m: 0.0005
+    stream_path_ik_orientation_tolerance_rad: 0.002
+    # Largest joint change allowed between consecutive streamed targets.
+    stream_path_max_joint_step_rad: 0.05

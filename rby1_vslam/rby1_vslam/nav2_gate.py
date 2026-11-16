@@ -1,4 +1,4 @@
-"""Jetson Nav2 command gate: local tracking watchdogs and cmd_raw output."""
+"""Nav2 command gate for wheel-only transit and stationary visual correction."""
 
 import json
 import math
@@ -12,6 +12,7 @@ import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
@@ -44,14 +45,19 @@ class Nav2Gate(Node):
             'nav2_cmd_topic': '/rby1/vslam/nav2_cmd_vel',
             'cmd_raw_topic': '/rby1/cmd_raw',
             'wheel_odom_topic': '/rby1/odom',
-            'slam_odom_topic': '/rby1/vslam/slam_odom',
-            'tracking_status_topic': '/rby1/vslam/tracking_status',
+            'localization_odom_topic': '/rby1/vslam/localization_odom',
             'localization_status_topic': '/rby1/vslam/localization_status',
             'status_topic': '/rby1/vslam/navigation_status',
-            'base_frame': 'base', 'slam_frame': 'vslam_map',
+            'base_frame': 'base', 'map_frame': 'vslam_map',
             'navigation_actions': ['/rby1/vslam/nav2/navigate_to_pose',
                                    '/rby1/vslam/nav2/navigate_through_poses'],
             'cancel_response_timeout_sec': 3.0, 'cancel_retry_sec': 1.0,
+            'require_nvblox': False, 'forward_only': False,
+            'nvblox_depth_topic': '/rby1/nvblox/depth',
+            'nvblox_slice_topic': '/nvblox_node/static_map_slice',
+            'nvblox_integrated_depth_topic':
+                '/nvblox_node/back_projected_depth/d435_depth_optical_frame',
+            'nvblox_slice_frame': 'odom',
         }
         defaults.update(vars(GateLimits()))
         for name, value in defaults.items():
@@ -64,18 +70,31 @@ class Nav2Gate(Node):
         if (not actions or len(set(actions)) != len(actions) or
                 any(not name.startswith('/') or name.endswith('/') for name in actions)):
             raise ValueError('navigation_actions must be unique absolute action names')
-        self.core = VelocityGate(GateLimits(**{key: self.p[key] for key in vars(GateLimits())}))
+        self.core = VelocityGate(
+            GateLimits(**{key: self.p[key] for key in vars(GateLimits())}),
+            require_nvblox=self.p['require_nvblox'], forward_only=self.p['forward_only'])
         self.arm_on_ready = bool(self.p['enabled'])
         self.velocity_pub = self.create_publisher(Twist, self.p['cmd_raw_topic'], 1)
         self.status_pub = self.create_publisher(String, self.p['status_topic'], 5)
         self.create_subscription(Twist, self.p['nav2_cmd_topic'], self.on_command, 1)
         self.create_subscription(Odometry, self.p['wheel_odom_topic'], self.on_wheel,
                                  qos_profile_sensor_data)
-        self.create_subscription(Odometry, self.p['slam_odom_topic'], self.on_slam,
+        self.create_subscription(Odometry, self.p['localization_odom_topic'], self.on_estimate,
                                  qos_profile_sensor_data)
-        self.create_subscription(String, self.p['tracking_status_topic'], self.on_tracking, 5)
         self.create_subscription(String, self.p['localization_status_topic'],
                                  self.on_localization, 5)
+        if self.p['require_nvblox']:
+            # Keep the existing non-nvblox workflow usable without its optional messages.
+            from nvblox_msgs.msg import DistanceMapSlice
+            self.create_subscription(Image, self.p['nvblox_depth_topic'], self.on_depth,
+                                     qos_profile_sensor_data)
+            self.create_subscription(DistanceMapSlice, self.p['nvblox_slice_topic'],
+                                     self.on_slice, 1)
+            # nvblox emits this only after integrateDepth() succeeds, with the
+            # input depth timestamp. Fresh camera/slice traffic alone cannot
+            # detect stalled integration (for example a missing camera TF).
+            self.create_subscription(PointCloud2, self.p['nvblox_integrated_depth_topic'],
+                                     self.on_integrated_depth, qos_profile_sensor_data)
         self.create_service(SetBool, '/rby1/vslam/enable', self.on_enable)
         self.create_service(Trigger, '/rby1/vslam/cancel', self.on_cancel)
         status_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
@@ -137,33 +156,20 @@ class Nav2Gate(Node):
             self.core.invalidate_wheel('invalid wheel odometry: ' + str(exc))
         self._stop_if_latched(was_enabled)
 
-    def on_slam(self, msg):
+    def on_estimate(self, msg):
         was_enabled = self.core.enabled
         try:
             _validate_odometry(msg)
-            if (msg.header.frame_id != self.p['slam_frame'] or
+            if (msg.header.frame_id != self.p['map_frame'] or
                     msg.child_frame_id != self.p['base_frame']):
-                raise ValueError('SLAM odometry frames differ from slam_frame/base_frame')
+                raise ValueError('localized odometry frames differ from map_frame/base_frame')
             pose = msg.pose.pose
             q = pose.orientation
             planar = (pose.position.x, pose.position.y, yaw((q.x, q.y, q.z, q.w)))
-            self.core.update_slam(planar, msg.header.frame_id, _stamp(msg.header.stamp),
-                                  time.monotonic(), self.ros_now())
+            self.core.update_estimate(planar, msg.header.frame_id, _stamp(msg.header.stamp),
+                                      time.monotonic(), self.ros_now())
         except (ValueError, TypeError, OverflowError) as exc:
-            self.core.invalidate_slam('invalid base SLAM pose: ' + str(exc))
-        self._stop_if_latched(was_enabled)
-
-    def on_tracking(self, msg):
-        was_enabled = self.core.enabled
-        try:
-            state = json.loads(msg.data)
-            session = state.get('session_id', '')
-            if not isinstance(session, str):
-                raise ValueError('session_id must be a string')
-            self.core.update_tracking(state.get('ready') is True,
-                                    state.get('tracking_ok') is True, session, time.monotonic())
-        except (ValueError, TypeError, AttributeError):
-            self.core.update_tracking(False, False, '', time.monotonic())
+            self.core.invalidate_estimate('invalid localized base pose: ' + str(exc))
         self._stop_if_latched(was_enabled)
 
     def on_localization(self, msg):
@@ -173,16 +179,63 @@ class Nav2Gate(Node):
             session = state.get('session_id', '')
             if not isinstance(session, str):
                 raise ValueError('session_id must be a string')
-            healthy = state.get('healthy') is True and state.get('map_frame') == self.p['slam_frame']
-            self.core.update_localization(healthy, session, time.monotonic())
+            healthy = state.get('healthy') is True and state.get('map_frame') == self.p['map_frame']
+            self.core.update_localization(
+                healthy, state.get('initialized') is True, state.get('navigation_ready') is True,
+                state.get('station_mode') is not False, session, time.monotonic())
         except (ValueError, TypeError, AttributeError):
-            self.core.update_localization(False, '', time.monotonic())
+            self.core.update_localization(False, False, False, True, '', time.monotonic())
+        self._stop_if_latched(was_enabled)
+
+    def on_depth(self, msg):
+        was_enabled = self.core.enabled
+        try:
+            bytes_per_pixel = {'16UC1': 2, '32FC1': 4}.get(msg.encoding)
+            if (not msg.header.frame_id or not msg.width or not msg.height or
+                    bytes_per_pixel is None or msg.step < msg.width * bytes_per_pixel or
+                    len(msg.data) != msg.step * msg.height):
+                raise ValueError('empty frame or invalid depth image layout/encoding')
+            self.core.update_observation('depth', _stamp(msg.header.stamp),
+                                         time.monotonic(), self.ros_now())
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.core.invalidate_observation('depth', 'invalid nvblox depth: ' + str(exc))
+        self._stop_if_latched(was_enabled)
+
+    def on_slice(self, msg):
+        was_enabled = self.core.enabled
+        try:
+            finite((msg.resolution, msg.origin.x, msg.origin.y, msg.origin.z, msg.unknown_value))
+            if (msg.header.frame_id != self.p['nvblox_slice_frame'] or
+                    not msg.width or not msg.height or msg.resolution <= 0 or
+                    len(msg.data) != msg.width * msg.height):
+                raise ValueError('unexpected map frame or invalid distance slice layout')
+            self.core.update_observation('slice', _stamp(msg.header.stamp),
+                                         time.monotonic(), self.ros_now())
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.core.invalidate_observation('slice', 'invalid nvblox slice: ' + str(exc))
+        self._stop_if_latched(was_enabled)
+
+    def on_integrated_depth(self, msg):
+        was_enabled = self.core.enabled
+        try:
+            if (not msg.header.frame_id or not msg.width or not msg.height or
+                    msg.point_step < 12 or msg.row_step < msg.width * msg.point_step or
+                    len(msg.data) != msg.row_step * msg.height):
+                raise ValueError('empty frame or invalid back-projected pointcloud layout')
+            self.core.update_observation('integrated_depth', _stamp(msg.header.stamp),
+                                         time.monotonic(), self.ros_now())
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.core.invalidate_observation(
+                'integrated_depth', 'invalid nvblox integrated depth: ' + str(exc))
         self._stop_if_latched(was_enabled)
 
     def on_enable(self, request, response):
         self.arm_on_ready = False
         self.core.set_competing_publisher(self.count_publishers(self.p['cmd_raw_topic']) > 1)
-        if request.data:
+        if request.data and not self.core.enabled and self.active_goal_count():
+            response.success = False
+            response.message = 'an existing Nav2 goal is still active; cancel it before enabling'
+        elif request.data:
             response.success, response.message = self.core.enable(time.monotonic(), self.ros_now())
         else:
             self.core.stop('disabled by operator; canceling Nav2 goals')
@@ -206,6 +259,12 @@ class Nav2Gate(Node):
         self.action_statuses[name] = statuses
         endpoint = self.cancel_endpoints[name]
         endpoint.status(statuses)
+        was_active = self.core.goal_active
+        # ROS action status is event-driven, not a heartbeat. Retain an active
+        # goal until a terminal snapshot; wheel/estimate watchdogs remain live.
+        self.core.set_goal_active(self.active_goal_count() > 0, time.monotonic())
+        if was_active and not self.core.goal_active and self.core.enabled:
+            self.publish_stop()
         if not self.core.enabled and endpoint.active:
             if not self.core.cancel_pending:
                 self.core.stop('Nav2 goal received while gate disabled; canceling it')
@@ -295,12 +354,25 @@ class Nav2Gate(Node):
             self.report(now, ros_now)
             self.last_status_at = now
 
+    def active_goal_count(self):
+        return sum(
+            value in (0, 1, 2, 3)
+            for statuses in self.action_statuses.values() for value in statuses.values())
+
     def report(self, now, ros_now):
         status = {
             'state': self.core.state, 'detail': self.core.detail,
             'enabled': self.core.enabled, 'session_id': self.core.session,
             'input_guard': self.core.guard(now, ros_now),
             'cancel_pending': self.core.cancel_pending,
+            'active_goal_count': self.active_goal_count(),
+            'station_mode': self.core.station_mode,
+            'require_nvblox': self.core.require_nvblox,
+            'forward_only': self.core.forward_only,
+            'depth_age_sec': (None if self.core.depth is None else now - self.core.depth[1]),
+            'slice_age_sec': (None if self.core.slice is None else now - self.core.slice[1]),
+            'integrated_depth_age_sec': (None if self.core.integrated_depth is None else
+                                         now - self.core.integrated_depth[1]),
             'cancellation': {name: {'complete': endpoint.complete, 'detail': endpoint.detail}
                              for name, endpoint in self.cancel_endpoints.items()},
             'command_age_sec': (None if self.core.command_received is None else

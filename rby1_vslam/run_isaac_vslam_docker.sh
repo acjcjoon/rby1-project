@@ -42,6 +42,13 @@ exec docker exec "${DOCKER_TTY[@]}" "$CONTAINER" \
   bash -lc '
     source /opt/ros/humble/setup.bash
     source /workspaces/isaac_ros-dev/install/setup.bash
+    # Match the host camera transport for splitter/median image publishers.
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-$(ros2 pkg prefix --share rby1_vslam)/config/fastdds_camera.xml}"
+    [[ -r "$FASTRTPS_DEFAULT_PROFILES_FILE" ]] || {
+      printf "Missing Fast DDS profile: %s\n" "$FASTRTPS_DEFAULT_PROFILES_FILE" >&2
+      exit 1
+    }
+    printf "[isaac-docker] Fast DDS profile: %s\n" "$FASTRTPS_DEFAULT_PROFILES_FILE"
     mode="$1"
     shift
     exec ros2 launch rby1_vslam jetson.launch.py \

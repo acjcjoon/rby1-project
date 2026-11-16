@@ -25,15 +25,21 @@
     size: 0.024  # D435
 
 
-# ── D405 장착 TF: ee_left -> d405_camera_center -> d405_link ──
+# ── D405 장착 TF: ee_right -> d405_camera_center -> d405_link ──
+# D405 는 오른손에 장착되어 있다 (2026-11 왼손에서 좌우 대칭 브래킷으로 이동).
+# 왼손으로 되돌릴 때: mount_parent_frame / tag_output_parent_frame 을 "ee_left" 로,
+# parent_to_camera_center_translation 의 y 부호를 반대로(-0.0035) 바꾼다.
 camera_mount_tf_publisher:
   ros__parameters:
-    mount_parent_frame: "ee_left"
+    mount_parent_frame: "ee_right"
     camera_center_frame: "d405_camera_center"
     camera_link_frame: "d405_link"
 
-    # T_ee_left_d405_camera_center
-    parent_to_camera_center_translation: [0.077391, -0.0035, 0.019559]
+    # T_ee_right_d405_camera_center
+    # ee_left / ee_right 프레임은 서로 y 축이 뒤집힌 거울 관계이므로, 좌우 대칭
+    # 장착에서는 왼손 값 [0.077391, -0.0035, 0.019559] 의 y 부호만 반대가 된다.
+    # 회전은 y 축(pitch) 회전뿐이라 거울 변환에서도 그대로다.
+    parent_to_camera_center_translation: [0.077391, 0.0035, 0.019559]
     parent_to_camera_center_rotation: [0.0, 111.0, 0.0]
 
     # T_d405_camera_center_d405_link
@@ -56,9 +62,10 @@ apriltag_node:
 depth_tag_tf_node:
   ros__parameters:
     # 기존 플래너가 사용하는 출력 이름을 유지한다.
-    #   ee_left -> tag_depth_<id>
-    #   ee_left -> tag_pnp_<id>
-    tag_output_parent_frame: "ee_left"
+    #   ee_right -> tag_depth_<id>
+    #   ee_right -> tag_pnp_<id>
+    # D405 가 달린 손의 프레임이어야 한다 (장착 TF 의 mount_parent_frame 과 동일).
+    tag_output_parent_frame: "ee_right"
 
     depth_pose_enable: false
     apply_distortion_correction: true

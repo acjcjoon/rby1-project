@@ -30,6 +30,10 @@ GRIPPER_TRANSPORT="${RBY1_GRIPPER_TRANSPORT:-real}"
 GRIPPER_AUTO_HOME="${RBY1_GRIPPER_AUTO_HOME:-true}"
 BUILD_MODE="${RBY1_BUILD_WORKSPACE:-auto}"
 CHECK_ROBOT_CONNECTION="${RBY1_CHECK_ROBOT_CONNECTION:-true}"
+# Leftover stack processes (from a crashed or half-stopped launch) register
+# duplicate action servers and preempt each other's robot commands, so they
+# are stopped before launch unless explicitly kept.
+STALE_CLEANUP="${RBY1_STALE_CLEANUP:-true}"
 STARTUP_TIMEOUT_SEC="${RBY1_STARTUP_TIMEOUT_SEC:-45}"
 D405_SERIAL="${RBY1_D405_SERIAL:-}"
 D435_SERIAL="${RBY1_D435_SERIAL:-}"
@@ -58,6 +62,7 @@ usage() {
     "  --build                      Always build the required workspace packages" \
     "  --no-build                   Never build; require an existing installation" \
     "  --skip-robot-check           Do not test the robot RPC port before launch" \
+    "  --no-stale-cleanup           Only report leftover stack processes; do not stop them" \
     "  --startup-timeout SEC        Per-topic startup timeout (default: 45)" \
     "  --d405-serial SERIAL         Pin the D405; default: select by model" \
     "  --d435-serial SERIAL         Pin the D435; default: select by model" \
@@ -145,6 +150,14 @@ while (($# > 0)); do
       GRIPPER_AUTO_HOME="$2"
       shift 2
       ;;
+    --no-stale-cleanup)
+      STALE_CLEANUP="false"
+      shift
+      ;;
+    --stale-cleanup)
+      STALE_CLEANUP="true"
+      shift
+      ;;
     --build)
       BUILD_MODE="always"
       shift
@@ -204,6 +217,8 @@ D435_SERIAL="${D435_SERIAL#_}"
   die 'RBY1_BUILD_WORKSPACE must be auto, always, or never.'
 [[ "${CHECK_ROBOT_CONNECTION}" == "true" || "${CHECK_ROBOT_CONNECTION}" == "false" ]] || \
   die 'RBY1_CHECK_ROBOT_CONNECTION must be true or false.'
+[[ "${STALE_CLEANUP}" =~ ^(true|false)$ ]] || \
+  die 'RBY1_STALE_CLEANUP must be true or false.'
 [[ "${STARTUP_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || \
   die 'Startup timeout must be a positive integer.'
 
@@ -324,6 +339,104 @@ if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
   die 'No graphical display is available (DISPLAY and WAYLAND_DISPLAY are unset).'
 fi
 
+# ---------------------------------------------------------------------------
+# Leftover processes from a previous launch.
+#
+# Every node this launcher starts is matched here. A second copy of the robot
+# driver registers a second action server: goals then reach both, the robot
+# preempts one command with the other and the UI sees spurious kCanceled
+# results. The gripper driver also holds the serial port, so a leftover copy
+# makes the new one start NOT READY.
+# ---------------------------------------------------------------------------
+STALE_PATTERN='rby1_driver/rby1_ros2_driver|rby1_gripper_driver/gripper_driver|realsense2_camera_node|apriltag_node|robot_state_publisher|camera_mount_tf_publisher|depth_tag_tf_node|rby1_navigation/navigation_node|rby1_control/rby1_control|rby1_planner/planner_ui|ros2 launch (rby1_|realsense2_camera|apriltag)|ros2 run (rby1_driver|robot_state_publisher)'
+
+list_stale_pids() {
+  # Excludes this launcher and any child it started itself.
+  local pid
+  for pid in $(pgrep -f "${STALE_PATTERN}" 2>/dev/null || true); do
+    [[ "${pid}" == "$$" ]] && continue
+    if ((${#CHILD_PIDS[@]} > 0)); then
+      local own
+      for own in "${CHILD_PIDS[@]}"; do
+        [[ "${pid}" == "${own}" ]] && continue 2
+      done
+    fi
+    printf '%s\n' "${pid}"
+  done
+}
+
+print_stale_processes() {
+  local pid
+  for pid in "$@"; do
+    ps -o pid=,lstart=,args= -p "${pid}" 2>/dev/null | cut -c1-120 || true
+  done
+}
+
+wait_for_pids_to_exit() {
+  local timeout_sec="$1"
+  shift
+  local deadline=$((SECONDS + timeout_sec))
+  local pid alive
+  while ((SECONDS < deadline)); do
+    alive="false"
+    for pid in "$@"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        alive="true"
+        break
+      fi
+    done
+    [[ "${alive}" == "false" ]] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# Stops every leftover stack process: INT, then TERM, then KILL, and finally
+# the apport crash handlers that hold a crashed realsense node open.
+# Returns 1 if something survived.
+stop_stale_processes() {
+  local -a pids
+  mapfile -t pids < <(list_stale_pids)
+  ((${#pids[@]} == 0)) && return 0
+  printf '[launcher] Stopping %d leftover process(es):\n' "${#pids[@]}"
+  print_stale_processes "${pids[@]}"
+  kill -INT "${pids[@]}" 2>/dev/null || true
+  wait_for_pids_to_exit 5 "${pids[@]}" || kill -TERM "${pids[@]}" 2>/dev/null || true
+  wait_for_pids_to_exit 3 "${pids[@]}" || kill -KILL "${pids[@]}" 2>/dev/null || true
+  pkill -f '/usr/share/apport/apport -p' 2>/dev/null || true
+  wait_for_pids_to_exit 3 "${pids[@]}"
+}
+
+CHILD_PIDS=()
+CHILD_NAMES=()
+
+other_launchers=""
+for pid in $(pgrep -f 'run_planner_ui\.sh' 2>/dev/null || true); do
+  [[ "${pid}" == "$$" || "${pid}" == "${PPID}" ]] && continue
+  # Only shells count; an editor that has the script open is not a launcher.
+  case "$(ps -o comm= -p "${pid}" 2>/dev/null)" in
+    bash|sh|dash|run_planner_ui*) other_launchers="${other_launchers:+${other_launchers}, }${pid}" ;;
+  esac
+done
+if [[ -n "${other_launchers}" ]]; then
+  die "Another run_planner_ui.sh is running (pid ${other_launchers}). Stop it with Ctrl+C in its terminal first."
+fi
+
+mapfile -t STALE_PIDS < <(list_stale_pids)
+if ((${#STALE_PIDS[@]} > 0)); then
+  if [[ "${STALE_CLEANUP}" == "true" ]]; then
+    stop_stale_processes || \
+      die 'Leftover stack processes could not be stopped. Stop them manually and retry.'
+    printf '[launcher] Leftover processes stopped.\n'
+  else
+    printf '[launcher] Leftover stack processes are running (--no-stale-cleanup):\n' >&2
+    print_stale_processes "${STALE_PIDS[@]}" >&2
+    die 'Stop them first (or run without --no-stale-cleanup).'
+  fi
+else
+  printf '[launcher] No leftover stack processes.\n'
+fi
+
 check_robot_connection() {
   python3 - "${ROBOT_IP}" <<'PY'
 import socket
@@ -356,8 +469,10 @@ if [[ "${CHECK_ROBOT_CONNECTION}" == "true" ]]; then
     die 'Robot is unreachable. Check power/network/IP, or use --skip-robot-check for diagnostics.'
 fi
 
-CHILD_PIDS=()
-CHILD_NAMES=()
+# Job control gives every background child its own process group, so the
+# cleanup below can stop a ``ros2 launch`` wrapper together with the nodes it
+# spawned instead of leaving them behind as orphans.
+set -m
 
 start_process() {
   local name="$1"
@@ -405,7 +520,11 @@ cleanup() {
   fi
 
   printf '\n[launcher] Stopping child processes...\n'
-  kill -INT "${CHILD_PIDS[@]}" 2>/dev/null || true
+  # Signal each child's whole process group (set -m above), then the
+  # processes themselves for anything that changed its group.
+  for pid in "${CHILD_PIDS[@]}"; do
+    kill -INT -- "-${pid}" 2>/dev/null || kill -INT "${pid}" 2>/dev/null || true
+  done
   deadline=$((SECONDS + 5))
   while ((SECONDS < deadline)); do
     alive="false"
@@ -418,15 +537,23 @@ cleanup() {
     [[ "${alive}" == "false" ]] && break
     sleep 0.2
   done
-
   for pid in "${CHILD_PIDS[@]}"; do
     if kill -0 "${pid}" 2>/dev/null; then
-      kill -TERM "${pid}" 2>/dev/null || true
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
     fi
   done
   for pid in "${CHILD_PIDS[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
+  # Safety net: nodes that outlived their wrapper are stopped here so the
+  # next launch never meets a duplicate driver or a held serial port.
+  CHILD_PIDS=()
+  if stop_stale_processes; then
+    printf '[launcher] All stack processes stopped.\n'
+  else
+    printf '[launcher] WARNING: some stack processes survived; check with:\n' >&2
+    printf '[launcher]   pgrep -af "rby1|realsense|apriltag|robot_state_publisher"\n' >&2
+  fi
   exit "${status}"
 }
 

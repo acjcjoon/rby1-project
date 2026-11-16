@@ -22,6 +22,16 @@ def _boolean(value, name):
     return value.strip().lower() == 'true'
 
 
+def _median_kernel_size(value):
+    try:
+        kernel_size = int(value)
+    except ValueError as error:
+        raise ValueError('median_kernel_size must be an odd integer from 3 through 9') from error
+    if kernel_size < 3 or kernel_size > 9 or kernel_size % 2 == 0:
+        raise ValueError('median_kernel_size must be an odd integer from 3 through 9')
+    return kernel_size
+
+
 def _launch(context):
     get = lambda name: LaunchConfiguration(name).perform(context)
     mode = get('mode')
@@ -35,15 +45,25 @@ def _launch(context):
     if version.split('.')[:2] != ['3', '2']:
         raise ValueError(f'Install Isaac ROS release-3.2; found isaac_ros_visual_slam {version}')
     use_sim_time = _boolean(get('use_sim_time'), 'use_sim_time')
+    use_median_filter = _boolean(get('enable_median_filter'), 'enable_median_filter')
+    use_splitter = _boolean(get('use_realsense_splitter'), 'use_realsense_splitter')
+    median_kernel_size = _median_kernel_size(get('median_kernel_size'))
     map_path = validate_path(get('map_path'), 'localize') if mode == 'localization' else ''
     parameters.update({
         'use_sim_time': use_sim_time,
         'enable_image_denoising': _boolean(get('enable_image_denoising'), 'enable_image_denoising'),
         'load_map_folder_path': map_path,
     })
+    input_prefix = '/rby1/camera' if use_splitter else '/d435/d435'
+    left_input_topic = input_prefix + '/infra1/image_rect_raw'
+    right_input_topic = input_prefix + '/infra2/image_rect_raw'
+    left_image_topic = ('/rby1/vslam/median/infra1/image_rect_raw'
+                        if use_median_filter else left_input_topic)
+    right_image_topic = ('/rby1/vslam/median/infra2/image_rect_raw'
+                         if use_median_filter else right_input_topic)
     remappings = [
-        ('visual_slam/image_0', '/d435/d435/infra1/image_rect_raw'),
-        ('visual_slam/image_1', '/d435/d435/infra2/image_rect_raw'),
+        ('visual_slam/image_0', left_image_topic),
+        ('visual_slam/image_1', right_image_topic),
         ('visual_slam/camera_info_0', '/d435/d435/infra1/camera_info'),
         ('visual_slam/camera_info_1', '/d435/d435/infra2/camera_info'),
         ('visual_slam/tracking/odometry', '/rby1/vslam/camera_odometry'),
@@ -57,7 +77,7 @@ def _launch(context):
         name='visual_slam', namespace='',
         parameters=[get('vslam_params_file'), parameters], remappings=remappings,
     )
-    return [
+    actions = [
         ComposableNodeContainer(
             name='rby1_vslam_container', namespace='', package='rclcpp_components',
             executable='component_container_mt', composable_node_descriptions=[slam],
@@ -78,6 +98,20 @@ def _launch(context):
             condition=IfCondition(LaunchConfiguration('start_rviz')),
         ),
     ]
+    if use_median_filter:
+        actions.append(Node(
+            package='rby1_vslam', executable='median_filter',
+            name='stereo_median_filter', namespace='/rby1/vslam', output='screen',
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'kernel_size': median_kernel_size,
+                'left_input_topic': left_input_topic,
+                'right_input_topic': right_input_topic,
+                'left_output_topic': '/rby1/vslam/median/infra1/image_rect_raw',
+                'right_output_topic': '/rby1/vslam/median/infra2/image_rect_raw',
+            }],
+        ))
+    return actions
 
 
 def generate_launch_description():
@@ -91,6 +125,15 @@ def generate_launch_description():
         DeclareLaunchArgument('start_rviz', default_value='false'),
         DeclareLaunchArgument('tracking_timeout_sec', default_value='0.5'),
         DeclareLaunchArgument('enable_image_denoising', default_value='false'),
+        DeclareLaunchArgument(
+            'use_realsense_splitter', default_value='false',
+            description='Consume emitter-OFF IR; jetson.launch.py starts the splitter.'),
+        DeclareLaunchArgument(
+            'enable_median_filter', default_value='true',
+            description='Apply a spatial median filter to both rectified IR images.'),
+        DeclareLaunchArgument(
+            'median_kernel_size', default_value='3',
+            description='Odd median kernel size from 3 through 9.'),
         DeclareLaunchArgument('vslam_params_file', default_value=str(share / 'config/isaac_vslam.yaml')),
         OpaqueFunction(function=_launch),
     ])

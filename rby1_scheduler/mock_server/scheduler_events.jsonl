@@ -906,3 +906,4 @@
 {"sequence":69,"timestamp":"2026-10-09T09:34:37.899147+00:00","type":"task_started","task_id":"B001.S8","mission_id":"mock-process-B001.S8-69"}
 {"sequence":70,"timestamp":"2026-10-09T09:34:41.900603+00:00","type":"task_completed","task_id":"B001.S8","mission_id":"mock-process-B001.S8-69"}
 {"sequence":71,"timestamp":"2026-10-09T09:34:41.901462+00:00","type":"task_started","task_id":"B001.T14","mission_id":"mission-c04da92769dc"}
+{"sequence":1,"timestamp":"2026-11-16T03:48:29.388730+00:00","type":"external_state_loaded","revision":2,"plates":40,"tasks":190}

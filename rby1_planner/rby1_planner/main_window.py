@@ -16,8 +16,10 @@ UI event logging is written to the terminal rather than an on-screen log panel.
 from __future__ import annotations
 
 import math
+import re
 from typing import Dict, Set
 
+from .control_commands import JointImpedance
 from .scenario_ui import ScenarioPanel
 from .qt_compat import (
     QAbstractSpinBox,
@@ -83,6 +85,23 @@ class MainWindow(QMainWindow):
     CARTESIAN_ARMS = {
         "right_arm": "Right Arm",
         "left_arm": "Left Arm",
+    }
+
+    # Joint-tab control mode.  Impedance values are editable so JS/CS
+    # compliance can be verified on the robot before a Task preset is tuned.
+    CONTROL_MODE_LABELS = {
+        "idle": ("IDLE", "#9aa0a6"),
+        "position": ("POSITION", "#4a90d9"),
+        "impedance_joint": ("IMPEDANCE (JS)", "#e0a800"),
+        "impedance_cartesian": ("IMPEDANCE (CS via IK)", "#e0a800"),
+        "reanchor": ("RE-ANCHOR -> POSITION", "#d9534f"),
+    }
+    BACKEND_EVENT_PREFIXES = ("Impedance", "Re-anchor")
+    # Joint impedance from the Joint tab is limited to the arms: a soft
+    # torso or head carries body weight and has not been verified.
+    DEFAULT_JOINT_STIFFNESS = {
+        "right_arm": "80, 80, 60, 60, 30, 30, 20",
+        "left_arm": "80, 80, 60, 60, 30, 30, 20",
     }
 
     def __init__(self, backend) -> None:
@@ -175,6 +194,9 @@ class MainWindow(QMainWindow):
             "info",
             f"UI initialized in {self.backend_name} mode.",
         )
+        warning = getattr(self, "_impedance_preset_warning", None)
+        if warning:
+            self.append_log("warning", warning)
         self.refresh_backend_status()
 
     # ==================================================================
@@ -925,7 +947,26 @@ class MainWindow(QMainWindow):
         )
         mode_layout.addWidget(self.motion_type_selector, 1)
 
+        mode_layout.addWidget(QLabel("Control"))
+        self.control_mode_selector = QComboBox()
+        self.control_mode_selector.addItem("Position", "position")
+        self.control_mode_selector.addItem("Impedance", "impedance")
+        self.control_mode_selector.setToolTip(
+            "Position: ordinary trajectory tracking.\n"
+            "Impedance: joint impedance with the values below (arms only). "
+            "Cartesian jogs and MOVE are solved to a joint target on the arm "
+            "model and tracked with the same joint impedance. After each "
+            "command the backend re-anchors to the measured joint state."
+        )
+        mode_layout.addWidget(self.control_mode_selector, 1)
+
+        mode_layout.addWidget(QLabel("State"))
+        self.control_mode_value = QLabel("IDLE")
+        self.control_mode_value.setObjectName("controlModeValue")
+        mode_layout.addWidget(self.control_mode_value, 1)
+
         root.addWidget(mode_group)
+        root.addWidget(self._build_impedance_settings_panel())
 
         self.joint_panel = self._build_joint_space_panel()
         self.cartesian_panel = self._build_cartesian_space_panel()
@@ -963,9 +1004,219 @@ class MainWindow(QMainWindow):
         self.motion_type_selector.currentIndexChanged.connect(
             self._on_motion_type_changed
         )
+        self.control_mode_selector.currentIndexChanged.connect(
+            self._on_control_mode_changed
+        )
+        self._apply_control_mode_label("idle")
         self._on_motion_type_changed()
+        self._on_control_mode_changed()
 
         return tab
+
+    def _apply_default_impedance_preset(self) -> None:
+        """Seed the Joint-tab impedance fields from settings.yaml "default".
+
+        Falls back to the built-in values if the preset cannot be read so a
+        settings typo never blocks the UI.
+        """
+
+        try:
+            from .task_commands import load_impedance_preset
+
+            preset = load_impedance_preset("default")
+        except Exception as exc:
+            self._impedance_preset_warning = (
+                f"Impedance preset 'default' unavailable, using built-in "
+                f"Joint-tab values: {exc}"
+            )
+            return
+        vector = preset.stiffness[0][1]
+        text = ", ".join(f"{value:g}" for value in vector)
+        self.DEFAULT_JOINT_STIFFNESS = {
+            group: text
+            for group, (_, dof) in self.JOINT_GROUPS.items()
+            if group in type(self).DEFAULT_JOINT_STIFFNESS and dof == len(vector)
+        }
+        self.joint_stiffness_edit.setText(text)
+        self.joint_torque_limit.setValue(float(preset.torque_limit))
+        self.joint_damping_ratio.setValue(float(preset.damping_ratio))
+
+    def _build_impedance_settings_panel(self) -> QGroupBox:
+        panel = QGroupBox("Impedance Settings")
+        layout = QGridLayout(panel)
+        layout.setHorizontalSpacing(7)
+        layout.setVerticalSpacing(4)
+
+        # Joint impedance (per-joint stiffness vector of the selected group).
+        self.joint_stiffness_edit = QLineEdit(
+            self.DEFAULT_JOINT_STIFFNESS["right_arm"]
+        )
+        self.joint_stiffness_edit.setToolTip(
+            "Per-joint stiffness (Nm/rad), one value per joint of the "
+            "selected group."
+        )
+        self.joint_torque_limit = QDoubleSpinBox()
+        self.joint_torque_limit.setDecimals(1)
+        self.joint_torque_limit.setRange(0.5, 50.0)
+        self.joint_torque_limit.setSingleStep(1.0)
+        self.joint_torque_limit.setValue(10.0)
+        self.joint_torque_limit.setSuffix(" Nm")
+        self.joint_damping_ratio = QDoubleSpinBox()
+        self.joint_damping_ratio.setDecimals(2)
+        self.joint_damping_ratio.setRange(0.05, 5.0)
+        self.joint_damping_ratio.setSingleStep(0.1)
+        self.joint_damping_ratio.setValue(1.0)
+
+        self.joint_impedance_widgets = [
+            QLabel("JS stiffness"),
+            self.joint_stiffness_edit,
+            QLabel("Torque limit"),
+            self.joint_torque_limit,
+            QLabel("Damping"),
+            self.joint_damping_ratio,
+        ]
+        for column, widget in enumerate(self.joint_impedance_widgets):
+            layout.addWidget(widget, 0, column)
+        self._apply_default_impedance_preset()
+
+        self.impedance_event_value = QLabel("-")
+        self.impedance_event_value.setObjectName("impedanceEvent")
+        self.impedance_event_value.setToolTip(
+            "Joint values before the last impedance command and after its "
+            "re-anchor (deg). Errors from the backend are shown here too."
+        )
+        layout.addWidget(QLabel("Last"), 1, 0)
+        layout.addWidget(self.impedance_event_value, 1, 1, 1, 5)
+        layout.setColumnStretch(1, 2)
+        layout.setColumnStretch(3, 2)
+
+        self.impedance_settings_panel = panel
+        return panel
+
+    def _on_joint_group_stiffness_default(self, *args) -> None:
+        del args
+        edit = getattr(self, "joint_stiffness_edit", None)
+        if edit is None:
+            return
+        group = self._selected_joint_group()
+        edit.setText(self.DEFAULT_JOINT_STIFFNESS.get(group, edit.text()))
+
+    def _on_control_mode_changed(self, *args) -> None:
+        del args
+        impedance = self._impedance_mode_selected()
+        self.impedance_settings_panel.setVisible(impedance)
+        self._on_motion_type_changed()
+
+    def _impedance_mode_selected(self) -> bool:
+        selector = getattr(self, "control_mode_selector", None)
+        return (
+            selector is not None
+            and str(selector.currentData()) == "impedance"
+        )
+
+    @staticmethod
+    def _parse_number_list(text: str, label: str) -> list:
+        values = []
+        for item in str(text).replace(";", ",").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                values.append(float(item))
+            except ValueError as exc:
+                raise ValueError(
+                    f"{label} contains a non-numeric value {item!r}"
+                ) from exc
+        if not values:
+            raise ValueError(f"{label} is empty")
+        return values
+
+    def _joint_impedance_for(self, group: str):
+        """Return the Joint-tab JointImpedance for ``group`` or None."""
+
+        if not self._impedance_mode_selected():
+            return None
+        _, dof = self.JOINT_GROUPS[group]
+        try:
+            if group not in self.DEFAULT_JOINT_STIFFNESS:
+                raise ValueError(
+                    f"Joint impedance is available for the arms only, "
+                    f"not {group}; switch Control to Position"
+                )
+            stiffness = self._parse_number_list(
+                self.joint_stiffness_edit.text(),
+                "JS stiffness",
+            )
+            if len(stiffness) != dof:
+                raise ValueError(
+                    f"JS stiffness needs {dof} values for {group}, "
+                    f"got {len(stiffness)}"
+                )
+            return JointImpedance(
+                stiffness={group: stiffness},
+                damping_ratio=float(self.joint_damping_ratio.value()),
+                torque_limit=float(self.joint_torque_limit.value()),
+            )
+        except ValueError as exc:
+            self.append_log("error", f"Joint impedance rejected: {exc}")
+            raise
+
+    def _apply_control_mode_label(self, mode: str) -> None:
+        label, color = self.CONTROL_MODE_LABELS.get(
+            str(mode),
+            (str(mode).upper(), "#9aa0a6"),
+        )
+        self.control_mode_value.setText(label)
+        self.control_mode_value.setStyleSheet(
+            f"QLabel#controlModeValue {{ color: {color}; font-weight: bold; }}"
+        )
+
+    def _refresh_control_mode(self) -> None:
+        if not hasattr(self.backend, "task_state"):
+            return
+        try:
+            mode = str(self.backend.task_state().control_mode)
+        except Exception:
+            mode = "idle"
+        if mode != getattr(self, "_shown_control_mode", None):
+            self._shown_control_mode = mode
+            self._apply_control_mode_label(mode)
+
+    _JOINT_VECTOR_PATTERN = re.compile(r"(\w+) q=(\[[^\]]*\]) deg")
+
+    def _show_impedance_events(self, events) -> None:
+        """Show the joint values before/after the last re-anchor.
+
+        The backend Re-anchor event carries the measured joint state before
+        the impedance command and the re-anchored target after it; only
+        those two vectors are shown. Errors and warnings are shown verbatim.
+        """
+
+        for level, message in events:
+            text = str(message)
+            body = text.split("] ", 1)[1] if text.startswith("[") else text
+            if not body.startswith(self.BACKEND_EVENT_PREFIXES):
+                continue
+            if level in ("error", "warning"):
+                prefix = "[ERROR] " if level == "error" else "[WARN] "
+                self.impedance_event_value.setText(prefix + body)
+                self.impedance_event_value.setToolTip(prefix + body)
+                continue
+            if not body.startswith("Re-anchor") or "position target" not in body:
+                continue
+            after_text, _, before_text = body.split("position target", 1)[
+                1
+            ].partition("before impedance")
+            after = dict(self._JOINT_VECTOR_PATTERN.findall(after_text))
+            before = dict(self._JOINT_VECTOR_PATTERN.findall(before_text))
+            parts = [
+                f"{group} {before.get(group, '?')} -> {after[group]}"
+                for group in after
+            ]
+            if parts:
+                shown = "; ".join(parts)
+                self.impedance_event_value.setText(shown)
+                self.impedance_event_value.setToolTip(body)
 
     def _on_motion_type_changed(self, *args) -> None:
         del args
@@ -974,6 +1225,13 @@ class MainWindow(QMainWindow):
 
         self.joint_panel.setVisible(mode == "joint")
         self.cartesian_panel.setVisible(mode == "cartesian")
+
+        # Impedance applies to both motion types: Cartesian targets are
+        # solved to a joint target by the backend and tracked with the same
+        # joint impedance values, so the settings panel stays shared.
+        panel = getattr(self, "impedance_settings_panel", None)
+        if panel is not None:
+            panel.setVisible(self._impedance_mode_selected())
 
         # Cartesian has dedicated Copy / MOVE buttons for each arm.
         if hasattr(self, "copy_current_button"):
@@ -996,6 +1254,9 @@ class MainWindow(QMainWindow):
         for key, (label, _) in self.JOINT_GROUPS.items():
             self.joint_group_selector.addItem(label, key)
 
+        self.joint_group_selector.currentIndexChanged.connect(
+            self._on_joint_group_stiffness_default
+        )
         self.joint_group_selector.currentIndexChanged.connect(
             self._on_joint_group_changed
         )
@@ -1526,10 +1787,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            impedance = self._joint_impedance_for(group)
+        except ValueError:
+            return
+
         self.backend.jog_joint(
             group,
             index,
             step_deg,
+            impedance=impedance,
         )
 
     def _move_joint_target(self) -> None:
@@ -1549,10 +1816,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            impedance = self._joint_impedance_for(group)
+        except ValueError:
+            return
+
         self.backend.move_joint_group(
             group,
             targets_deg,
             float(self.joint_minimum_time.value()),
+            impedance=impedance,
         )
 
     def _copy_current_joint_to_target(self) -> None:
@@ -1685,10 +1958,13 @@ class MainWindow(QMainWindow):
         self.cartesian_hold_timer.stop()
 
         # Action-level cancel stops the current arm command without using the
-        # stronger global cancel_control service.
+        # stronger global cancel_control service. In Impedance mode the
+        # current goal is left to finish (hold + re-anchor); only new jogs
+        # stop. CANCEL and STOP still cancel immediately.
         if (
             was_active
             and cancel_motion
+            and not self._impedance_mode_selected()
             and hasattr(self.backend, "cancel_active_motion")
         ):
             self.backend.cancel_active_motion()
@@ -1724,11 +2000,18 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            impedance = self._joint_impedance_for(arm)
+        except ValueError:
+            self._stop_cartesian_hold(cancel_motion=False)
+            return
+
         self.backend.jog_cartesian(
             arm,
             axis_index,
             delta,
             reference_frame="base",
+            impedance=impedance,
         )
 
     def _move_cartesian_target(self, arm: str) -> None:
@@ -1748,11 +2031,17 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            impedance = self._joint_impedance_for(arm)
+        except ValueError:
+            return
+
         self.backend.move_cartesian(
             arm,
             target,
             float(self.cartesian_minimum_time.value()),
             reference_frame="base",
+            impedance=impedance,
         )
 
     def _copy_current_cartesian_to_target(self, arm: str) -> None:
@@ -2370,11 +2659,17 @@ class MainWindow(QMainWindow):
 
         # Day 2 motion state, when the backend provides it.
         self._refresh_motion_state()
+        self._refresh_control_mode()
 
         backend_events = self.backend.drain_events()
         if self.backend_name != "ROS2":
             for level, message in backend_events:
                 self.append_log(level, message)
+        if backend_events:
+            self._show_impedance_events(backend_events)
+            scenario_panel = getattr(self, "scenario_panel", None)
+            if hasattr(scenario_panel, "append_backend_events"):
+                scenario_panel.append_backend_events(backend_events)
 
     # ==================================================================
     # Keyboard / focus safety
@@ -2580,6 +2875,7 @@ class MainWindow(QMainWindow):
 
             QDoubleSpinBox,
             QComboBox,
+            QLineEdit,
             QListWidget,
             QPlainTextEdit {
                 background: #171a1f;

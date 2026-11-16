@@ -21,7 +21,13 @@ usage() {
     "  bash rby1_vslam/recorder.sh mode2" \
     "" \
     "Default output: RBY1_BAG_DIR, else ISAAC_ROS_WS/bags, else ~/rby1_ros2_ws/bags" \
-    "ROS domain:     RBY1_ROS_DOMAIN_ID, else current ROS_DOMAIN_ID, else 0"
+    "ROS domain:     RBY1_ROS_DOMAIN_ID, else current ROS_DOMAIN_ID, else 0" \
+    "Camera context: RBY1_RECORD_CAMERA_CONTEXT=true saves initial camera parameters for offline VSLAM" \
+    "                Requires /tf_static to be visible before recording" \
+    "Live VSLAM:     RBY1_RECORD_VSLAM=true adds VSLAM outputs and initial parameter snapshots" \
+    "Camera node:    RBY1_CAMERA_NODE (default /d435/d435; used for snapshots)" \
+    "Stop recording: Ctrl-C; there is no automatic duration limit" \
+    "                Legacy RBY1_RECORD_DURATION_SEC is ignored"
 }
 
 die() {
@@ -38,6 +44,26 @@ fi
   die 'Expected MODE and an optional output bag path'
 }
 
+case "${RBY1_RECORD_VSLAM:-false}" in
+  true|false) RECORD_VSLAM="${RBY1_RECORD_VSLAM:-false}" ;;
+  *) die 'RBY1_RECORD_VSLAM must be true or false' ;;
+esac
+case "${RBY1_RECORD_CAMERA_CONTEXT-false}" in
+  true|false) RECORD_CAMERA_CONTEXT="${RBY1_RECORD_CAMERA_CONTEXT-false}" ;;
+  *) die 'RBY1_RECORD_CAMERA_CONTEXT must be true or false' ;;
+esac
+if [[ "$RECORD_VSLAM" == true ]]; then
+  RECORD_CAMERA_CONTEXT=true
+fi
+CAMERA_NODE="${RBY1_CAMERA_NODE:-/d435/d435}"
+if [[ "$RECORD_CAMERA_CONTEXT" == true ]]; then
+  [[ "$CAMERA_NODE" =~ ^/([a-zA-Z_][a-zA-Z_0-9]*/)*[a-zA-Z_][a-zA-Z_0-9]*$ ]] || \
+    die 'RBY1_CAMERA_NODE must be an absolute ROS node name'
+fi
+if [[ "$RECORD_CAMERA_CONTEXT" == true ]]; then
+  command -v timeout >/dev/null 2>&1 || die 'GNU timeout is required for parameter snapshots'
+fi
+
 case "${1,,}" in
   0|mode0|stereo)
     MODE='mode0'
@@ -49,7 +75,15 @@ case "${1,,}" in
       /d435/d435/infra2/camera_info
       /rby1/odom
     )
-    SENSOR_TOPICS=("${REQUIRED_TOPICS[@]:0:4}")
+    SENSOR_TOPICS=(
+      "${REQUIRED_TOPICS[@]:0:4}"
+      # Preserve per-frame exposure/gain evidence for stereo input experiments.
+      # These topics are optional; supported metadata fields depend on the device.
+      /d435/d435/infra1/metadata
+      /d435/d435/infra2/metadata
+      /d435/d435/extrinsics/depth_to_infra1
+      /d435/d435/extrinsics/depth_to_infra2
+    )
     ;;
   1|mode1|stereo_imu|stereo-imu|vio)
     MODE='mode1'
@@ -124,11 +158,35 @@ COMMON_TOPICS=(
   /parameter_events
 )
 RECORD_TOPICS=("${SENSOR_TOPICS[@]}" "${COMMON_TOPICS[@]}")
+if [[ "$RECORD_CAMERA_CONTEXT" == true ]]; then
+  # Offline stereo VSLAM needs the camera's static calibration transforms.
+  REQUIRED_TOPICS+=(/tf_static)
+fi
+if [[ "$RECORD_VSLAM" == true ]]; then
+  VSLAM_REQUIRED_TOPICS=(
+    /rby1/vslam/camera_odometry
+    /rby1/vslam/camera_slam_odometry
+    /rby1/vslam/tracking_status
+  )
+  REQUIRED_TOPICS+=("${VSLAM_REQUIRED_TOPICS[@]}")
+  RECORD_TOPICS+=(
+    "${VSLAM_REQUIRED_TOPICS[@]}"
+    /rby1/vslam/odom
+    /rby1/vslam/slam_odom
+    /rby1/vslam/map_origin_status
+    /rby1/vslam/localization_odom
+    /rby1/vslam/localization_status
+    /rby1/vslam/navigation_status
+  )
+fi
 
 OUTPUT_BAG="${2:-${OUTPUT_ROOT}/rby1_${MODE}_$(date +%Y%m%d_%H%M%S)}"
 OUTPUT_PARENT="$(dirname -- "$OUTPUT_BAG")"
-[[ ! -e "$OUTPUT_BAG" ]] || die "Output already exists: $OUTPUT_BAG"
-mkdir -p -- "$OUTPUT_PARENT"
+[[ ! -e "$OUTPUT_BAG" && ! -L "$OUTPUT_BAG" ]] || die "Output already exists: $OUTPUT_BAG"
+CONTEXT_DIR="${OUTPUT_BAG}.context"
+if [[ "$RECORD_CAMERA_CONTEXT" == true ]]; then
+  [[ ! -e "$CONTEXT_DIR" && ! -L "$CONTEXT_DIR" ]] || die "Initial context already exists: $CONTEXT_DIR"
+fi
 
 [[ -r "$ROS_SETUP" ]] || die "Missing ROS setup: $ROS_SETUP"
 [[ -r "$WORKSPACE_SETUP" ]] || die "Missing workspace setup: $WORKSPACE_SETUP"
@@ -145,7 +203,7 @@ ros2 bag record --help >/dev/null 2>&1 || \
 printf '[recorder] Mode: %s (%s)\n' "$MODE" "$SENSOR_DESCRIPTION"
 printf '[recorder] ROS_DOMAIN_ID=%s\n' "$ROS_DOMAIN_ID"
 printf '[recorder] Checking required topics once...\n'
-TOPIC_LIST="$(ros2 topic list 2>/dev/null)" || \
+TOPIC_LIST="$(ros2 topic list --no-daemon --spin-time 3 2>/dev/null)" || \
   die 'Could not query the ROS graph'
 MISSING_TOPICS=()
 for topic in "${REQUIRED_TOPICS[@]}"; do
@@ -156,13 +214,45 @@ done
 if ((${#MISSING_TOPICS[@]} > 0)); then
   printf '[recorder] Missing %s required topic(s):\n' "${#MISSING_TOPICS[@]}" >&2
   printf '  %s\n' "${MISSING_TOPICS[@]}" >&2
-  die 'Start run_mobile_base.sh with start_camera:=false and the matching run_d435i_host.sh mode'
+  die 'Start run_mobile_base.sh with start_camera:=false, the matching run_d435i_host.sh mode, and VSLAM when requested'
+fi
+
+mkdir -p -- "$OUTPUT_PARENT"
+if [[ "$RECORD_CAMERA_CONTEXT" == true ]]; then
+  # Publish the context directory only after requested snapshots succeed. This is
+  # initial configuration evidence, not proof that the subsequent bag completed.
+  CONTEXT_TMP="$(mktemp -d "${CONTEXT_DIR}.tmp.XXXXXX")"
+  trap 'rm -rf -- "$CONTEXT_TMP"' EXIT
+  printf '[recorder] Saving initial camera parameters...\n'
+  timeout --foreground --kill-after=5s 30s \
+    ros2 param dump --no-daemon --spin-time 3 "$CAMERA_NODE" \
+    > "$CONTEXT_TMP/camera.yaml" || die "Could not snapshot camera parameters: $CAMERA_NODE"
+  [[ -s "$CONTEXT_TMP/camera.yaml" ]] || die 'The camera parameter snapshot was empty'
+  if [[ "$RECORD_VSLAM" == true ]]; then
+    printf '[recorder] Saving initial VSLAM parameters...\n'
+    timeout --foreground --kill-after=5s 30s \
+      ros2 param dump --no-daemon --spin-time 3 /visual_slam \
+      > "$CONTEXT_TMP/vslam.yaml" || die 'Could not snapshot VSLAM parameters: /visual_slam'
+    [[ -s "$CONTEXT_TMP/vslam.yaml" ]] || die 'The VSLAM parameter snapshot was empty'
+  fi
+  {
+    printf 'stage=pre_recording\n'
+    printf 'captured_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'mode=%s\nros_domain_id=%s\ncamera_node=%s\n' "$MODE" "$ROS_DOMAIN_ID" "$CAMERA_NODE"
+    printf 'record_vslam=%s\nrecord_camera_context=%s\n' "$RECORD_VSLAM" "$RECORD_CAMERA_CONTEXT"
+    printf 'requested_duration_sec=until_interrupted\n'
+    printf '\nRequested topics:\n'
+    printf '%s\n' "${RECORD_TOPICS[@]}"
+  } > "$CONTEXT_TMP/recording.txt"
+  mv -T -- "$CONTEXT_TMP" "$CONTEXT_DIR"
+  trap - EXIT
+  printf '[recorder] Initial context: %s\n' "$CONTEXT_DIR"
 fi
 
 printf '[recorder] Required %s topics are visible.\n' "$MODE"
-printf '[recorder] Recording only the selected sensor set and RBY1 base topics.\n'
+printf '[recorder] Recording selected sensor and RBY1 base topics (VSLAM=%s).\n' "$RECORD_VSLAM"
 printf '[recorder] Output: %s\n' "$OUTPUT_BAG"
-printf '[recorder] Stop safely with Ctrl-C.\n'
+printf '[recorder] No automatic duration limit. Stop safely with Ctrl-C.\n'
 exec ros2 bag record \
   --storage sqlite3 \
   --output "$OUTPUT_BAG" \
