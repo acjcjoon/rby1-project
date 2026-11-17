@@ -41,7 +41,7 @@ class FrameCamera(FakeCamera):
 
 def alignment_task(**overrides):
     options = dict(
-        desired_tag_frame='d405_camera_center',
+        desired_tag_frame='d405_left_camera_center',
         desired_tag_x=0.0,
         desired_tag_y=0.0,
         threshold_x_minus=0.05,
@@ -74,7 +74,7 @@ def start_alignment(error, *, task=None, camera=None, navigation=True):
     messages = []
     runner = PlannerTaskRunner(
         FakeNode(), backend,
-        cameras={'d435': camera, 'd405': wrist_camera},
+        cameras={'d435': camera, 'd405_left': wrist_camera},
         navigation=nav,
         on_status=messages.append,
         clock=lambda: backend.now,
@@ -99,7 +99,7 @@ def test_camera_alignment_uses_base_axes_and_minimum_translation(
     error, expected_move,
 ):
     runner, backend, camera, _, nav, messages = start_alignment(error)
-    assert camera.lookups == [('base', 'd405_camera_center')]
+    assert camera.lookups == [('base', 'd405_left_camera_center')]
     assert camera.observation_calls[0][1]['target_frame'] == 'base'
     assert backend.commands == []
     if expected_move is None:
@@ -216,7 +216,7 @@ def test_alignment_continues_to_fresh_d405_approach_contact_and_lift(error):
     task = alignment_task().open_gripper('left')
     task.extend(_configured_tag_approach_contact_move(
         'tag_4', (0.0, 0.0, 0.15), (0.0, 0.0, 0.05),
-        (3.0, 1.0, 1.0, 1.0),
+        (3.0, 1.0, 1.0, 1.0), arm='left_arm',
     ))
     task.close_gripper('left')
     task.linear_relative(
@@ -264,6 +264,6 @@ def test_demo7_wires_camera_centre_and_threshold_arguments():
         if isinstance(command, CameraMoveToTagStep)
     )
     assert base_step.camera_source == 'd435'
-    assert base_step.desired_tag_frame == 'd405_camera_center'
+    assert base_step.desired_tag_frame == 'd405_right_camera_center'
     assert (base_step.desired_tag_x, base_step.desired_tag_y) == (0.0, 0.0)
     assert (base_step.threshold_x_minus, base_step.threshold_y_plus) == (0.05, 0.03)

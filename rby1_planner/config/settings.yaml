@@ -41,12 +41,12 @@ locations:
   AP:
     position: [-0.75, 0.0]
     side: left
-  # AP 에서 base +y 로 0.80 m. 허리 정면(front)에서 왼손으로 tag_2 기준 내려놓는다.
-  # tag_2 offset 은 LH1/LH2 값을 임시로 옮긴 것이다 (보정 전).
+  # AP 에서 base +y 로 0.70 m. 허리 정면(front)에서 왼손(d405_left)으로 tag_3 기준 내려놓는다.
+  # tag_3 은 LH1 과 같은 ID 라 offset 도 LH1 과 같아야 한다 (다르면 Reload 오류).
   ZS:
     position: [-0.75, 0.70]
     side: front
-    tag_2:
+    tag_3:
       offset: [-0.05, 0.06100, -0.009]
 
 

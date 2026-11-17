@@ -829,7 +829,7 @@ def test_camera_step_times_out_without_sending_a_motion():
 
     assert not runner.active
     assert backend.commands == []
-    assert "camera [d405] detection timed out for 'tag_5'" in messages[-1]
+    assert "camera [d405_right] detection timed out for 'tag_5'" in messages[-1]
     assert camera.reason in messages[-1]
 
 
@@ -934,7 +934,7 @@ def test_camera_step_averages_distinct_frames_and_discards_outlier():
         (1.0, 2.0, 3.0, 0.0, 0.0, 0.0)
     )
     assert (
-        "Camera average [d405] 'tag_0': collected=4, kept=3, discarded=1"
+        "Camera average [d405_right] 'tag_0': collected=4, kept=3, discarded=1"
         in messages
     )
 
@@ -983,7 +983,7 @@ def test_camera_print_step_outputs_only_clean_camera_target_without_motion():
     runner = PlannerTaskRunner(
         node,
         backend,
-        camera=camera,
+        cameras={'d405_left': camera},  # left_arm -> 왼손 손목 카메라
         on_status=messages.append,
         clock=lambda: backend.now,
     )
@@ -1065,7 +1065,7 @@ def test_camera_step_requires_an_injected_camera_client():
 
     assert not runner.active
     assert backend.commands == []
-    assert "camera source 'd405' is unavailable" in messages[-1]
+    assert "camera source 'd405_right' is unavailable" in messages[-1]
 
 
 def test_camera_step_does_not_reuse_wait_state_after_stop():
@@ -1148,7 +1148,7 @@ def test_camera_step_can_reuse_previous_observation_for_absolute_target():
     runner = PlannerTaskRunner(
         node,
         backend,
-        camera=camera,
+        cameras={'d405_left': camera},  # left_arm -> 왼손 손목 카메라
         clock=lambda: backend.now,
     )
     task = Task('approach-contact')

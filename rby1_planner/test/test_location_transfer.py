@@ -48,7 +48,7 @@ def test_automatic_transfers_match_the_existing_demo(settings_file):
     task_source.current_position = None
     actual = Task(expected.name)
     actual.extend(task_source.object_gripping_initial_pose_torso_left())
-    actual.extend(task_source.pick_up_move_and_put_down_object('LH1', 'LH2'))
+    actual.extend(task_source.pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     # The authored demo starts at LH1 and performs the same direct transfer.
     assert actual.build() == expected
@@ -56,9 +56,9 @@ def test_automatic_transfers_match_the_existing_demo(settings_file):
 
 
 def test_matching_start_skips_the_intermediate_move(settings_file):
-    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
-    actual = task_source.pick_up_move_and_put_down_object2('LH1', 'LH2')
-    expected = task_source.pick_up_move_and_put_down_object('LH1', 'LH2')
+    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
+    actual = task_source.pick_up_move_and_put_down_object2('LH1', 'LH2', arm='left_arm')
+    expected = task_source.pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm')
 
     assert actual.commands == expected.commands
     assert task_source.current_position == 'LH2'
@@ -67,12 +67,13 @@ def test_matching_start_skips_the_intermediate_move(settings_file):
 def test_initial_location_from_yaml_adds_the_first_move(settings_file):
     set_initial_location(settings_file, 'STORE')
     original_settings = settings_file.read_bytes()
-    actual = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+    actual = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     expected_commands = (
         task_source.turn_and_move('STORE', 'INBOX').commands
         + task_source.pick_up_move_and_put_down_object(
             'INBOX',
             'LH1',
+            arm='left_arm',
         ).commands
     )
 
@@ -90,29 +91,30 @@ def test_initial_location_from_yaml_adds_the_first_move(settings_file):
 def test_invalid_transfer_does_not_advance_the_position(
     settings_file, start, end,
 ):
-    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     with pytest.raises(ValueError, match='location'):
-        task_source.pick_up_move_and_put_down_object2(start, end)
+        task_source.pick_up_move_and_put_down_object2(start, end, arm='left_arm')
 
     assert task_source.current_position == 'LH1'
-    actual = task_source.pick_up_move_and_put_down_object2('STORE', 'LH2')
+    actual = task_source.pick_up_move_and_put_down_object2('STORE', 'LH2', arm='left_arm')
     assert actual.commands == (
         task_source.turn_and_move('LH1', 'STORE').commands
         + task_source.pick_up_move_and_put_down_object(
             'STORE',
             'LH2',
+            arm='left_arm',
         ).commands
     )
 
 
 def test_bad_destination_offset_does_not_advance_the_position(settings_file):
-    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+    task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     settings = yaml.safe_load(settings_file.read_text(encoding='utf-8'))
     settings['locations']['LH2']['tag_0']['offset'] = [0.0, 0.0, 'invalid']
     settings_file.write_text(yaml.safe_dump(settings), encoding='utf-8')
 
     with pytest.raises(ValueError, match='offset'):
-        task_source.pick_up_move_and_put_down_object2('STORE', 'LH2')
+        task_source.pick_up_move_and_put_down_object2('STORE', 'LH2', arm='left_arm')
     assert task_source.current_position == 'LH1'
 
 
@@ -121,18 +123,18 @@ def test_invalid_initial_location_is_rejected(settings_file, location):
     set_initial_location(settings_file, location)
 
     with pytest.raises(ValueError, match='location'):
-        task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+        task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     assert task_source.current_position is None
 
 
 def test_source_reload_resets_to_the_yaml_initial_location(settings_file):
     set_initial_location(settings_file, 'STORE')
-    first = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+    first = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     assert task_source.current_position == 'LH1'
 
     importlib.reload(task_source)
     assert task_source.current_position is None
-    second = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1')
+    second = task_source.pick_up_move_and_put_down_object2('INBOX', 'LH1', arm='left_arm')
     assert second == first
 
 

@@ -100,8 +100,9 @@ class PlannerTaskRunner:
         self.backend = backend
         self.cameras = dict(cameras or {})
         if camera is not None:
-            self.cameras.setdefault('d405', camera)
-        self.camera = self.cameras.get('d405', camera)
+            # 단일 camera 인자는 기본 카메라(오른손 D405)로 등록한다.
+            self.cameras.setdefault('d405_right', camera)
+        self.camera = self.cameras.get('d405_right', camera)
         self.navigation = navigation
         self.camera_average_enabled = camera_average_enabled
         self.camera_average_sample_count = int(camera_average_sample_count)

@@ -17,8 +17,11 @@
 
     # Camera-specific AprilTag identity/freshness inputs. Processed poses come
     # from the corresponding TF prefix, not from the detection message.
-    d405_object_pose_topic: /detections
-    d405_processed_tag_tf_prefix: tag_pnp_
+    # camera_source 이름: d405_right (오른손), d405_left (왼손), d435 (머리)
+    d405_right_object_pose_topic: /d405_right/detections
+    d405_right_processed_tag_tf_prefix: right_tag_pnp_
+    d405_left_object_pose_topic: /d405_left/detections
+    d405_left_processed_tag_tf_prefix: left_tag_pnp_
     d435_object_pose_topic: /d435/detections
     d435_processed_tag_tf_prefix: d435_tag_pnp_
 

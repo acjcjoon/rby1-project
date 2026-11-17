@@ -27,9 +27,11 @@ its correlated result, then disables the stream. Navigation publishes only
 ## Camera-centred base alignment
 
 Demo7 uses D435 tag observations in `base` and the current
-`base <- d405_camera_center` TF to align the wrist camera horizontally. Its
-subsequent D405 approach/contact, gripper close, and lift target the hand that
-carries the D405 (`D405_ARM` in `task.py`, currently the right arm / `ee_right`).
+`base <- d405_right_camera_center` TF to align the wrist camera horizontally.
+Its subsequent D405 approach/contact, gripper close, and lift target the
+hand passed as `arm` (required; the gripper is derived from it). Both wrists carry a
+D405 (`camera_source` `d405_right` / `d405_left`); camera steps that omit
+`camera_source` use the wrist camera of their arm.
 The torso and arm stay fixed relative to base during navigation; Z is not
 controlled by this base step.
 

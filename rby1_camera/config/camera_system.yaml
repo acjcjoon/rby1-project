@@ -16,54 +16,59 @@
 
 # 태그 한 변의 실제 길이 [m]. 카메라별로 독립 설정한다.
 # 각 값은 해당 카메라의 apriltag_node와 depth_tag_tf_node가 공유한다.
-"/*":
+"/d405_right/*":
   ros__parameters:
-    size: 0.024  # D405
+    size: 0.024  # D405 (오른손)
+
+"/d405_left/*":
+  ros__parameters:
+    size: 0.024  # D405 (왼손)
 
 "/d435/*":
   ros__parameters:
     size: 0.024  # D435
 
 
-# ── D405 장착 TF: ee_right -> d405_camera_center -> d405_link ──
-# D405 는 오른손에 장착되어 있다 (2026-11 왼손에서 좌우 대칭 브래킷으로 이동).
-# 왼손으로 되돌릴 때: mount_parent_frame / tag_output_parent_frame 을 "ee_left" 로,
-# parent_to_camera_center_translation 의 y 부호를 반대로(-0.0035) 바꾼다.
-camera_mount_tf_publisher:
+# 카메라 이름 = launch 네임스페이스 = planner camera_source
+#   d405_right (오른손 손목), d405_left (왼손 손목), d435 (머리)
+
+
+# ── 오른손 D405 장착 TF: ee_right -> d405_right_camera_center -> d405_right_link ──
+/d405_right/camera_mount_tf_publisher:
   ros__parameters:
     mount_parent_frame: "ee_right"
-    camera_center_frame: "d405_camera_center"
-    camera_link_frame: "d405_link"
+    camera_center_frame: "d405_right_camera_center"
+    camera_link_frame: "d405_right_link"
 
-    # T_ee_right_d405_camera_center
+    # T_ee_right_d405_right_camera_center
     # ee_left / ee_right 프레임은 서로 y 축이 뒤집힌 거울 관계이므로, 좌우 대칭
     # 장착에서는 왼손 값 [0.077391, -0.0035, 0.019559] 의 y 부호만 반대가 된다.
     # 회전은 y 축(pitch) 회전뿐이라 거울 변환에서도 그대로다.
     parent_to_camera_center_translation: [0.077391, 0.0035, 0.019559]
     parent_to_camera_center_rotation: [0.0, 111.0, 0.0]
 
-    # T_d405_camera_center_d405_link
-    # offset은 회전된 d405_link 축으로 표현한
-    # d405_camera_center -> d405_link 원점 벡터이다.
+    # T_d405_right_camera_center_d405_right_link
+    # offset은 회전된 d405_right_link 축으로 표현한
+    # d405_right_camera_center -> d405_right_link 원점 벡터이다.
     # 실제 TF translation은 R_center_link * offset으로 계산한다.
     camera_center_to_camera_link_offset_in_link_axes: [0.0, 0.009, 0.0]
     camera_center_to_camera_link_rotation: [90.0, 0.0, 0.0]
 
 
-# ── D405 AprilTag 검출 ────────────────────────────────────────
-apriltag_node:
+# ── 오른손 D405 AprilTag 검출 ────────────────────────────────
+/d405_right/apriltag_node:
   ros__parameters:
     family: "36h11"
+    # raw TF tag36h11:<id> 는 오른손만 발행한다 (왼손/D435 는 false).
     publish_tf: true
     image_transport: "raw"
 
 
-# ── D405 Depth/PnP 태그 TF ───────────────────────────────────
-depth_tag_tf_node:
+# ── 오른손 D405 Depth/PnP 태그 TF ────────────────────────────
+/d405_right/depth_tag_tf_node:
   ros__parameters:
-    # 기존 플래너가 사용하는 출력 이름을 유지한다.
-    #   ee_right -> tag_depth_<id>
-    #   ee_right -> tag_pnp_<id>
+    #   ee_right -> right_tag_depth_<id>
+    #   ee_right -> right_tag_pnp_<id>
     # D405 가 달린 손의 프레임이어야 한다 (장착 TF 의 mount_parent_frame 과 동일).
     tag_output_parent_frame: "ee_right"
 
@@ -73,13 +78,60 @@ depth_tag_tf_node:
     samples_per_trigger: 100
     outlier_trim_ratio: 0.2
 
-    depth_tag_child_frame_prefix: "tag_depth_"
+    depth_tag_child_frame_prefix: "right_tag_depth_"
     depth_window_radius: 1
     depth_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
 
     pnp_enable: true
-    pnp_tag_child_frame_prefix: "tag_pnp_"
+    pnp_tag_child_frame_prefix: "right_tag_pnp_"
     pnp_raw_tag_frame_format: "tag36h11:{id}"
+    pnp_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
+
+
+# ── 왼손 D405 장착 TF: ee_left -> d405_left_camera_center -> d405_left_link ──
+# 오른손과 좌우 대칭 브래킷 (2026-10 까지 쓰던 왼손 장착값과 동일). ee_left/ee_right 는 y 축이 거울 관계라 y 부호만 반대.
+/d405_left/camera_mount_tf_publisher:
+  ros__parameters:
+    mount_parent_frame: "ee_left"
+    camera_center_frame: "d405_left_camera_center"
+    camera_link_frame: "d405_left_link"
+    parent_to_camera_center_translation: [0.077391, -0.0035, 0.019559]
+    parent_to_camera_center_rotation: [0.0, 111.0, 0.0]
+    camera_center_to_camera_link_offset_in_link_axes: [0.0, 0.009, 0.0]
+    camera_center_to_camera_link_rotation: [90.0, 0.0, 0.0]
+
+
+# ── 왼손 D405 AprilTag 검출 ──────────────────────────────────
+/d405_left/apriltag_node:
+  ros__parameters:
+    family: "36h11"
+    # 오른손 D405 가 tag36h11:<id> 를 발행하므로 raw TF 중복을 막는다.
+    # PnP 는 아래 노드가 코너 + CameraInfo 로 직접 계산한다.
+    publish_tf: false
+    image_transport: "raw"
+
+
+# ── 왼손 D405 Depth/PnP 태그 TF ──────────────────────────────
+/d405_left/depth_tag_tf_node:
+  ros__parameters:
+    #   ee_left -> left_tag_depth_<id>
+    #   ee_left -> left_tag_pnp_<id>
+    tag_output_parent_frame: "ee_left"
+
+    depth_pose_enable: false
+    # true 여야 raw TF 없이 직접 PnP 를 계산한다 (publish_tf: false 와 짝).
+    apply_distortion_correction: true
+    trigger_mode: false
+    samples_per_trigger: 100
+    outlier_trim_ratio: 0.2
+
+    depth_tag_child_frame_prefix: "left_tag_depth_"
+    depth_window_radius: 1
+    depth_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
+
+    pnp_enable: true
+    pnp_tag_child_frame_prefix: "left_tag_pnp_"
+    pnp_raw_tag_frame_format: "d405_left_tag36h11:{id}"
     pnp_tag_frame_rotation_correction: [180.0, 180.0, 180.0]
 
 
@@ -107,7 +159,7 @@ depth_tag_tf_node:
 /d435/apriltag_node:
   ros__parameters:
     family: "36h11"
-    # D405가 이미 tag36h11:<id>를 발행하므로 raw TF 중복을 막는다.
+    # 오른손 D405가 이미 tag36h11:<id>를 발행하므로 raw TF 중복을 막는다.
     # D435의 최종 TF는 아래 노드가 d435_tag_* 이름으로 발행한다.
     publish_tf: false
     image_transport: "raw"
@@ -116,7 +168,7 @@ depth_tag_tf_node:
 # ── D435 Depth/PnP 태그 TF ───────────────────────────────────
 /d435/depth_tag_tf_node:
   ros__parameters:
-    # D405와 child frame 이름이 겹치지 않도록 d435_ 접두사를 붙인다.
+    # 손목 D405와 child frame 이름이 겹치지 않도록 d435_ 접두사를 붙인다.
     #   base -> d435_tag_depth_<id>
     #   base -> d435_tag_pnp_<id>
     tag_output_parent_frame: "base"

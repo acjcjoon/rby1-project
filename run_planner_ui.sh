@@ -35,7 +35,11 @@ CHECK_ROBOT_CONNECTION="${RBY1_CHECK_ROBOT_CONNECTION:-true}"
 # are stopped before launch unless explicitly kept.
 STALE_CLEANUP="${RBY1_STALE_CLEANUP:-true}"
 STARTUP_TIMEOUT_SEC="${RBY1_STARTUP_TIMEOUT_SEC:-45}"
-D405_SERIAL="${RBY1_D405_SERIAL:-}"
+# 손목 D405 두 대는 모델이 같아 모델 자동선택이 불가능하므로 시리얼로 고정한다.
+# librealsense 시리얼이다 (USB descriptor 의 serial 과 다르다). realsense 노드 로그의
+# "Device with serial number ... was found" 값을 쓴다.
+D405_SERIAL="${RBY1_D405_SERIAL:-262622274864}"            # 오른손 (USB 2-3.2)
+D405_LEFT_SERIAL="${RBY1_D405_LEFT_SERIAL:-260322273756}"  # 왼손 (USB 2-3.3)
 D435_SERIAL="${RBY1_D435_SERIAL:-}"
 
 usage() {
@@ -64,7 +68,8 @@ usage() {
     "  --skip-robot-check           Do not test the robot RPC port before launch" \
     "  --no-stale-cleanup           Only report leftover stack processes; do not stop them" \
     "  --startup-timeout SEC        Per-topic startup timeout (default: 45)" \
-    "  --d405-serial SERIAL         Pin the D405; default: select by model" \
+    "  --d405-serial SERIAL         Right-wrist D405 serial (default: 262622274864)" \
+    "  --d405-left-serial SERIAL    Left-wrist D405 serial (default: 260322273756)" \
     "  --d435-serial SERIAL         Pin the D435; default: select by model" \
     "  -h, --help                   Show this help"
 }
@@ -180,6 +185,11 @@ while (($# > 0)); do
       D405_SERIAL="$2"
       shift 2
       ;;
+    --d405-left-serial)
+      require_value "$1" "$#"
+      D405_LEFT_SERIAL="$2"
+      shift 2
+      ;;
     --d435-serial)
       require_value "$1" "$#"
       D435_SERIAL="$2"
@@ -199,14 +209,17 @@ done
 
 NAMESPACE="${NAMESPACE#/}"
 D405_SERIAL="${D405_SERIAL#_}"
+D405_LEFT_SERIAL="${D405_LEFT_SERIAL#_}"
 D435_SERIAL="${D435_SERIAL#_}"
 [[ -n "${NAMESPACE}" ]] || die 'Namespace must not be empty.'
-[[ -z "${D405_SERIAL}" || "${D405_SERIAL}" =~ ^[0-9]+$ ]] || \
-  die 'D405 serial must contain digits only.'
+[[ "${D405_SERIAL}" =~ ^[0-9]+$ && "${D405_LEFT_SERIAL}" =~ ^[0-9]+$ ]] || \
+  die 'Both wrist D405 serials are required (digits only): two D405s cannot be told apart by model.'
 [[ -z "${D435_SERIAL}" || "${D435_SERIAL}" =~ ^[0-9]+$ ]] || \
   die 'D435 serial must contain digits only.'
-[[ -z "${D405_SERIAL}" || -z "${D435_SERIAL}" || "${D405_SERIAL}" != "${D435_SERIAL}" ]] || \
-  die 'D405 and D435 serial numbers must be different.'
+[[ "${D405_SERIAL}" != "${D405_LEFT_SERIAL}" \
+   && "${D405_SERIAL}" != "${D435_SERIAL}" \
+   && "${D405_LEFT_SERIAL}" != "${D435_SERIAL}" ]] || \
+  die 'Right D405, left D405 and D435 serial numbers must all be different.'
 [[ "${ROBOT_MODEL}" == "a" || "${ROBOT_MODEL}" == "m" ]] || \
   die 'Robot model must be a or m.'
 [[ "${GRIPPER_TRANSPORT}" == "real" || "${GRIPPER_TRANSPORT}" == "sim" ]] || \
@@ -568,7 +581,8 @@ printf '%s\n' \
   "[launcher] robot=${ROBOT_MODEL} v${ROBOT_VERSION}" \
   "[launcher] robot_ip=${ROBOT_IP}" \
   "[launcher] gripper=${GRIPPER_TRANSPORT}, auto_home=${GRIPPER_AUTO_HOME}" \
-  "[launcher] d405=${D405_SERIAL:-auto-by-model}" \
+  "[launcher] d405_right=${D405_SERIAL}" \
+  "[launcher] d405_left=${D405_LEFT_SERIAL}" \
   "[launcher] d435=${D435_SERIAL:-auto-by-model}"
 
 if [[ "${GRIPPER_TRANSPORT}" == "real" && "${GRIPPER_AUTO_HOME}" == "true" ]]; then
@@ -600,20 +614,29 @@ start_process gripper_driver \
   "auto_home:=${GRIPPER_AUTO_HOME}"
 wait_for_topic "/${NAMESPACE}/gripper/ready" gripper_driver
 
-D405_REALSENSE_ARGS=(
-  ros2 launch realsense2_camera rs_launch.py
-  camera_namespace:=d405
-  camera_name:=d405
-  device_type:=d405
-  enable_color:=true
-  enable_depth:=false
+# 손목 D405 두 대: namespace/camera_name 을 손별로 나눠 토픽과 드라이버 TF
+# (d405_right_*, d405_left_*)를 분리한다. device_type 은 모델명이라 둘 다 d405.
+start_process realsense_d405_right \
+  ros2 launch realsense2_camera rs_launch.py \
+  camera_namespace:=d405_right \
+  camera_name:=d405_right \
+  device_type:=d405 \
+  "serial_no:=_${D405_SERIAL}" \
+  enable_color:=true \
+  enable_depth:=false \
   align_depth.enable:=false
-)
-if [[ -n "${D405_SERIAL}" ]]; then
-  D405_REALSENSE_ARGS+=("serial_no:=_${D405_SERIAL}")
-fi
-start_process realsense_d405 "${D405_REALSENSE_ARGS[@]}"
-wait_for_topic '/d405/d405/color/image_raw' realsense_d405
+wait_for_topic '/d405_right/d405_right/color/image_raw' realsense_d405_right
+
+start_process realsense_d405_left \
+  ros2 launch realsense2_camera rs_launch.py \
+  camera_namespace:=d405_left \
+  camera_name:=d405_left \
+  device_type:=d405 \
+  "serial_no:=_${D405_LEFT_SERIAL}" \
+  enable_color:=true \
+  enable_depth:=false \
+  align_depth.enable:=false
+wait_for_topic '/d405_left/d405_left/color/image_raw' realsense_d405_left
 
 D435_REALSENSE_ARGS=(
   ros2 launch realsense2_camera rs_launch.py

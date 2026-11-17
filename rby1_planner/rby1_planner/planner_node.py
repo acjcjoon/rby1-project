@@ -14,6 +14,14 @@ from .task_runner import PlannerTaskRunner
 from .transfer_action_server import TransferActionServer
 
 
+# camera_source -> (detections 토픽, 가공 태그 TF prefix)
+CAMERA_DEFAULTS = {
+    'd405_right': ('/d405_right/detections', 'right_tag_pnp_'),
+    'd405_left': ('/d405_left/detections', 'left_tag_pnp_'),
+    'd435': ('/d435/detections', 'd435_tag_pnp_'),
+}
+
+
 class PlannerNode(Node):
     """Plan tasks while composing an independent control protocol client.
 
@@ -30,19 +38,13 @@ class PlannerNode(Node):
         super().__init__('rby1_planner', namespace=namespace)
         self.control = ControlClient(self)
 
-        self.declare_parameter('d405_object_pose_topic', '/detections')
-        self.declare_parameter(
-            'd405_processed_tag_tf_prefix',
-            'tag_pnp_',
-        )
-        self.declare_parameter(
-            'd435_object_pose_topic',
-            '/d435/detections',
-        )
-        self.declare_parameter(
-            'd435_processed_tag_tf_prefix',
-            'd435_tag_pnp_',
-        )
+        # camera_source -> (detections 토픽, 가공 태그 TF prefix) 기본값.
+        # rby1_camera/config/camera_system.yaml 의 카메라별 블록과 짝을 이룬다.
+        for source, (topic, prefix) in CAMERA_DEFAULTS.items():
+            self.declare_parameter(f'{source}_object_pose_topic', topic)
+            self.declare_parameter(
+                f'{source}_processed_tag_tf_prefix', prefix
+            )
         self.declare_parameter('object_pose_target_frame', 'base')
         self.declare_parameter('object_pose_max_age_sec', 0.5)
         self.declare_parameter('object_pose_min_confidence', 0.5)
@@ -83,39 +85,25 @@ class PlannerNode(Node):
                 self.get_parameter('object_pose_tf_timeout_sec').value
             ),
         }
-        d405_camera = CameraClient(
-            self,
-            object_pose_topic=str(
-                self.get_parameter('d405_object_pose_topic').value
-            ),
-            processed_tag_tf_prefix=str(
-                self.get_parameter(
-                    'd405_processed_tag_tf_prefix'
-                ).value
-            ),
-            tf_buffer=tf_buffer,
-            **shared_camera_options,
-        )
-        d435_camera = CameraClient(
-            self,
-            object_pose_topic=str(
-                self.get_parameter('d435_object_pose_topic').value
-            ),
-            processed_tag_tf_prefix=str(
-                self.get_parameter(
-                    'd435_processed_tag_tf_prefix'
-                ).value
-            ),
-            tf_buffer=d405_camera.tf_buffer,
-            **shared_camera_options,
-        )
-        self.cameras = {
-            'd405': d405_camera,
-            'd435': d435_camera,
-        }
-        # Keep the current runner contract until camera-source selection is
-        # implemented. Existing Tasks therefore continue to consume D405.
-        self.camera = self.cameras['d405']
+        # 모든 카메라가 하나의 TF buffer 를 공유한다.
+        self.cameras = {}
+        for source in CAMERA_DEFAULTS:
+            self.cameras[source] = CameraClient(
+                self,
+                object_pose_topic=str(
+                    self.get_parameter(f'{source}_object_pose_topic').value
+                ),
+                processed_tag_tf_prefix=str(
+                    self.get_parameter(
+                        f'{source}_processed_tag_tf_prefix'
+                    ).value
+                ),
+                tf_buffer=tf_buffer,
+                **shared_camera_options,
+            )
+            tf_buffer = self.cameras[source].tf_buffer
+        # camera_source 를 지정하지 않은 레거시 경로의 기본 카메라 (오른손 D405).
+        self.camera = self.cameras['d405_right']
         self.navigation_client = NavigationClient(
             self,
             command_topic=str(

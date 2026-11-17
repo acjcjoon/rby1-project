@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import Optional, Sequence
 
 from .task_commands import (
     JointImpedance,
@@ -15,16 +15,31 @@ from .task_commands import (
     _move_location,
     arc_waypoints,
     list_sum,
+    wrist_camera_frame,
 )
 
 
 # Task 작성 단위: 초, 미터, 도
 # TCP 움직임 설정: [최소 시간, 선속도, 각속도, 가속도 비율]
-# D405 카메라가 장착된 손. 카메라 기반 접근/파지 스텝은 이 팔과 그리퍼를 쓴다.
-# 카메라를 다른 손으로 옮기면 여기와 rby1_camera/config/camera_system.yaml 의
-# mount_parent_frame / tag_output_parent_frame 을 함께 바꾼다.
-D405_ARM = 'right_arm'
-D405_GRIPPER = 'right'
+# 손목 D405 는 양손에 있다 (camera_source d405_right / d405_left).
+# 파지/배치 helper(align_base_and_*, *_object_at, pick_up_move_and_put_down_object*)는
+# 기본 손이 없다: arm='right_arm' / 'left_arm' 을 반드시 넘긴다 (빠지면 Reload 시 오류).
+# 그리퍼와 손목 카메라(camera_source / camera_frame)는 arm 에서 자동으로 정해진다.
+
+# 스위치/문 Task 전용 손. 해당 Task 의 오프셋/자세는 ee_right 기준으로 측정한 값이다.
+SWITCH_DOOR_ARM = 'right_arm'
+SWITCH_DOOR_GRIPPER = 'right'
+
+_GRIPPER_BY_ARM = {'right_arm': 'right', 'left_arm': 'left'}
+
+
+def _gripper_for(arm: str) -> str:
+    try:
+        return _GRIPPER_BY_ARM[arm]
+    except KeyError:
+        raise ValueError(f"arm must be 'right_arm' or 'left_arm', got {arm!r}") from None
+
+
 # 태그 기준 D405 손(ee) 자세: 태그와 같은 방향
 _OBJECT_TO_D405_EE_ORIENTATION_XYZW = (0.0, 0.0, 0.0, 1.0)
 
@@ -114,9 +129,12 @@ def object_gripping_initial_pose_torso_left() -> Task:
 
 def pose_before_base_movement() -> Task:
     task = Task('pose_before_base_movement')
+    # 오른팔: object_gripping_initial_pose_torso_left 에서 TCP 를 base (-y 0.12 -> +x 0.07) 옮긴 자세
+    # (손 방향 동일, SDK 모델 IK 계산값). 이전 값:
+    # right_arm=[-16.485584, -81.212678, 36.201365, -117.319844, 5.521069, 37.464697, 72.280151]
     task.whole_body_joint_absolute(
         torso=(0.065048, 45.375276, -90.959835, 45.153373, 0.026976, 90.00),
-        right_arm=[-16.485584, -81.212678, 36.201365, -117.319844, 5.521069, 37.464697, 72.280151],
+        right_arm=[-8.030944, -85.718373, 30.622439, -119.996443, 3.002524, 34.710418, 68.873201],
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
         joint_motion=(5.0, 2.0, 3.0),
     )
@@ -144,7 +162,7 @@ def door_handle_grasp_pose() -> Task:
     return task.build()
 
 
-def _configured_tag_approach_contact_move(object_id: str, approach_offset: Sequence[object], contact_offset: Sequence[object], tcp_motion: Sequence[object], *, arm: str = D405_ARM, camera_source: str = 'd405') -> RunnableTaskDefinition:
+def _configured_tag_approach_contact_move(object_id: str, approach_offset: Sequence[object], contact_offset: Sequence[object], tcp_motion: Sequence[object], *, arm: str, camera_source: Optional[str] = None) -> RunnableTaskDefinition:
     approach = tuple(float(value) for value in approach_offset)
     contact = tuple(float(value) for value in contact_offset)
     if len(approach) != 3 or len(contact) != 3:
@@ -217,26 +235,67 @@ def turn_right_and_move_right()-> RunnableTaskDefinition:
     return task.build()
 
 
+# 제자리 파지/배치 공통 값 (base 정렬 버전도 같은 값을 쓴다)
+PICK_PLACE_CONTACT_OFFSET = (0.0, 0.0, 0.065)  # 태그 기준 접촉 지점 (+ settings.yaml 태그 오프셋)
+PICK_PLACE_LIFT_M = 0.075                      # 접근 높이 = 접촉 + 이 값, 파지/배치 후 상승 거리
+PICK_PLACE_APPROACH_MOTION = (3.0, 1.0, 1.0, 1.0)
+PICK_LIFT_MOTION = (1.0, 1.0, 1.0, 1.0)
+PLACE_LIFT_MOTION = (3.0, 1.0, 1.0, 1.0)
+
+
+def _pick_place_offsets() -> tuple[list, list]:
+    contact = list(PICK_PLACE_CONTACT_OFFSET)
+    return list_sum(contact, [0.0, 0.0, PICK_PLACE_LIFT_M]), contact
+
+
+def pick_up_object_in_place(
+    object_id: str, *, arm: str, camera_source: Optional[str] = None,
+) -> RunnableTaskDefinition:
+    """base 이동 없이 현재 자세에서 손목 카메라로 태그를 보고 그리퍼 열기 -> 접근·접촉 -> 파지 -> 상승."""
+    gripper = _gripper_for(arm)
+    approach_offset, contact_offset = _pick_place_offsets()
+    task = Task(f'pick_up_object_in_place_{object_id}')
+    task.open_gripper(gripper)
+    task.extend(_configured_tag_approach_contact_move(
+        object_id, approach_offset, contact_offset, PICK_PLACE_APPROACH_MOTION,
+        arm=arm, camera_source=camera_source,
+    ))
+    task.close_gripper(gripper)
+    task.linear_relative(arm, (0.0, 0.0, PICK_PLACE_LIFT_M, 0.0, 0.0, 0.0), PICK_LIFT_MOTION)
+    return task.build()
+
+
+def put_down_object_in_place(
+    object_id: str, *, arm: str, camera_source: Optional[str] = None,
+) -> RunnableTaskDefinition:
+    """base 이동 없이 현재 자세에서 손목 카메라로 태그를 보고 접근·접촉 -> 놓기 -> 상승."""
+    gripper = _gripper_for(arm)
+    approach_offset, contact_offset = _pick_place_offsets()
+    task = Task(f'put_down_object_in_place_{object_id}')
+    task.extend(_configured_tag_approach_contact_move(
+        object_id, approach_offset, contact_offset, PICK_PLACE_APPROACH_MOTION,
+        arm=arm, camera_source=camera_source,
+    ))
+    task.open_gripper(gripper)
+    task.linear_relative(arm, (0.0, 0.0, PICK_PLACE_LIFT_M, 0.0, 0.0, 0.0), PLACE_LIFT_MOTION)
+    return task.build()
+
+
 def align_base_and_put_down_object(
     object_id: str,
     *,
     threshold_x_minus: float = 0.0,
     threshold_y_plus: float = 0.0,
-    arm: str = D405_ARM,
-    gripper: str = D405_GRIPPER,
-    camera_source: str = 'd405',
-    camera_frame: str = 'd405_camera_center',
+    arm: str,
+    camera_source: Optional[str] = None,
+    camera_frame: Optional[str] = None,
 ) -> RunnableTaskDefinition:
     """동일 태그로 base 정렬 후 접근·접촉하고 물체를 놓는다.
 
-    arm/gripper/camera_source/camera_frame 기본값은 기존(오른손 D405)과 같다.
+    arm 필수. 그리퍼와 camera_source/camera_frame(생략 시)은 arm 에서 정한다.
     """
+    camera_frame = wrist_camera_frame(arm, camera_frame)
     task = Task(f'align_base_and_put_down_object_{object_id}')
-    tcp_motion = [3.0, 1.0, 1.0, 1.0]
-    pickup_distance = 0.075
-    contact_offset = [0.0, 0.0, 0.065]
-    approach_offset = list_sum(contact_offset, [0.0, 0.0, pickup_distance])
-    pickup_motion = [3.0, 1.0, 1.0, 1.0]
 
     task.move_base_to_detected_tag(
         camera_source='d435', object_id=object_id,
@@ -246,12 +305,7 @@ def align_base_and_put_down_object(
         max_translation_m=0.8,
     )
     task.delay(1000)
-    task.extend(_configured_tag_approach_contact_move(
-        object_id, approach_offset, contact_offset, pickup_motion,
-        arm=arm, camera_source=camera_source,
-    ))
-    task.open_gripper(gripper)
-    task.linear_relative(arm, (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
+    task.extend(put_down_object_in_place(object_id, arm=arm, camera_source=camera_source))
     task.extend(object_gripping_initial_pose_temp())
     return task.build()
 
@@ -261,29 +315,26 @@ def align_base_and_pick_up_object(
     *,
     threshold_x_minus: float = 0.0,
     threshold_y_plus: float = 0.0,
+    arm: str,
+    camera_source: Optional[str] = None,
+    camera_frame: Optional[str] = None,
 ) -> RunnableTaskDefinition:
-    """동일 태그로 base 정렬 후 그리퍼를 열고 접근·파지·상승한다."""
+    """동일 태그로 base 정렬 후 그리퍼를 열고 접근·파지·상승한다.
+
+    arm 필수. 그리퍼와 camera_source/camera_frame(생략 시)은 arm 에서 정한다.
+    """
+    camera_frame = wrist_camera_frame(arm, camera_frame)
     task = Task(f'align_base_and_pick_up_object_{object_id}')
-    tcp_motion = [1.0, 1.0, 1.0, 1.0]
-    pickup_distance = 0.075
-    contact_offset = [0.0, 0.0, 0.065] 
-    approach_offset = list_sum(contact_offset, [0.0, 0.0, pickup_distance])
-    pickup_motion = [3.0, 1.0, 1.0, 1.0]
 
     task.move_base_to_detected_tag(
         camera_source='d435', object_id=object_id,
-        desired_tag_x=0.0, desired_tag_y=0.0, desired_tag_frame='d405_camera_center',
+        desired_tag_x=0.0, desired_tag_y=0.0, desired_tag_frame=camera_frame,
         threshold_x_minus=threshold_x_minus, threshold_y_plus=threshold_y_plus,
         relative_yaw=0.0, detection_timeout_sec=5.0, navigation_timeout_sec=30.0,
         max_translation_m=0.8,
     )
     task.delay(1000)
-    task.open_gripper(D405_GRIPPER)
-    task.extend(_configured_tag_approach_contact_move(
-        object_id, approach_offset, contact_offset, pickup_motion,
-    ))
-    task.close_gripper(D405_GRIPPER)
-    task.linear_relative(D405_ARM, (0.0, 0.0, pickup_distance, 0.0, 0.0, 0.0), tcp_motion)
+    task.extend(pick_up_object_in_place(object_id, arm=arm, camera_source=camera_source))
     task.extend(object_gripping_initial_pose_temp())
     return task.build()
 
@@ -327,7 +378,7 @@ def align_base_to_tag6(
 #   Translation [0.4388, -0.1004, -0.0353]  (z 는 사용하지 않음)
 # 따라서 align_base_to_tag6 -> align_base_to_tag7 순서로 실행하면 base 가 움직이지 않는다.
 # ALIGN_TAG6_DESIRED_XY_IN_D435 를 바꾸면 이 값도 그 위치에서 다시 측정해야 한다.
-ALIGN_TAG7_DESIRED_XY_IN_D435 = (0.4388, -0.1004)
+ALIGN_TAG7_DESIRED_XY_IN_D435 = (0.4188, -0.1004)
 
 
 def align_base_to_tag7(
@@ -370,8 +421,8 @@ def search_switch_pose() -> Task:
 # 스위치 누르기 (D405 로 tag_5 관측 -> 접근 -> 직선 누름 -> 후퇴)
 #
 # 2026-11-11 search_switch_pose 에서 측정한 기하:
-#   tf2_echo base tag_pnp_5      : 태그 z 축 = base +y (로봇 쪽), 태그 y 축 = 위, 벽은 -y
-#   tf2_echo tag_pnp_5 ee_right  : TCP 가 태그 평면 앞 0.123 m, 태그 y 로 -0.040 m,
+#   tf2_echo base right_tag_pnp_5      : 태그 z 축 = base +y (로봇 쪽), 태그 y 축 = 위, 벽은 -y
+#   tf2_echo right_tag_pnp_5 ee_right  : TCP 가 태그 평면 앞 0.123 m, 태그 y 로 -0.040 m,
 #                                  태그 z 축 기준 약 +93° 회전 (손 x 축이 위)
 # 접근만 카메라(태그 프레임 오프셋)로 하고, 누름과 후퇴는 base 좌표 linear_relative
 # (위치제어 직선 이동)로 한다. 누름 거리는 아래 상수로 직접 정한다. 위치제어라 힘 제한이
@@ -399,18 +450,18 @@ def search_and_push_switch() -> RunnableTaskDefinition:
     bx, by = SWITCH_BUTTON_OFFSET_IN_TAG
     task = Task('search_and_push_switch')
     task.extend(search_switch_pose())
-    task.close_gripper(D405_GRIPPER)
+    task.close_gripper(SWITCH_DOOR_GRIPPER)
     task.camera_linear_absolute(
-        D405_ARM, SWITCH_TAG_ID, SWITCH_APPROACH_MOTION,
+        SWITCH_DOOR_ARM, SWITCH_TAG_ID, SWITCH_APPROACH_MOTION,
         detection_timeout_sec=5.0,
         log_target_and_actual=True,
         object_to_end_effector_position=(bx, by, SWITCH_APPROACH_STANDOFF_M),
         object_to_end_effector_orientation_xyzw=SWITCH_TAG_TO_EE_ORIENTATION_XYZW,
     )
     # 2) 누름: 측정 TCP 에서 base 좌표로 직선 이동 (자세 유지)
-    task.linear_relative(D405_ARM, SWITCH_PRESS_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
+    task.linear_relative(SWITCH_DOOR_ARM, SWITCH_PRESS_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
     # 3) 후퇴
-    task.linear_relative(D405_ARM, SWITCH_RETREAT_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
+    task.linear_relative(SWITCH_DOOR_ARM, SWITCH_RETREAT_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
     # 4) 탐색 자세로 복귀
     task.extend(search_switch_pose())
     return task.build()
@@ -420,26 +471,26 @@ def push_switch_and_close_door() -> RunnableTaskDefinition:
     task = Task('push_switch_and_close_door')
     tcp_motion = [2.0, 0.1, 0.3, 0.5]
     task.extend(search_switch_pose())
-    task.close_gripper(D405_GRIPPER)
+    task.close_gripper(SWITCH_DOOR_GRIPPER)
     task.camera_linear_absolute(
-        D405_ARM, SWITCH_TAG_ID, SWITCH_APPROACH_MOTION,
+        SWITCH_DOOR_ARM, SWITCH_TAG_ID, SWITCH_APPROACH_MOTION,
         detection_timeout_sec=5.0,
         log_target_and_actual=True,
         object_to_end_effector_position=(bx, by, SWITCH_APPROACH_STANDOFF_M),
         object_to_end_effector_orientation_xyzw=SWITCH_TAG_TO_EE_ORIENTATION_XYZW,
     )
     # 2) 누름: 측정 TCP 에서 base 좌표로 직선 이동 (자세 유지)
-    task.linear_relative(D405_ARM, SWITCH_PRESS_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
+    task.linear_relative(SWITCH_DOOR_ARM, SWITCH_PRESS_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
     # 3) 후퇴
-    task.linear_relative(D405_ARM, SWITCH_RETREAT_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
+    task.linear_relative(SWITCH_DOOR_ARM, SWITCH_RETREAT_OFFSET_BASE + (0.0, 0.0, 0.0), SWITCH_PRESS_MOTION)
     # 4) 탐색 자세로 복귀
     task.extend(search_switch_pose())
     # base 180° 회전 배치 (회전 전: (0, 0.19, 0) -> (0.15, 0, 0))
-    task.linear_relative(D405_ARM, (0.0, -0.19, 0.0, 0.0, 0.0, 0.0), tcp_motion)
-    task.linear_relative(D405_ARM, (-0.15, 0.0, 0.0, 0.0, 0.0, 0.0), tcp_motion)
-    task.open_gripper(D405_GRIPPER)
+    task.linear_relative(SWITCH_DOOR_ARM, (0.0, -0.19, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+    task.linear_relative(SWITCH_DOOR_ARM, (-0.15, 0.0, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+    task.open_gripper(SWITCH_DOOR_GRIPPER)
     task.extend(move_ee_to_tag7_offset())
-    task.close_gripper(D405_GRIPPER)
+    task.close_gripper(SWITCH_DOOR_GRIPPER)
     task.extend(door_close_right_arm_stream())
     return task.build()
 
@@ -447,10 +498,10 @@ def open_door_and_push_switch2()-> RunnableTaskDefinition:
     task = Task('open_door_and_push_switch2')
     tcp_motion = [2.0, 0.1, 0.3, 0.5]
     task.extend(search_and_open_door2())
-    task.open_gripper(D405_GRIPPER)
-    # base 180° 회전 배치 (회전 전: (0, 0.056, 0) -> (-0.15, 0, 0))
-    task.linear_relative(D405_ARM, (0.0, -0.056, 0.0, 0.0, 0.0, 0.0), tcp_motion)
-    task.linear_relative(D405_ARM, (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+    task.open_gripper(SWITCH_DOOR_GRIPPER)
+    task.linear_relative(SWITCH_DOOR_ARM, (0.0, -0.056, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+    task.close_gripper(SWITCH_DOOR_GRIPPER)
+    task.linear_relative(SWITCH_DOOR_ARM, (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), tcp_motion)
     task.extend(search_and_push_switch())
     return task.build()
 
@@ -492,7 +543,7 @@ def move_ee_to_tag6_offset() -> RunnableTaskDefinition:
     """D435 로 tag_6 을 보고 오른손 TCP 를 태그 바로 위 6 cm (base 기준) 지점으로 옮긴다."""
     task = Task('move_ee_to_tag6_offset')
     task.camera_linear_absolute(
-        D405_ARM, 'tag_6', TAG6_MOVE_MOTION,
+        SWITCH_DOOR_ARM, 'tag_6', TAG6_MOVE_MOTION,
         camera_source='d435',
         detection_timeout_sec=5.0,
         log_target_and_actual=True,
@@ -505,7 +556,7 @@ def move_ee_to_tag6_offset() -> RunnableTaskDefinition:
 # tag_7 기준 오른손 이동 (D435 관측). tag_6 과 같은 방식.
 # 가정: d435_tag_pnp_7 축이 tag_6 과 같다. 측정 전.
 # base 180° 회전 배치: 태그 축 base 기준 x: +x, y: +z, z: -y (회전 전 BASE: (-0.02, 0.026, 0.08)).
-TAG7_EE_OFFSET_BASE = (0.02, -0.011, 0.08)  # +y 1 cm 추가 (이전: (0ㅌ``.02, -0.026, 0.08))
+TAG7_EE_OFFSET_BASE = (0.02, -0.006, 0.08)  # +y 0.5 cm 추가 (이전: (0.02, -0.011, 0.08))
 TAG7_EE_OFFSET_IN_TAG = (
     TAG7_EE_OFFSET_BASE[0],
     TAG7_EE_OFFSET_BASE[2],
@@ -519,7 +570,7 @@ def move_ee_to_tag7_offset() -> RunnableTaskDefinition:
     """D435 로 tag_7 을 보고 오른손 TCP 를 TAG7_EE_OFFSET_BASE (base 기준) 지점으로 옮긴다."""
     task = Task('move_ee_to_tag7_offset')
     task.camera_linear_absolute(
-        D405_ARM, 'tag_7', TAG7_MOVE_MOTION,
+        SWITCH_DOOR_ARM, 'tag_7', TAG7_MOVE_MOTION,
         camera_source='d435',
         detection_timeout_sec=5.0,
         log_target_and_actual=True,
@@ -534,12 +585,19 @@ def pick_up_object_at(
     *,
     threshold_x_minus: float = 0.0,
     threshold_y_plus: float = 0.0,
+    arm: str,
+    **camera,
 ) -> RunnableTaskDefinition:
-    """설정된 지점의 고정 태그를 기준으로 물체를 집는다."""
+    """설정된 지점의 고정 태그를 기준으로 물체를 집는다.
+
+    arm 필수. camera: align_base_and_pick_up_object 의 camera_source/camera_frame.
+    """
     return align_base_and_pick_up_object(
         _load_location_tag_id(location_name),
         threshold_x_minus=threshold_x_minus,
         threshold_y_plus=threshold_y_plus,
+        arm=arm,
+        **camera,
     )
 
 
@@ -548,31 +606,35 @@ def put_down_object_at(
     *,
     threshold_x_minus: float = 0.0,
     threshold_y_plus: float = 0.0,
-    **hand,
+    arm: str,
+    **camera,
 ) -> RunnableTaskDefinition:
     """설정된 지점의 고정 태그를 기준으로 물체를 내려놓는다.
 
-    hand: align_base_and_put_down_object 의 arm/gripper/camera_source/camera_frame (생략 시 오른손 D405).
+    arm 필수. camera: align_base_and_put_down_object 의 camera_source/camera_frame.
     """
     return align_base_and_put_down_object(
         _load_location_tag_id(location_name),
         threshold_x_minus=threshold_x_minus,
         threshold_y_plus=threshold_y_plus,
-        **hand,
+        arm=arm,
+        **camera,
     )
 
 
-def pick_up_move_and_put_down_object(start_point: str, end_point: str) -> RunnableTaskDefinition:
+def pick_up_move_and_put_down_object(start_point: str, end_point: str, *, arm: str) -> RunnableTaskDefinition:
     task = Task('pick_up_move_and_put_down_object')
-    task.extend(pick_up_object_at(start_point))
+    task.extend(pick_up_object_at(start_point, arm=arm))
     task.extend(turn_and_move(start_point, end_point))
-    task.extend(put_down_object_at(end_point))
+    task.extend(put_down_object_at(end_point, arm=arm))
     return task.build()
 
 
 def pick_up_move_and_put_down_object2(
     start_point: str,
     end_point: str,
+    *,
+    arm: str,
 ) -> RunnableTaskDefinition:
     """이전 도착 지점에서 출발 지점으로 이동한 뒤 파지·운반·배치한다.
 
@@ -596,7 +658,7 @@ def pick_up_move_and_put_down_object2(
         task = Task('pick_up_move_and_put_down_object2')
         if current_point != start_point:
             task.extend(turn_and_move(current_point, start_point))
-        task.extend(pick_up_move_and_put_down_object(start_point, end_point))
+        task.extend(pick_up_move_and_put_down_object(start_point, end_point, arm=arm))
         definition = task.build()
     except Exception:
         current_position = previous_position
@@ -611,7 +673,7 @@ def object_handover_demo_final() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final')
 
     task.extend(object_gripping_initial_pose_torso_left())
-    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2'))
+    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     return task.build()
 
@@ -620,7 +682,7 @@ def object_handover_demo_final_tmp() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final_tmp')
 
     task.extend(object_gripping_initial_pose_torso_left())
-    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2'))
+    task.extend(pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     return task.build()
 
@@ -815,15 +877,22 @@ def impedance_demo_press() -> Task:
 
 
 # ---------------------------------------------------------------------------
-# ZSSW -> AP -> ZS 이동 후 왼손으로 tag_2 기준 내려놓기
+# ZSSW -> AP -> ZS 이동 후 왼손으로 tag_3 기준 내려놓기
 #
 # 좌표(settings.yaml): ZSSW = 원점, AP = base -x 0.90 m, ZS = AP 에서 base +y 0.80 m.
 # ZSSW/AP 는 side left(허리 +90°), ZS 는 side front 이므로 AP -> ZS 이동 직전에
 # turn_and_move 가 object_gripping_initial_pose_front 로 허리를 0° 로 돌린다(팔은 그대로).
-# 왼손 카메라는 아직 없으므로 내려놓기 단계는 주석 처리했다. 카메라 이름/프레임은 가정값이다.
+# 내려놓기는 기존 pick and place(put_down_object_at, arm='left_arm')와 같다: D435 로 tag_3 을 보고
+# base 를 d405_left_camera_center 기준으로 정렬한 뒤 d405_left 로 접근·접촉하고 그리퍼를 연다.
 # ---------------------------------------------------------------------------
-ZS_LEFT_CAMERA_SOURCE = 'd405_left'                  # 가정: 왼손 카메라 camera source 이름
-ZS_LEFT_CAMERA_FRAME = 'd405_left_camera_center'     # 가정: 왼손 카메라 기준 프레임
+
+
+# ZS 에서 머리 J2(head_1, pitch) 를 이만큼 돌렸다가 내려놓기 후 되돌린다 (deg).
+ZS_HEAD_PITCH_OFFSET_DEG = 15.0
+# 머리 관절 이동 설정: [최소 시간 s, 속도 rad/s, 가속도 rad/s^2]
+# UI Joint 탭과 같은 값 (최소 시간 기본 3.0 s, manual_joint_velocity/acceleration_limit 0.2).
+# control 노드는 head 가속도를 manual_joint_acceleration_limit(0.2) 이하만 허용한다.
+ZS_HEAD_JOINT_MOTION = (3.0, 0.2, 0.2)
 
 
 def move_zssw_to_zs_and_put_down() -> RunnableTaskDefinition:
@@ -833,14 +902,12 @@ def move_zssw_to_zs_and_put_down() -> RunnableTaskDefinition:
         task = Task('move_zssw_to_zs_and_put_down')
         task.extend(turn_and_move('ZSSW', 'AP'))
         task.extend(turn_and_move('AP', 'ZS'))
-        # 왼손 카메라 장착 후 주석 해제:
-        # task.extend(put_down_object_at(
-        #     'ZS',
-        #     arm='left_arm',
-        #     gripper='left',
-        #     camera_source=ZS_LEFT_CAMERA_SOURCE,
-        #     camera_frame=ZS_LEFT_CAMERA_FRAME,
-        # ))
+        # 머리 J2(head_1, pitch) +15° (tag_3 을 D435 로 보기 위해). 끝나면 -15° 로 원상복구.
+        task.joint_relative('head', [0.0, ZS_HEAD_PITCH_OFFSET_DEG], ZS_HEAD_JOINT_MOTION)
+        # 기존 pick and place 와 같은 방식: tag_3(settings.yaml ZS) 기준 왼손 내려놓기.
+        # arm='left_arm' 이면 그리퍼(left)와 손목 카메라(d405_left / d405_left_camera_center)가 자동으로 정해진다.
+        task.extend(put_down_object_at('ZS', arm='left_arm'))
+        task.joint_relative('head', [0.0, -ZS_HEAD_PITCH_OFFSET_DEG], ZS_HEAD_JOINT_MOTION)
         return task.build()
     finally:
         current_position = previous_position
@@ -863,12 +930,56 @@ def move_zs_to_zssw() -> RunnableTaskDefinition:
         current_position = previous_position
 
 def push_switch_and_close_door_move_to_zs() -> RunnableTaskDefinition:
-    task = Task('push_switch_and_close_door_move_to_zs')
-    task.extend(open_door_and_push_switch2())
-    task.extend(pose_before_base_movement())
-    task.extend(move_zssw_to_zs_and_put_down())
-    task.extend(move_zs_to_zssw())
-    task.extend(push_switch_and_close_door())
+    global current_position
+    previous_position = current_position  # 다른 Task 의 current_position 에 영향 주지 않도록 복원
+    try:
+        task = Task('push_switch_and_close_door_move_to_zs')
+        tcp_motion = [2.0, 0.1, 0.3, 0.5]
+        task.extend(open_door_and_push_switch2())
+        task.linear_relative(SWITCH_DOOR_ARM, (0.0, -0.25, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+        task.extend(move_zssw_to_zs_and_put_down())
+        # move_zs_to_zssw() 를 풀어 쓴 것: AP 도착 후 오른손을 -y 0.12 옮긴 자세로 ZSSW 까지 간다.
+        # (ZS -> AP 의 torso_left 자세가 팔을 덮어쓰므로 그 뒤에 이동한다. AP -> ZSSW 는 둘 다
+        #  side left 라 허리/팔을 다시 움직이지 않는다.)
+        task.extend(turn_and_move('ZS', 'AP'))
+        task.extend(pose_before_base_movement())
+        # task.linear_relative(SWITCH_DOOR_ARM, (0.0, -0.12, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+        # task.linear_relative(SWITCH_DOOR_ARM, (0.07, 0.0, 0.0, 0.0, 0.0, 0.0), tcp_motion)
+        task.extend(turn_and_move('AP', 'ZSSW'))
+        task.extend(align_base_to_tag7())
+        task.extend(push_switch_and_close_door())
+        return task.build()
+    finally:
+        current_position = previous_position
+
+
+# ---------------------------------------------------------------------------
+# test1: 왼손 좌우 픽앤플레이스 반복 (base/허리 고정, 왼팔만 이동)
+#
+# 허리는 object_gripping_initial_pose_torso_left(+90°)로 고정. 가슴이 base +y 를 본다.
+# tag_0 은 tag_3 의 가슴 기준 왼쪽에 둔다. 허리 +90° 에서 가슴 기준 왼쪽 = base -x.
+# linear_relative 는 base 좌표이므로 -x 로 옮긴다. 물체를 든 높이 그대로 옆으로 옮긴다.
+# (settings.yaml 의 LH1/LH2 좌표 배치와는 반대 방향이다.)
+# ---------------------------------------------------------------------------
+TEST1_SHIFT_MOTION = (3.0, 0.1, 0.3, 0.5)
+TEST1_RUNS = 10                      # 첫 실행 포함 총 반복 횟수
+
+
+def test1() -> RunnableTaskDefinition:
+    """허리 왼쪽 고정. 왼팔: tag_3 잡기 -> 왼쪽(-x) 15 cm -> tag_0 놓기/다시 잡기 -> 오른쪽(+x) 15 cm -> tag_3 놓기, 10회 반복."""
+    task = Task('test1')
+
+    task.extend(object_gripping_initial_pose_torso_left())
+
+    task.extend(pick_up_object_in_place('tag_3', arm='left_arm'))
+    task.linear_relative('left_arm', (-0.25, 0.0, 0.0, 0.0, 0.0, 0.0), TEST1_SHIFT_MOTION)  # 왼쪽으로
+    task.extend(put_down_object_in_place('tag_0', arm='left_arm'))
+
+    task.extend(pick_up_object_in_place('tag_0', arm='left_arm'))
+    task.linear_relative('left_arm', (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), TEST1_SHIFT_MOTION)  # 오른쪽으로 복귀
+    task.extend(put_down_object_in_place('tag_3', arm='left_arm'))
+    
+    task.rewind(TEST1_RUNS)
     return task.build()
 
 
@@ -877,15 +988,21 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         'impedance_demo_press': impedance_demo_press(),
         'torso_up': torso_up(),
         'impedance_demo_joint': impedance_demo_joint(),
+        
         'object_gripping_initial_pose': object_gripping_initial_pose(),
         'object_gripping_initial_pose_torso_right': object_gripping_initial_pose_torso_right(),
         'object_gripping_initial_pose_torso_left': object_gripping_initial_pose_torso_left(),
+        
         'ready_pose': ready_pose(),
+
         'object_handover_demo_final': object_handover_demo_final(),
         'object_handover_demo_final_tmp': object_handover_demo_final_tmp(),
+        'test1': test1(),
         'door_handle_grasp_pose': door_handle_grasp_pose(),
         'door_open_right_arm_stream': door_open_right_arm_stream(),
+
         'wave_both_arms': wave_both_arms(),
+        
         'align_base_to_tag6': align_base_to_tag6(),
         'align_base_to_tag7': align_base_to_tag7(),
         'search_pose': search_pose(),

@@ -2747,14 +2747,23 @@ class RBY1ControlNode(Node):
                         f'Task {group} velocity_limit exceeds the '
                         'verified model limit'
                     )
-                if (
-                    acceleration_limits is None
-                    or any(value is None for value in acceleration_limits)
-                    or float(command.acceleration_limit) > min(
-                        float(value)
-                        for value in acceleration_limits
-                        if value is not None
+                if acceleration_limits is not None and all(
+                    value is None for value in acceleration_limits
+                ):
+                    # 모델에 가속도 한계가 없는 그룹(head)은 Joint 탭 수동 조작과
+                    # 같은 상한(manual_joint_acceleration_limit)까지만 허용한다.
+                    acceleration_cap = float(self.manual_joint_acceleration_limit)
+                elif acceleration_limits is None or any(
+                    value is None for value in acceleration_limits
+                ):
+                    acceleration_cap = None
+                else:
+                    acceleration_cap = min(
+                        float(value) for value in acceleration_limits
                     )
+                if (
+                    acceleration_cap is None
+                    or float(command.acceleration_limit) > acceleration_cap
                 ):
                     raise ValueError(
                         f'Task {group} acceleration_limit is '

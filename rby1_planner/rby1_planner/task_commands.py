@@ -60,6 +60,42 @@ if TYPE_CHECKING:
     from .camera import CameraClient
 
 
+# 손목 카메라: 팔 -> camera_source / 카메라 중심 프레임.
+# 이름은 rby1_camera/config/camera_system.yaml 의 카메라별 블록과 같다.
+WRIST_CAMERA_SOURCE_BY_ARM = {
+    'right_arm': 'd405_right',
+    'left_arm': 'd405_left',
+}
+WRIST_CAMERA_FRAME_BY_ARM = {
+    'right_arm': 'd405_right_camera_center',
+    'left_arm': 'd405_left_camera_center',
+}
+
+
+def wrist_camera_source(arm: str, camera_source: Optional[str] = None) -> str:
+    """camera_source 가 None 이면 arm 에 달린 손목 카메라를 고른다."""
+    if camera_source is not None:
+        return camera_source
+    try:
+        return WRIST_CAMERA_SOURCE_BY_ARM[str(arm).strip()]
+    except KeyError:
+        raise ValueError(
+            f'{arm!r} has no wrist camera; pass camera_source explicitly'
+        ) from None
+
+
+def wrist_camera_frame(arm: str, camera_frame: Optional[str] = None) -> str:
+    """camera_frame 이 None 이면 arm 에 달린 손목 카메라 중심 프레임을 고른다."""
+    if camera_frame is not None:
+        return camera_frame
+    try:
+        return WRIST_CAMERA_FRAME_BY_ARM[str(arm).strip()]
+    except KeyError:
+        raise ValueError(
+            f'{arm!r} has no wrist camera; pass camera_frame explicitly'
+        ) from None
+
+
 def _finite_number(
     value: object,
     label: str,
@@ -101,7 +137,7 @@ class CameraLinearAbsoluteStep:
     linear_velocity: float
     angular_velocity: float
     acceleration_scaling: float
-    camera_source: str = 'd405'
+    camera_source: str = 'd405_right'
     detection_timeout_sec: float = 3.0
     max_age_sec: Optional[float] = None
     minimum_confidence: Optional[float] = None
@@ -741,7 +777,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
-        camera_source: str = 'd405',
+        camera_source: Optional[str] = None,
         detection_timeout_sec: float = 3.0,
         max_age_sec: Optional[float] = None,
         minimum_confidence: Optional[float] = None,
@@ -814,7 +850,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
-        camera_source: str = 'd405',
+        camera_source: Optional[str] = None,
         detection_timeout_sec: float = 3.0,
         max_age_sec: Optional[float] = None,
         minimum_confidence: Optional[float] = None,
@@ -866,7 +902,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
-        camera_source: str = 'd405',
+        camera_source: Optional[str] = None,
         controlled_frame: str,
         detection_timeout_sec: float = 3.0,
         max_age_sec: Optional[float] = None,
@@ -925,7 +961,7 @@ class Task(_CanonicalTask):
         object_id: str,
         tcp_motion: Sequence[object],
         *,
-        camera_source: str,
+        camera_source: Optional[str],
         detection_timeout_sec: float,
         max_age_sec: Optional[float],
         minimum_confidence: Optional[float],
@@ -963,7 +999,7 @@ class Task(_CanonicalTask):
             linear_velocity=float(motion.linear_velocity),
             angular_velocity=float(motion.angular_velocity),
             acceleration_scaling=float(motion.acceleration_scaling),
-            camera_source=camera_source,
+            camera_source=wrist_camera_source(motion.group, camera_source),
             detection_timeout_sec=detection_timeout_sec,
             max_age_sec=max_age_sec,
             minimum_confidence=minimum_confidence,
@@ -1341,17 +1377,21 @@ def _location_tags(locations: dict) -> dict[str, tuple[str, dict]]:
             raise ValueError(
                 f'Location {location_name!r} has invalid tag ID {tag_id!r}'
             )
-        previous_location = tag_locations.get(tag_id)
-        if previous_location is not None:
-            raise ValueError(
-                f'Tag {tag_id!r} is assigned to both locations '
-                f'{previous_location!r} and {location_name!r}'
-            )
         config = location[tag_id]
         if not isinstance(config, dict):
             raise ValueError(
                 f'Location {location_name!r} tag {tag_id!r} must contain an offset'
             )
+        # 같은 태그 ID 를 여러 지점에서 쓸 수 있다(예: LH1, ZS 의 tag_3). 접근 보정은
+        # 태그 ID 로 찾으므로(_load_tag_approach_offset) offset 이 같아야 한다.
+        previous_location = tag_locations.get(tag_id)
+        if previous_location is not None:
+            previous_offset = result[previous_location][1].get('offset')
+            if previous_offset != config.get('offset'):
+                raise ValueError(
+                    f'Tag {tag_id!r} is shared by locations {previous_location!r} '
+                    f'and {location_name!r} but their offsets differ'
+                )
         tag_locations[tag_id] = location_name
         result[location_name] = (tag_id, config)
     return result
