@@ -47,7 +47,7 @@ def test_automatic_transfers_match_the_existing_demo(settings_file):
     expected = task_source.object_handover_demo_final_tmp()
     task_source.current_position = None
     actual = Task(expected.name)
-    actual.extend(task_source.object_gripping_initial_pose_torso_left())
+    actual.extend(task_source.object_gripping_initial_pose('left'))
     actual.extend(task_source.pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     # The authored demo starts at LH1 and performs the same direct transfer.

@@ -47,23 +47,6 @@ _OBJECT_TO_D405_EE_ORIENTATION_XYZW = (0.0, 0.0, 0.0, 1.0)
 current_position: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# 임피던스 프리셋 (관절 임피던스 한 종류)
-#
-# 모든 이동은 기본이 위치제어다. 아래 빌더에 impedance= 를 주면 그 스텝만 관절
-# 임피던스로 실행된다:
-#   관절: joint_absolute / joint_relative / whole_body_joint_absolute
-#   Cartesian: linear_absolute / linear_relative / camera_linear_absolute,
-#              접촉 헬퍼 press / grasp / place_on_surface / camera_press / ...
-# impedance 값: None(생략) = 위치제어, True = settings.yaml 의 "default" 프리셋,
-#   "contact" 같은 문자열 = 그 이름의 프리셋, JointImpedance(...) = 그 값 그대로.
-# 프리셋 값은 rby1_planner/config/settings.yaml 의 impedance_presets 에서 고치고
-# Reload Tasks 하면 반영된다.
-# Cartesian 임피던스는 control 노드가 목표 TCP 의 팔 IK 를 풀어 그 관절 목표를 관절
-# 임피던스로 추종한다(팔만, 현재 위치에서 10 cm / 20° 이내). 끝나면 측정 관절값으로
-# 위치 목표를 다시 잡고(re-anchor), 같은 Task 안에서 그 팔의 위치제어 스텝(예: 후퇴
-# linear_relative)이 뒤에 반드시 있어야 한다(없으면 Reload 시 오류).
-# ---------------------------------------------------------------------------
 # 기존 이름 유지: 프리셋 이름을 가리킨다.
 JS_SOFT_ARM = 'default'
 JS_CONTACT_ARM = 'contact'
@@ -74,79 +57,78 @@ def torso_up() -> Task:
     task.linear_relative('torso', (0.0, 0.0, -0.02, 0.0, 0.0, 0.0), [3.0, 0.05, 0.2, 0.5])
     return task.build()
 
-
 def ready_pose() -> Task:
     task = Task('ready_pose')
     task.whole_body_joint_absolute(
-        torso=[0.060044, 40.599160, -81.392810, 40.360071, 0.032198, -89.999565],
-        right_arm = [1.885080, -79.650879, 35.902233, -105.252939, -66.071558, -14.386377, -22.038574],
-        left_arm  = [-2.613022,  30.087802, -11.978428, -120.0,  32.776268, 33.400665,  27.435807],
+        torso= [0.000000, 45.000000, -89.999782, 44.999782, 0.000000, 0.000218],
+        right_arm =[-0.000218, -5.000411, 0.000435, -119.999420, 0.000000, 30.000146, 0.000220],
+        left_arm  = [0.000000, 5.000193, -0.000218, -119.999637, 0.000000, 29.999707, -0.000220],
         joint_motion=[5.0, 1.0, 1.0],
     )
     return task.build()
-#left_arm  = [1.885080,  79.650879, -35.902233, -105.252939,  66.071558, -14.386377,  22.038574]
-#위의 right arm과 대칭인 left arm좌표
-def object_gripping_initial_pose() -> Task:
-    task = Task('object_gripping_initial_pose')
-    task.whole_body_joint_absolute(
-        torso=(0.059126, 45.376237, -90.963053, 45.154560, 0.021390, -0.000280),
-        right_arm=(-34.913810, -63.837794, 46.172754, -106.640370, 16.002640, 45.214678, 83.061208),
-        left_arm=(-33.643824, 63.218668, -44.626985, -106.563932, -17.501234, 44.556740, -84.095907),
-        joint_motion=(5.0, 1.0, 1.0),
-    )
+
+def _grip_torso(side: str) -> tuple:
+    """허리 관절 6개 값: 높이(torso_0~4)는 공통, yaw(torso_5)만 side 로 고른다."""
+    height = (0.065048, 45.375276, -90.959835, 45.153373, 0.026976)  # torso_0~4
+    yaw_deg = {'front': 0.0, 'left': 90.0, 'right': -90.0}
+    try:
+        yaw = yaw_deg[side]
+    except KeyError:
+        raise ValueError(f"torso side must be 'front', 'left' or 'right', got {side!r}") from None
+    return (*height, yaw)
+
+def torso_align(
+    side: str = 'front',
+    joint_motion: Sequence[float] = (5.0, 2.0, 3.0),
+) -> Task:
+    """허리만 정렬한다 (팔은 그대로, 물체를 든 채 회전 가능).
+
+    side: front / left / right. joint_motion: [최소 시간 s, 속도, 가속도].
+    """
+    task = Task(f'torso_align({side})')
+    task.whole_body_joint_absolute(torso=_grip_torso(side), joint_motion=joint_motion)
     return task.build()
 
+def object_gripping_initial_pose(
+    torso: Optional[str] = None,
+    joint_motion: Optional[Sequence[float]] = None,
+) -> Task:
+    """양팔 파지 준비 자세.
 
-def object_gripping_initial_pose_temp() -> Task:
-    task = Task('object_gripping_initial_pose_temp')
-    task.whole_body_joint_absolute(
-        right_arm=(-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557),
-        left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(2.0, 2.0, 4.0),
-    )
+    torso=None 이면 팔만 움직인다 (허리 그대로).
+    torso='front' / 'left' / 'right' 이면 허리와 팔을 한 스텝에서 같이 움직인다.
+    joint_motion: [최소 시간 s, 속도, 가속도]. 생략 시 팔만 (3.0, 2.0, 3.0),
+    허리 포함 (5.0, 2.0, 3.0).
+    """
+    right_arm = (-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557)
+    left_arm = (-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812)
+    if joint_motion is None:
+        joint_motion = (3.0, 2.0, 3.0) if torso is None else (5.0, 2.0, 3.0)
+
+    name = 'object_gripping_initial_pose' if torso is None else f'object_gripping_initial_pose({torso})'
+    task = Task(name)
+    if torso is None:
+        task.whole_body_joint_absolute(
+            right_arm=right_arm, left_arm=left_arm, joint_motion=joint_motion,
+        )
+    else:
+        task.whole_body_joint_absolute(
+            torso=_grip_torso(torso), right_arm=right_arm, left_arm=left_arm,
+            joint_motion=joint_motion,
+        )
     return task.build()
 
-
-def object_gripping_initial_pose_torso_right() -> Task:
-    task = Task('object_gripping_initial_pose_torso_right')
-    task.whole_body_joint_absolute(
-        torso=[0.060044, 40.599160, -81.392810, 40.360071, 0.032198, -89.999565],        right_arm=(-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557),
-        left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(5.0, 2.0, 3.0),
-    )
-    return task.build()
-
-
-def object_gripping_initial_pose_torso_left() -> Task:
-    task = Task('object_gripping_initial_pose_torso_left')
-    task.whole_body_joint_absolute(
-        torso=(0.065048, 45.375276, -90.959835, 45.153373, 0.026976, 90.00),
-        right_arm=(-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557),
-        left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(5.0, 2.0, 3.0),
-    )
-    return task.build()
 
 def pose_before_base_movement() -> Task:
     task = Task('pose_before_base_movement')
-    # 오른팔: object_gripping_initial_pose_torso_left 에서 TCP 를 base (-y 0.12 -> +x 0.07) 옮긴 자세
+    # 오른팔: object_gripping_initial_pose('left') 에서 TCP 를 base (-y 0.12 -> +x 0.07) 옮긴 자세
     # (손 방향 동일, SDK 모델 IK 계산값). 이전 값:
     # right_arm=[-16.485584, -81.212678, 36.201365, -117.319844, 5.521069, 37.464697, 72.280151]
+    # 왼팔은 object_gripping_initial_pose 의 왼팔과 같다.
     task.whole_body_joint_absolute(
-        torso=(0.065048, 45.375276, -90.959835, 45.153373, 0.026976, 90.00),
+        torso=_grip_torso('left'),
         right_arm=[-8.030944, -85.718373, 30.622439, -119.996443, 3.002524, 34.710418, 68.873201],
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(5.0, 2.0, 3.0),
-    )
-    return task.build()
-
-
-
-def object_gripping_initial_pose_front() -> Task:
-    """팔은 움직이지 않고 허리만 정면(torso_5 = 0)을 보게 한다. 높이는 torso_left/right 와 같다."""
-    task = Task('object_gripping_initial_pose_front')
-    task.whole_body_joint_absolute(
-        torso=(0.065048, 45.375276, -90.959835, 45.153373, 0.026976, 0.0),
         joint_motion=(5.0, 2.0, 3.0),
     )
     return task.build()
@@ -160,7 +142,6 @@ def door_handle_grasp_pose() -> Task:
         joint_motion=(5.0, 1.0, 1.0),
     )
     return task.build()
-
 
 def _configured_tag_approach_contact_move(object_id: str, approach_offset: Sequence[object], contact_offset: Sequence[object], tcp_motion: Sequence[object], *, arm: str, camera_source: Optional[str] = None) -> RunnableTaskDefinition:
     approach = tuple(float(value) for value in approach_offset)
@@ -197,7 +178,6 @@ def _configured_tag_approach_contact_move(object_id: str, approach_offset: Seque
     )
     return task.build()
 
-
 def turn_and_move(start_point: str, end_point: str) -> RunnableTaskDefinition:
     global current_position
 
@@ -207,29 +187,27 @@ def turn_and_move(start_point: str, end_point: str) -> RunnableTaskDefinition:
     task = Task('turn_and_move')
     if start_side != side:
         if side == 'left':
-            task.extend(object_gripping_initial_pose_torso_left())
+            task.extend(object_gripping_initial_pose('left'))
         elif side == 'front':
-            task.extend(object_gripping_initial_pose_front())
+            task.extend(torso_align())
         else:
-            task.extend(object_gripping_initial_pose_torso_right())
+            task.extend(object_gripping_initial_pose('right'))
     task.move_to(end_x - start_x, end_y - start_y, 0.0, timeout_sec=15.0)
     task.delay(1000)
     definition = task.build()
     current_position = end_point
     return definition
 
-
 def turn_left_and_move_left()-> RunnableTaskDefinition:
     task = Task('turn_left_and_move_left')
-    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(object_gripping_initial_pose('left'))
     task.move_to(0.0, 0.87, 0.0, timeout_sec=15.0)
     task.delay(1000)
     return task.build()
 
-
 def turn_right_and_move_right()-> RunnableTaskDefinition:
     task = Task('turn_right_and_move_right')
-    task.extend(object_gripping_initial_pose_torso_right())
+    task.extend(object_gripping_initial_pose('right'))
     task.move_to(0.0, -0.87, 0.0, timeout_sec=15.0)
     task.delay(1000)
     return task.build()
@@ -306,7 +284,7 @@ def align_base_and_put_down_object(
     )
     task.delay(1000)
     task.extend(put_down_object_in_place(object_id, arm=arm, camera_source=camera_source))
-    task.extend(object_gripping_initial_pose_temp())
+    task.extend(object_gripping_initial_pose())
     return task.build()
 
 
@@ -335,7 +313,7 @@ def align_base_and_pick_up_object(
     )
     task.delay(1000)
     task.extend(pick_up_object_in_place(object_id, arm=arm, camera_source=camera_source))
-    task.extend(object_gripping_initial_pose_temp())
+    task.extend(object_gripping_initial_pose())
     return task.build()
 
 
@@ -672,7 +650,7 @@ def pick_up_move_and_put_down_object2(
 def object_handover_demo_final() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final')
 
-    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(object_gripping_initial_pose('left'))
     task.extend(pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     return task.build()
@@ -681,7 +659,7 @@ def object_handover_demo_final() -> RunnableTaskDefinition:
 def object_handover_demo_final_tmp() -> RunnableTaskDefinition:
     task = Task('object_handover_demo_final_tmp')
 
-    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(object_gripping_initial_pose('left'))
     task.extend(pick_up_move_and_put_down_object('LH1', 'LH2', arm='left_arm'))
 
     return task.build()
@@ -711,7 +689,7 @@ def impedance_demo_joint() -> Task:
 # ---------------------------------------------------------------------------
 # 문 손잡이 파지 자세
 # ---------------------------------------------------------------------------
-# object_gripping_initial_pose_torso_right 에서 오른팔만 손잡이 파지 관절값으로 변경
+# object_gripping_initial_pose('right') 에서 오른팔만 손잡이 파지 관절값으로 변경
 DOOR_HANDLE_RIGHT_ARM = [-55.483742, -44.230608, 44.420618, -46.120118, -68.745680, -9.224412, -8.102626]
 
 # 실측 (2026-11-12): 문이 닫힌 상태에서 경첩 -> 손잡이 중심, base 기준 (m).
@@ -881,7 +859,7 @@ def impedance_demo_press() -> Task:
 #
 # 좌표(settings.yaml): ZSSW = 원점, AP = base -x 0.90 m, ZS = AP 에서 base +y 0.80 m.
 # ZSSW/AP 는 side left(허리 +90°), ZS 는 side front 이므로 AP -> ZS 이동 직전에
-# turn_and_move 가 object_gripping_initial_pose_front 로 허리를 0° 로 돌린다(팔은 그대로).
+# turn_and_move 가 torso_align('front') 로 허리를 0° 로 돌린다(팔은 그대로).
 # 내려놓기는 기존 pick and place(put_down_object_at, arm='left_arm')와 같다: D435 로 tag_3 을 보고
 # base 를 d405_left_camera_center 기준으로 정렬한 뒤 d405_left 로 접근·접촉하고 그리퍼를 연다.
 # ---------------------------------------------------------------------------
@@ -917,7 +895,7 @@ def move_zs_to_zssw() -> RunnableTaskDefinition:
     """ZS -> AP -> ZSSW 로 돌아온다 (move_zssw_to_zs_and_put_down 의 역경로).
 
     ZS(front) -> AP(left) 이므로 ZS 에서 출발하기 전에 turn_and_move 가
-    object_gripping_initial_pose_torso_left 로 허리를 +90° 로 돌린다.
+    object_gripping_initial_pose('left') 로 허리를 +90° 로 돌린다.
     """
     global current_position
     previous_position = current_position  # 다른 Task 의 current_position 에 영향 주지 않도록 복원
@@ -954,80 +932,123 @@ def push_switch_and_close_door_move_to_zs() -> RunnableTaskDefinition:
 
 
 # ---------------------------------------------------------------------------
+# test0: base 정렬 후 파지 (허리 자세 무관)
+#
+# 허리는 건드리지 않는다. 실행 전 torso_align(left / front / right) 중 원하는 자세로 둔다.
+# base 정렬 목표(손목 카메라 원점)는 실행 시 TF 로 base 좌표로 바꾸므로 허리 yaw 와 무관하다.
+# 조건: D435(머리)에서 tag 가 보여야 하고, base 이동 0.8 m 이내, tag 방향이 손 방향과 맞아야 한다.
+# ---------------------------------------------------------------------------
+def test0() -> RunnableTaskDefinition:
+    """허리 유지. 팔만 초기 자세 -> D435 로 tag_3 보고 base 정렬 -> 왼팔 손목 카메라로 접근·파지·상승 -> 팔 초기 자세."""
+    task = Task('test0')
+    task.extend(object_gripping_initial_pose())   # 팔만, 허리 그대로
+    task.extend(align_base_and_pick_up_object('tag_3', arm='left_arm'))
+    return task.build()
+
+
+# ---------------------------------------------------------------------------
 # test1: 왼손 좌우 픽앤플레이스 반복 (base/허리 고정, 왼팔만 이동)
 #
-# 허리는 object_gripping_initial_pose_torso_left(+90°)로 고정. 가슴이 base +y 를 본다.
+# 허리는 object_gripping_initial_pose('left')(+90°)로 고정. 가슴이 base +y 를 본다.
 # tag_0 은 tag_3 의 가슴 기준 왼쪽에 둔다. 허리 +90° 에서 가슴 기준 왼쪽 = base -x.
 # linear_relative 는 base 좌표이므로 -x 로 옮긴다. 물체를 든 높이 그대로 옆으로 옮긴다.
 # (settings.yaml 의 LH1/LH2 좌표 배치와는 반대 방향이다.)
 # ---------------------------------------------------------------------------
-TEST1_SHIFT_MOTION = (3.0, 0.1, 0.3, 0.5)
-TEST1_RUNS = 10                      # 첫 실행 포함 총 반복 횟수
-
-
 def test1() -> RunnableTaskDefinition:
     """허리 왼쪽 고정. 왼팔: tag_3 잡기 -> 왼쪽(-x) 15 cm -> tag_0 놓기/다시 잡기 -> 오른쪽(+x) 15 cm -> tag_3 놓기, 10회 반복."""
+    shift_motion = (3.0, 0.1, 0.3, 0.5)
+    runs = 10                        # 첫 실행 포함 총 반복 횟수
+
     task = Task('test1')
 
-    task.extend(object_gripping_initial_pose_torso_left())
+    task.extend(object_gripping_initial_pose('left'))
 
     task.extend(pick_up_object_in_place('tag_3', arm='left_arm'))
-    task.linear_relative('left_arm', (-0.25, 0.0, 0.0, 0.0, 0.0, 0.0), TEST1_SHIFT_MOTION)  # 왼쪽으로
+    task.linear_relative('left_arm', (-0.25, 0.0, 0.0, 0.0, 0.0, 0.0), shift_motion)  # 왼쪽으로
     task.extend(put_down_object_in_place('tag_0', arm='left_arm'))
 
     task.extend(pick_up_object_in_place('tag_0', arm='left_arm'))
-    task.linear_relative('left_arm', (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), TEST1_SHIFT_MOTION)  # 오른쪽으로 복귀
+    task.linear_relative('left_arm', (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), shift_motion)  # 오른쪽으로 복귀
     task.extend(put_down_object_in_place('tag_3', arm='left_arm'))
     
-    task.rewind(TEST1_RUNS)
+    task.rewind(runs)
     return task.build()
 
 
+# ---------------------------------------------------------------------------
+# test2: LH1 <-> LH2 왕복 픽앤플레이스 1회 (왼팔)
+#
+# 지점/태그/허리 방향은 settings.yaml locations 의 LH1(tag_3, left), LH2(tag_0, right).
+# 각 방향: D435 로 태그 보고 base 정렬 -> 잡기 -> (side 가 다르면) 허리 회전 -> base 이동
+#          -> 도착 태그로 base 정렬 -> 놓기.
+# ---------------------------------------------------------------------------
+def test2() -> RunnableTaskDefinition:
+    """LH1 -> LH2 -> LH1 왕복 픽앤플레이스 1회 (왼팔)."""
+    global current_position
+    arm = 'left_arm'
+
+    previous_position = current_position  # turn_and_move 가 바꾸는 예정 위치를 복원
+    try:
+        task = Task('test2')
+        task.extend(object_gripping_initial_pose('left'))
+        task.extend(pick_up_move_and_put_down_object('LH1', 'LH2', arm=arm))  # 가기
+        task.extend(pick_up_move_and_put_down_object('LH2', 'LH1', arm=arm))  # 오기
+        return task.build()
+    finally:
+        current_position = previous_position
+
+
 def build_tasks() -> dict[str, RunnableTaskDefinition]:
+    # Scenario 목록은 이 순서 그대로 표시된다. 자세(pose)를 맨 위에 둔다.
     return {
+        # --- 자세 ---
+        'ready_pose': ready_pose(),
+        'object_gripping_initial_pose': object_gripping_initial_pose(),
+        # 허리 + 양팔 이니셜 자세를 함께 맞춘다 (torso_align 은 팔이 이니셜이 아니면 충돌 위험).
+        'object_gripping_initial_pose(front)': object_gripping_initial_pose('front'),
+        'object_gripping_initial_pose(left)': object_gripping_initial_pose('left'),
+        'object_gripping_initial_pose(right)': object_gripping_initial_pose('right'),
+        'search_pose': search_pose(),
+        'search_switch_pose': search_switch_pose(),
+        'door_handle_grasp_pose': door_handle_grasp_pose(),
+
+        # --- 동작 ---
         'impedance_demo_press': impedance_demo_press(),
         'torso_up': torso_up(),
         'impedance_demo_joint': impedance_demo_joint(),
-        
-        'object_gripping_initial_pose': object_gripping_initial_pose(),
-        'object_gripping_initial_pose_torso_right': object_gripping_initial_pose_torso_right(),
-        'object_gripping_initial_pose_torso_left': object_gripping_initial_pose_torso_left(),
-        
-        'ready_pose': ready_pose(),
 
         'object_handover_demo_final': object_handover_demo_final(),
         'object_handover_demo_final_tmp': object_handover_demo_final_tmp(),
-        'test1': test1(),
-        'door_handle_grasp_pose': door_handle_grasp_pose(),
         'door_open_right_arm_stream': door_open_right_arm_stream(),
 
         'wave_both_arms': wave_both_arms(),
         
         'align_base_to_tag6': align_base_to_tag6(),
         'align_base_to_tag7': align_base_to_tag7(),
-        'search_pose': search_pose(),
-        'search_switch_pose': search_switch_pose(),
         'move_ee_to_tag6_offset': move_ee_to_tag6_offset(),
         'search_and_push_switch': search_and_push_switch(),
         'search_and_open_door2': search_and_open_door2(),
         'open_door_and_push_switch2': open_door_and_push_switch2(),
         'push_switch_and_close_door': push_switch_and_close_door(),
-        'object_gripping_initial_pose_front': object_gripping_initial_pose_front(),
         'move_zssw_to_zs_and_put_down': move_zssw_to_zs_and_put_down(),
         'move_zs_to_zssw': move_zs_to_zssw(),
         'push_switch_and_close_door_move_to_zs': push_switch_and_close_door_move_to_zs(),
+
+        # --- 테스트 ---
+        'test0': test0(),
+        'test1': test1(),
+        'test2': test2(),
     }
 
 __all__ = [
-    'Task', 'build_tasks', 'torso_up'
+    'Task', 'build_tasks', 'torso_up',
     'JS_SOFT_ARM', 'JS_CONTACT_ARM', 'impedance_demo_press', 'search_pose',
     'ready_pose',
     'impedance_demo_joint',
     'turn_and_move',
     'object_gripping_initial_pose',
     'ready_pose',
-    'object_gripping_initial_pose_torso_right',
-    'object_gripping_initial_pose_torso_left',
+    'torso_align',
     'pick_up_object_at',
     'put_down_object_at',
     'pick_up_move_and_put_down_object',

@@ -55,7 +55,7 @@ def test_xy_difference_and_destination_side(settings_file, start, end, expected_
     }), encoding='utf-8')
     commands = task_source.turn_and_move(start, end).commands
     assert len(commands) == 3
-    pose = getattr(task_source, f'object_gripping_initial_pose_torso_{side}')()
+    pose = task_source.object_gripping_initial_pose(side)
     assert commands[0] == pose.commands[0]
     assert isinstance(commands[1], MoveToStep)
     assert (commands[1].x, commands[1].y) == pytest.approx(expected_xy)
@@ -81,11 +81,10 @@ def test_same_side_skips_both_preparation_poses(
         },
     }), encoding='utf-8')
 
-    def unexpected_pose():
+    def unexpected_pose(*args, **kwargs):
         pytest.fail('Same-side movement must not call a preparation pose')
 
-    for name in ('object_gripping_initial_pose_torso_left',
-                 'object_gripping_initial_pose_torso_right'):
+    for name in ('object_gripping_initial_pose', 'torso_align'):
         monkeypatch.setattr(task_source, name, unexpected_pose)
 
     commands = task_source.turn_and_move(start, end).commands

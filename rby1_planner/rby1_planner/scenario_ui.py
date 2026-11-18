@@ -278,7 +278,8 @@ class ScenarioPanel(QWidget):
 
     def _fill_task_list(self, selected: str = "") -> None:
         self.task_list.clear()
-        for name in sorted(self.tasks):
+        # build_tasks() order: task.py lists the poses first.
+        for name in self.tasks:
             self.task_list.addItem(name)
         selected_row = -1
         for row in range(self.task_list.count()):

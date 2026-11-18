@@ -1,12 +1,12 @@
 locations:
   LH1:
-    position: [0.0, 0.81]
+    position: [0.0, 0.0]
     side: left
     tag_3:
       offset: [-0.05, 0.06100, -0.009]
   LH2:
-    position: [0.60, 0.81]
-    side: left
+    position: [0.0, -0.81]
+    side: right
     tag_0:
       offset: [-0.05, 0.06100, -0.009]
   # ZSSW / AP / ZS 좌표 원점은 ZSSW, 축은 base 180° 회전 배치의 base 축이다.

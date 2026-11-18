@@ -12,10 +12,8 @@
 |---|---|---|
 | `ready_pose` | 토르소 + 양팔 | 기본 대기 자세 |
 | `torso_up` | 토르소 | 토르소 상대 직선 이동 1회 |
-| `object_gripping_initial_pose` | 토르소 + 양팔 | 물체 파지 준비 자세 |
-| `object_gripping_initial_pose_torso_right` | 토르소 + 양팔 | 파지 준비 자세, 허리 오른쪽(-90°) |
-| `object_gripping_initial_pose_torso_left` | 토르소 + 양팔 | 파지 준비 자세, 허리 왼쪽(+90°) |
-| `object_gripping_initial_pose_front` | 토르소 | 팔은 그대로, 허리만 정면(torso_5 = 0) |
+| `object_gripping_initial_pose` | 양팔 | 물체 파지 준비 자세 (허리 그대로). 코드에서 `object_gripping_initial_pose('left'/'front'/'right')` 는 허리도 같이 맞춘다 |
+| `object_gripping_initial_pose(front)` / `(left)` / `(right)` | 토르소 + 양팔 | 허리(yaw 0° / +90° / -90°)와 양팔 파지 준비 자세를 함께 맞춘다. 허리만 돌리는 `torso_align` 은 팔이 이니셜 자세가 아니면 충돌 위험이 있어 목록에서 뺐다 (`turn_and_move` 내부에서만 사용) |
 | `search_pose` | 오른팔 | 문(tag_6) 탐색 자세 |
 | `search_switch_pose` | 토르소 + 양팔 | 스위치(tag_5) 탐색 자세 |
 | `door_handle_grasp_pose` | 토르소 + 양팔 | `torso_right` 자세에서 오른팔만 손잡이 파지 관절값 |
@@ -64,7 +62,7 @@
 | `turn_and_move(a, b)` | 필요하면 허리 방향 전환 후 base 이동 |
 | `turn_left_and_move_left` / `turn_right_and_move_right` | 허리 ±90° 후 base ±0.87 m 이동 |
 | `move_ee_to_tag7_offset`, `door_close_right_arm_stream` | tag_7 손잡이 이동, 문 닫기 원호 스트림 |
-| `object_gripping_initial_pose_temp`, `pose_before_base_movement` | 중간 자세 |
+| `pose_before_base_movement` | 중간 자세 |
 
 ## 정리 필요 항목
 
