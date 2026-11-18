@@ -586,7 +586,9 @@ class RBY1ControlNode(Node):
                 'non-negative number'
             )
         self.cartesian_joint_limit_margin_deg = cartesian_margin
-        for arm in ('right_arm', 'left_arm'):
+        # Every manual Cartesian group (both arms and the torso) needs a
+        # valid soft-limit window for the CS joint preflight.
+        for arm in self.cartesian_links:
             self.joint_limit_policy.limits_deg(
                 arm,
                 margin_deg=self.cartesian_joint_limit_margin_deg,
@@ -2399,10 +2401,10 @@ class RBY1ControlNode(Node):
         target = [x, y, z, roll_deg, pitch_deg, yaw_deg]
         """
 
-        if arm not in ('right_arm', 'left_arm'):
+        if arm not in self.cartesian_links:
             self._push_event(
                 'error',
-                f'Unknown Cartesian arm: {arm}.',
+                f'Unknown Cartesian group: {arm}.',
             )
             return
 
@@ -2463,10 +2465,19 @@ class RBY1ControlNode(Node):
         contact step apply.
         """
 
-        if arm not in ('right_arm', 'left_arm'):
+        if arm not in self.cartesian_links:
             self._push_event(
                 'error',
-                f'Unknown Cartesian arm: {arm}.',
+                f'Unknown Cartesian group: {arm}.',
+            )
+            return
+        if impedance is not None and arm not in ('right_arm', 'left_arm'):
+            # Cartesian impedance is solved with arm IK; the torso has no
+            # such path, so refuse instead of silently moving in position.
+            self._push_event(
+                'error',
+                f'Cartesian impedance supports only the arms, not {arm}; '
+                'switch Control to Position.',
             )
             return
 

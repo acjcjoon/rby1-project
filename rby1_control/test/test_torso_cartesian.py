@@ -133,3 +133,98 @@ def test_task_linear_absolute_sends_a_torso_cartesian_goal(monkeypatch):
     # The runtime joint soft-limit guard follows the torso joints.
     assert sent['motion_mode'] == 'cartesian'
     assert sent['motion_groups'] == ('torso',)
+
+
+def _manual_node(monkeypatch):
+    """Node stub for the manual (operator UI) Cartesian path."""
+
+    class Vector:
+        def __init__(self):
+            self.x = self.y = self.z = 0.0
+            self.w = 1.0
+
+    class CartesianCommand:
+        def __init__(self):
+            self.ref_link = ''
+            self.target_link = ''
+            self.transform = SimpleNamespace(
+                translation=Vector(), rotation=Vector(),
+            )
+
+    class Rby1CartesianCommand:
+        class Goal:
+            def __init__(self):
+                self.torso = None
+                self.right_arm = None
+                self.left_arm = None
+
+    monkeypatch.setattr(control_node_module, 'CartesianCommand', CartesianCommand)
+    monkeypatch.setattr(
+        control_node_module, 'Rby1CartesianCommand', Rby1CartesianCommand,
+    )
+
+    node = object.__new__(RBY1ControlNode)
+    node._lock = threading.RLock()
+    node.cartesian_links = {
+        'right_arm': ('base', 'ee_right'),
+        'left_arm': ('base', 'ee_left'),
+        'torso': ('base', 'link_torso_5'),
+    }
+    node.cartesian_action_client = SimpleNamespace(server_is_ready=lambda: True)
+    node.cartesian_action_name = 'robot_cartesian'
+    node.manual_cartesian_linear_velocity_limit = 0.1
+    node.manual_cartesian_angular_velocity_limit = 0.3
+    node.manual_cartesian_acceleration_scaling = 0.5
+    node._motion_command_allowed = lambda: True
+    node.checked = []
+    node._cartesian_feedback_ready = (
+        lambda arm: node.checked.append(('tcp', arm)) or True
+    )
+    node._cartesian_joint_preflight_ready = (
+        lambda arm: node.checked.append(('joints', arm)) or True
+    )
+    node.events = []
+    node._push_event = lambda level, text: node.events.append((level, text))
+    node.sent = {}
+    node._send_motion_goal = lambda **kwargs: node.sent.update(kwargs)
+    return node
+
+
+def test_manual_move_cartesian_sends_a_torso_goal(monkeypatch):
+    node = _manual_node(monkeypatch)
+
+    node.move_cartesian('torso', [0.0, 0.0, 1.05, 0.0, 0.0, 0.0], 3.0)
+
+    assert node.checked == [('tcp', 'torso'), ('joints', 'torso')]
+    goal = node.sent['goal']
+    assert goal.right_arm is None and goal.left_arm is None
+    assert goal.torso.ref_link == 'base'
+    assert goal.torso.target_link == 'link_torso_5'
+    assert goal.torso.transform.translation.z == pytest.approx(1.05)
+    assert node.sent['motion_groups'] == ('torso',)
+
+
+def test_manual_torso_cartesian_rejects_impedance(monkeypatch):
+    node = _manual_node(monkeypatch)
+
+    node.move_cartesian(
+        'torso',
+        [0.0, 0.0, 1.05, 0.0, 0.0, 0.0],
+        3.0,
+        impedance={'stiffness': {'torso': [100.0] * 6}},
+    )
+
+    assert node.sent == {}
+    assert any(
+        level == 'error' and 'supports only the arms' in text
+        for level, text in node.events
+    )
+
+
+def test_manual_cartesian_rejects_the_head(monkeypatch):
+    node = _manual_node(monkeypatch)
+
+    node.move_cartesian('head', [0.0] * 6, 3.0)
+
+    assert node.sent == {}
+    assert node.events[-1][0] == 'error'

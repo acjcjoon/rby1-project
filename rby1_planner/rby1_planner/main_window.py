@@ -24,6 +24,7 @@ from .scenario_ui import ScenarioPanel
 from .qt_compat import (
     QAbstractSpinBox,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -40,6 +41,8 @@ from .qt_compat import (
     QPlainTextEdit,
     QPushButton,
     QScrollBar,
+    QStackedWidget,
+    QTabBar,
     QTabWidget,
     QTimer,
     QVBoxLayout,
@@ -82,9 +85,12 @@ class MainWindow(QMainWindow):
         "head": ("Head", 2),
     }
 
+    # Manual Cartesian groups. "torso" moves link_torso_5 relative to the
+    # base (position control only); the arms ride along with it.
     CARTESIAN_ARMS = {
         "right_arm": "Right Arm",
         "left_arm": "Left Arm",
+        "torso": "Torso",
     }
 
     # Joint-tab control mode.  Impedance values are editable so JS/CS
@@ -933,32 +939,32 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(7)
 
-        # One motion mode is visible at a time.  This is the main width
-        # reduction compared with the previous dual-panel layout.
+        # Control mode is a two-way segmented toggle; motion type is a tab.
         mode_group = QGroupBox("Motion")
         mode_layout = QHBoxLayout(mode_group)
 
-        mode_layout.addWidget(QLabel("Type"))
-        self.motion_type_selector = QComboBox()
-        self.motion_type_selector.addItem("Joint Space", "joint")
-        self.motion_type_selector.addItem(
-            "Cartesian Space",
-            "cartesian",
-        )
-        mode_layout.addWidget(self.motion_type_selector, 1)
-
         mode_layout.addWidget(QLabel("Control"))
-        self.control_mode_selector = QComboBox()
-        self.control_mode_selector.addItem("Position", "position")
-        self.control_mode_selector.addItem("Impedance", "impedance")
-        self.control_mode_selector.setToolTip(
+        control_tooltip = (
             "Position: ordinary trajectory tracking.\n"
             "Impedance: joint impedance with the values below (arms only). "
             "Cartesian jogs and MOVE are solved to a joint target on the arm "
             "model and tracked with the same joint impedance. After each "
             "command the backend re-anchors to the measured joint state."
         )
-        mode_layout.addWidget(self.control_mode_selector, 1)
+        self.position_mode_button = QPushButton("Position")
+        self.impedance_mode_button = QPushButton("Impedance")
+        self.control_mode_buttons = QButtonGroup(mode_group)
+        self.control_mode_buttons.setExclusive(True)
+        segment = QHBoxLayout()
+        segment.setSpacing(0)
+        for button in (self.position_mode_button, self.impedance_mode_button):
+            button.setCheckable(True)
+            button.setObjectName("segmentButton")
+            button.setToolTip(control_tooltip)
+            self.control_mode_buttons.addButton(button)
+            segment.addWidget(button)
+        self.position_mode_button.setChecked(True)
+        mode_layout.addLayout(segment, 2)
 
         mode_layout.addWidget(QLabel("State"))
         self.control_mode_value = QLabel("IDLE")
@@ -971,8 +977,17 @@ class MainWindow(QMainWindow):
         self.joint_panel = self._build_joint_space_panel()
         self.cartesian_panel = self._build_cartesian_space_panel()
 
-        root.addWidget(self.joint_panel, 1)
-        root.addWidget(self.cartesian_panel, 1)
+        # The tab label names the panel, so drop the group box title/frame.
+        for page in (self.joint_panel, self.cartesian_panel):
+            page.setTitle("")
+            page.setObjectName("motionPage")
+
+        # Same QTabBar look as the main window tabs.
+        self.motion_tabs = QTabWidget()
+        self.motion_tabs.setObjectName("motionTabs")
+        self.motion_tabs.addTab(self.joint_panel, "Joint Space")
+        self.motion_tabs.addTab(self.cartesian_panel, "Cartesian Space")
+        root.addWidget(self.motion_tabs, 1)
 
         action_group = QGroupBox("Command")
         action_layout = QHBoxLayout(action_group)
@@ -1001,10 +1016,10 @@ class MainWindow(QMainWindow):
 
         root.addWidget(action_group)
 
-        self.motion_type_selector.currentIndexChanged.connect(
+        self.motion_tabs.currentChanged.connect(
             self._on_motion_type_changed
         )
-        self.control_mode_selector.currentIndexChanged.connect(
+        self.impedance_mode_button.toggled.connect(
             self._on_control_mode_changed
         )
         self._apply_control_mode_label("idle")
@@ -1108,11 +1123,32 @@ class MainWindow(QMainWindow):
         self._on_motion_type_changed()
 
     def _impedance_mode_selected(self) -> bool:
-        selector = getattr(self, "control_mode_selector", None)
-        return (
-            selector is not None
-            and str(selector.currentData()) == "impedance"
+        button = getattr(self, "impedance_mode_button", None)
+        return button is not None and button.isChecked()
+
+    def _motion_type(self) -> str:
+        tabs = getattr(self, "motion_tabs", None)
+        if tabs is None or tabs.currentWidget() is self.joint_panel:
+            return "joint"
+        return "cartesian"
+
+    def _update_impedance_availability(self) -> None:
+        """Impedance is arms-only: lock Position for Joint torso/head."""
+
+        button = getattr(self, "impedance_mode_button", None)
+        if button is None or not hasattr(self, "joint_group_tabs"):
+            return
+        allowed = (
+            self._motion_type() == "cartesian"
+            or self._selected_joint_group() in self.DEFAULT_JOINT_STIFFNESS
         )
+        if not allowed and button.isChecked():
+            self.position_mode_button.setChecked(True)
+            self.append_log(
+                "info",
+                "Impedance is arms-only; control switched to Position.",
+            )
+        button.setEnabled(allowed)
 
     @staticmethod
     def _parse_number_list(text: str, label: str) -> list:
@@ -1221,10 +1257,8 @@ class MainWindow(QMainWindow):
     def _on_motion_type_changed(self, *args) -> None:
         del args
 
-        mode = str(self.motion_type_selector.currentData())
-
-        self.joint_panel.setVisible(mode == "joint")
-        self.cartesian_panel.setVisible(mode == "cartesian")
+        mode = self._motion_type()
+        self._update_impedance_availability()
 
         # Impedance applies to both motion types: Cartesian targets are
         # solved to a joint target by the backend and tracked with the same
@@ -1247,21 +1281,21 @@ class MainWindow(QMainWindow):
         # --------------------------------------------------------------
         # Component selector
         # --------------------------------------------------------------
-        selector_group = QGroupBox("Joint Group")
-        selector_layout = QFormLayout(selector_group)
+        self.joint_group_tabs = QTabBar()
+        self.joint_group_tabs.setObjectName("jointGroupTabs")
+        self.joint_group_tabs.setExpanding(False)
+        self.joint_group_tabs.setDrawBase(False)
+        for index, (key, (label, _)) in enumerate(self.JOINT_GROUPS.items()):
+            self.joint_group_tabs.addTab(label)
+            self.joint_group_tabs.setTabData(index, key)
 
-        self.joint_group_selector = QComboBox()
-        for key, (label, _) in self.JOINT_GROUPS.items():
-            self.joint_group_selector.addItem(label, key)
-
-        self.joint_group_selector.currentIndexChanged.connect(
+        self.joint_group_tabs.currentChanged.connect(
             self._on_joint_group_stiffness_default
         )
-        self.joint_group_selector.currentIndexChanged.connect(
+        self.joint_group_tabs.currentChanged.connect(
             self._on_joint_group_changed
         )
-        selector_layout.addRow("Component", self.joint_group_selector)
-        root.addWidget(selector_group)
+        root.addWidget(self.joint_group_tabs)
 
         # --------------------------------------------------------------
         # Get q snapshot: compact vector display
@@ -1407,13 +1441,17 @@ class MainWindow(QMainWindow):
         self._on_joint_group_changed()
         return panel
 
+    # Fixed row height for Cartesian rows: rows never squeeze into each
+    # other; the window minimum grows instead.
+    CARTESIAN_ROW_HEIGHT = 26
+
     def _build_cartesian_space_panel(self) -> QGroupBox:
         panel = QGroupBox("Cartesian Space Motion")
         root = QVBoxLayout(panel)
-        root.setSpacing(8)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(6)
 
-        # The selector is intentionally removed: Left and Right are shown
-        # simultaneously and each arm owns its own snapshot / target controls.
+        # Each group panel owns its TCP snapshot and target controls.
         self.tcp_snapshot_values = {}
         self.get_tcp_buttons = {}
 
@@ -1423,45 +1461,19 @@ class MainWindow(QMainWindow):
         self.cartesian_plus_buttons = {}
 
         # --------------------------------------------------------------
-        # Top row: independent Left/Right TCP snapshots + shared jog settings
+        # Top row: Arms | Torso sub tabs + shared jog settings in one line
         # --------------------------------------------------------------
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
-        snapshot_group = QGroupBox("TCP Snapshot")
-        snapshot_layout = QGridLayout(snapshot_group)
-        snapshot_layout.setHorizontalSpacing(7)
-        snapshot_layout.setVerticalSpacing(5)
-        snapshot_layout.setColumnStretch(1, 1)
-
-        for row, (arm, label) in enumerate(
-            (
-                ("left_arm", "Left TCP"),
-                ("right_arm", "Right TCP"),
-            )
-        ):
-            snapshot_label = QLabel(self._empty_vector(6))
-            snapshot_label.setObjectName("vectorSnapshot")
-            snapshot_label.setAlignment(alignment("AlignCenter"))
-            snapshot_label.setMinimumHeight(29)
-
-            button = QPushButton("Get TCP")
-            button.clicked.connect(
-                lambda checked=False, arm_name=arm:
-                self._get_cartesian_snapshot(arm_name)
-            )
-
-            snapshot_layout.addWidget(QLabel(label), row, 0)
-            snapshot_layout.addWidget(snapshot_label, row, 1)
-            snapshot_layout.addWidget(button, row, 2)
-
-            self.tcp_snapshot_values[arm] = snapshot_label
-            self.get_tcp_buttons[arm] = button
-
-        settings = QGroupBox("Jog Settings")
-        settings_layout = QGridLayout(settings)
-        settings_layout.setHorizontalSpacing(7)
-        settings_layout.setVerticalSpacing(5)
+        self.cartesian_group_tabs = QTabBar()
+        self.cartesian_group_tabs.setObjectName("cartesianGroupTabs")
+        self.cartesian_group_tabs.setExpanding(False)
+        self.cartesian_group_tabs.setDrawBase(False)
+        self.cartesian_group_tabs.addTab("Arms")
+        self.cartesian_group_tabs.addTab("Torso")
+        top_row.addWidget(self.cartesian_group_tabs)
+        top_row.addStretch(1)
 
         self.cartesian_linear_step = QDoubleSpinBox()
         self.cartesian_linear_step.setDecimals(3)
@@ -1484,38 +1496,61 @@ class MainWindow(QMainWindow):
         self.cartesian_minimum_time.setValue(3.0)
         self.cartesian_minimum_time.setSuffix(" s")
 
-        settings_layout.addWidget(QLabel("Linear"), 0, 0)
-        settings_layout.addWidget(self.cartesian_linear_step, 0, 1)
-        settings_layout.addWidget(QLabel("Angular"), 1, 0)
-        settings_layout.addWidget(self.cartesian_angular_step, 1, 1)
-        settings_layout.addWidget(QLabel("Min time"), 2, 0)
-        settings_layout.addWidget(self.cartesian_minimum_time, 2, 1)
-
-        # Keep the TCP snapshots and jog settings on one compact row,
-        # matching the Joint Space layout.
-        settings.setMaximumWidth(300)
-        top_row.addWidget(snapshot_group, 4)
-        top_row.addWidget(settings, 2)
+        for text, spin in (
+            ("Linear", self.cartesian_linear_step),
+            ("Angular", self.cartesian_angular_step),
+            ("Min time", self.cartesian_minimum_time),
+        ):
+            spin.setFixedWidth(92)
+            spin.setFixedHeight(self.CARTESIAN_ROW_HEIGHT)
+            top_row.addWidget(QLabel(text))
+            top_row.addWidget(spin)
         root.addLayout(top_row)
 
         # --------------------------------------------------------------
-        # Main area: Left Arm and Right Arm are always visible together.
+        # Pages: Arms (Left | Right side by side) and Torso
         # --------------------------------------------------------------
-        arms_row = QHBoxLayout()
-        arms_row.setSpacing(8)
+        self.cartesian_pages = QStackedWidget()
 
-        left_panel = self._build_cartesian_arm_panel(
-            "left_arm",
-            "Left Arm",
+        arms_page = QWidget()
+        arms_layout = QHBoxLayout(arms_page)
+        arms_layout.setContentsMargins(0, 0, 0, 0)
+        arms_layout.setSpacing(8)
+        arms_layout.addWidget(
+            self._build_cartesian_arm_panel("left_arm", "Left Arm"), 1
         )
-        right_panel = self._build_cartesian_arm_panel(
-            "right_arm",
-            "Right Arm",
+        arms_layout.addWidget(
+            self._build_cartesian_arm_panel("right_arm", "Right Arm"), 1
         )
 
-        arms_row.addWidget(left_panel, 1)
-        arms_row.addWidget(right_panel, 1)
-        root.addLayout(arms_row, 1)
+        body_page = QWidget()
+        body_layout = QHBoxLayout(body_page)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(8)
+        body_layout.addWidget(
+            self._build_cartesian_arm_panel("torso", "Torso"), 1
+        )
+        note_group = QGroupBox("Note")
+        note_layout = QVBoxLayout(note_group)
+        note = QLabel(
+            "Moves link_torso_5 relative to the base.\n\n"
+            "Position control only (Impedance is arms-only).\n\n"
+            "Both arms ride along with the torso; check the arms' "
+            "clearance first and start with small jog steps."
+        )
+        note.setObjectName("secondaryNote")
+        note.setWordWrap(True)
+        note_layout.addWidget(note)
+        note_layout.addStretch(1)
+        body_layout.addWidget(note_group, 1)
+
+        self.cartesian_pages.addWidget(arms_page)
+        self.cartesian_pages.addWidget(body_page)
+        self.cartesian_group_tabs.currentChanged.connect(
+            self.cartesian_pages.setCurrentIndex
+        )
+        root.addWidget(self.cartesian_pages)
+        root.addStretch(1)
 
         return panel
 
@@ -1524,37 +1559,66 @@ class MainWindow(QMainWindow):
         arm: str,
         title: str,
     ) -> QGroupBox:
-        """Build one arm's Current / Target / Jog and direction-key UI."""
+        """One group's snapshot, Current/Target/Jog table and keys.
+
+        Layout: Get TCP row on top; the axis table and the direction keys
+        side by side; Copy / MOVE at the bottom.
+        """
+
+        row_height = self.CARTESIAN_ROW_HEIGHT
 
         group = QGroupBox(title)
         root = QVBoxLayout(group)
+        root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
+
+        # --------------------------------------------------------------
+        # Get TCP snapshot
+        # --------------------------------------------------------------
+        snapshot_row = QHBoxLayout()
+        snapshot_row.setSpacing(6)
+
+        get_button = QPushButton("Get TCP")
+        get_button.setFixedHeight(row_height)
+        get_button.clicked.connect(
+            lambda checked=False, arm_name=arm:
+            self._get_cartesian_snapshot(arm_name)
+        )
+        snapshot_label = QLabel(self._empty_vector(6))
+        snapshot_label.setObjectName("vectorSnapshot")
+        snapshot_label.setAlignment(alignment("AlignCenter"))
+        snapshot_label.setFixedHeight(row_height)
+
+        snapshot_row.addWidget(get_button)
+        snapshot_row.addWidget(snapshot_label, 1)
+        root.addLayout(snapshot_row)
+
+        self.tcp_snapshot_values[arm] = snapshot_label
+        self.get_tcp_buttons[arm] = get_button
+
+        # --------------------------------------------------------------
+        # Axis table | direction keys
+        # --------------------------------------------------------------
+        body_row = QHBoxLayout()
+        body_row.setSpacing(10)
 
         motion_widget = QWidget()
         grid = QGridLayout(motion_widget)
-        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(5)
-
-        grid.setColumnStretch(0, 0)
+        grid.setVerticalSpacing(4)
         grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 0)
-        grid.setColumnStretch(3, 0)
-        grid.setColumnStretch(4, 0)
 
-        axis_header = QLabel("Axis")
-        current_header = QLabel("Current")
-        target_header = QLabel("Target")
-        jog_header = QLabel("Jog")
-
-        current_header.setAlignment(alignment("AlignCenter"))
-        target_header.setAlignment(alignment("AlignCenter"))
-        jog_header.setAlignment(alignment("AlignCenter"))
-
-        grid.addWidget(axis_header, 0, 0)
-        grid.addWidget(current_header, 0, 1)
-        grid.addWidget(target_header, 0, 2)
-        grid.addWidget(jog_header, 0, 3, 1, 2)
+        headers = ("Axis", "Current", "Target", "Jog")
+        for column, text in enumerate(headers):
+            header = QLabel(text)
+            header.setObjectName("secondaryNote")
+            if column:
+                header.setAlignment(alignment("AlignCenter"))
+            if text == "Jog":
+                grid.addWidget(header, 0, 3, 1, 2)
+            else:
+                grid.addWidget(header, 0, column)
 
         axis_specs = (
             ("X", " m", -2.0, 2.0, 3),
@@ -1576,12 +1640,15 @@ class MainWindow(QMainWindow):
             row = index + 1
 
             axis_label = QLabel(axis)
+            axis_label.setFixedHeight(row_height)
+
             current = QLabel("--")
             current.setAlignment(alignment("AlignCenter"))
-            current.setMinimumWidth(76)
+            current.setMinimumWidth(74)
+            current.setFixedHeight(row_height)
 
             target = QDoubleSpinBox()
-            target.setFixedWidth(88)
+            target.setFixedSize(92, row_height)
             target.setDecimals(decimals)
             target.setRange(minimum, maximum)
             target.setSingleStep(0.01 if index < 3 else 1.0)
@@ -1598,24 +1665,15 @@ class MainWindow(QMainWindow):
 
             minus = QPushButton("−")
             plus = QPushButton("+")
-            minus.setFixedSize(34, 28)
-            plus.setFixedSize(34, 28)
-
+            minus.setFixedSize(30, row_height)
+            plus.setFixedSize(30, row_height)
             minus.clicked.connect(
                 lambda checked=False, arm_name=arm, i=index:
-                self._cartesian_jog(
-                    arm_name,
-                    i,
-                    -1,
-                )
+                self._cartesian_jog(arm_name, i, -1)
             )
             plus.clicked.connect(
                 lambda checked=False, arm_name=arm, i=index:
-                self._cartesian_jog(
-                    arm_name,
-                    i,
-                    +1,
-                )
+                self._cartesian_jog(arm_name, i, +1)
             )
 
             grid.addWidget(axis_label, row, 0)
@@ -1634,35 +1692,16 @@ class MainWindow(QMainWindow):
         self.cartesian_minus_buttons[arm] = minus_buttons
         self.cartesian_plus_buttons[arm] = plus_buttons
 
-        root.addWidget(motion_widget, 1)
+        body_row.addWidget(motion_widget, 1)
 
-        # Per-arm target commands replace the old global arm selector.
-        command_row = QHBoxLayout()
-        copy_button = QPushButton("Copy Current → Target")
-        move_button = QPushButton("MOVE TARGET")
-
-        copy_button.clicked.connect(
-            lambda checked=False, arm_name=arm:
-            self._copy_current_cartesian_to_target(arm_name)
-        )
-        move_button.clicked.connect(
-            lambda checked=False, arm_name=arm:
-            self._move_cartesian_target(arm_name)
-        )
-
-        command_row.addWidget(copy_button, 1)
-        command_row.addWidget(move_button, 1)
-        root.addLayout(command_row)
-
-        # Direction keys use the same linear jog backend as X/Y/Z row buttons.
-        direction_group = QGroupBox("Direction Key")
+        # Press-and-hold direction keys (same linear jog backend as the
+        # X/Y/Z row buttons). XY form a cross; Z is a separate pair.
+        direction_group = QGroupBox("Direction Key (hold)")
         direction_layout = QGridLayout(direction_group)
-        direction_layout.setHorizontalSpacing(5)
-        direction_layout.setVerticalSpacing(5)
-
-        # XY buttons form a cross; Z buttons are a separate vertical pair.
-        # This mirrors the operator sketch and keeps each key visually compact.
-        direction_layout.setColumnMinimumWidth(3, 14)
+        direction_layout.setContentsMargins(6, 6, 6, 6)
+        direction_layout.setHorizontalSpacing(4)
+        direction_layout.setVerticalSpacing(6)
+        direction_layout.setColumnMinimumWidth(3, 8)
         direction_specs = (
             ("+X", 0, +1, 0, 1),
             ("−Y", 1, -1, 1, 0),
@@ -1671,13 +1710,11 @@ class MainWindow(QMainWindow):
             ("+Z", 2, +1, 0, 4),
             ("−Z", 2, -1, 2, 4),
         )
-
         for text, axis_index, direction, row, column in direction_specs:
             button = QPushButton(text)
-            button.setFixedSize(48, 28)
+            button.setFixedSize(42, 30)
 
-            # Direction keys are press-and-hold controls. The small +/- buttons
-            # in the pose table remain discrete one-click jogs.
+            # The small +/- buttons in the table remain one-click jogs.
             button.pressed.connect(
                 lambda arm_name=arm,
                 i=axis_index,
@@ -1693,14 +1730,36 @@ class MainWindow(QMainWindow):
             )
             direction_layout.addWidget(button, row, column)
 
-        root.addWidget(direction_group)
+        body_row.addWidget(direction_group, 0, alignment("AlignTop"))
+        root.addLayout(body_row)
+
+        # --------------------------------------------------------------
+        # Per-group target commands
+        # --------------------------------------------------------------
+        command_row = QHBoxLayout()
+        copy_button = QPushButton("Copy Current → Target")
+        move_button = QPushButton("MOVE TARGET")
+        copy_button.setFixedHeight(row_height + 2)
+        move_button.setFixedHeight(row_height + 2)
+        copy_button.clicked.connect(
+            lambda checked=False, arm_name=arm:
+            self._copy_current_cartesian_to_target(arm_name)
+        )
+        move_button.clicked.connect(
+            lambda checked=False, arm_name=arm:
+            self._move_cartesian_target(arm_name)
+        )
+        command_row.addWidget(copy_button, 1)
+        command_row.addWidget(move_button, 1)
+        root.addLayout(command_row)
         return group
 
     # ------------------------------------------------------------------
     # Joint-space UI callbacks
     # ------------------------------------------------------------------
     def _selected_joint_group(self) -> str:
-        return str(self.joint_group_selector.currentData())
+        tabs = self.joint_group_tabs
+        return str(tabs.tabData(tabs.currentIndex()))
 
     def _get_joint_snapshot(self) -> None:
         group = self._selected_joint_group()
@@ -1728,7 +1787,7 @@ class MainWindow(QMainWindow):
 
     def _on_joint_group_changed(self, *args) -> None:
         del args
-        if not hasattr(self, "joint_group_selector"):
+        if not hasattr(self, "joint_group_tabs"):
             return
 
         group = self._selected_joint_group()
@@ -1757,6 +1816,7 @@ class MainWindow(QMainWindow):
             "info",
             f"Joint group selected: {label}.",
         )
+        self._update_impedance_availability()
 
     def _on_joint_target_changed(
         self,
@@ -2070,7 +2130,7 @@ class MainWindow(QMainWindow):
     def _copy_selected_current_to_target(self) -> None:
         # Joint mode keeps the existing selected-group workflow.
         # Cartesian mode has independent per-arm buttons.
-        mode = str(self.motion_type_selector.currentData())
+        mode = self._motion_type()
 
         if mode == "joint":
             self._copy_current_joint_to_target()
@@ -2078,7 +2138,7 @@ class MainWindow(QMainWindow):
     def _move_selected_target(self) -> None:
         # Joint mode keeps the existing selected-group workflow.
         # Cartesian mode has independent per-arm buttons.
-        mode = str(self.motion_type_selector.currentData())
+        mode = self._motion_type()
 
         if mode == "joint":
             self._move_joint_target()
@@ -2116,9 +2176,9 @@ class MainWindow(QMainWindow):
                 else:
                     self.joint_current_labels[index].setText("--")
 
-        # Cartesian state: Left and Right are rendered simultaneously.
+        # Cartesian state: Left, Torso and Right are rendered simultaneously.
         cartesian_state = state.get("cartesian", {})
-        for arm in ("left_arm", "right_arm"):
+        for arm in self.CARTESIAN_ARMS:
             cartesian = cartesian_state.get(arm)
             labels = self.cartesian_current_labels.get(arm, [])
 
@@ -2142,12 +2202,12 @@ class MainWindow(QMainWindow):
                         f"{value:+.2f}°"
                     )
 
-        # Get TCP snapshots are independent for Left and Right.
+        # Get TCP snapshots are independent per Cartesian group.
         if hasattr(
             self.backend,
             "get_cartesian_snapshot",
         ):
-            for arm in ("left_arm", "right_arm"):
+            for arm in self.CARTESIAN_ARMS:
                 snapshot = self.backend.get_cartesian_snapshot(
                     arm
                 )
@@ -2936,6 +2996,34 @@ class MainWindow(QMainWindow):
 
             QTabBar::tab:selected {
                 background: #414b59;
+            }
+
+            QGroupBox#motionPage {
+                border: none;
+                margin-top: 0px;
+                padding-top: 0px;
+            }
+
+            QTabBar#jointGroupTabs::tab,
+            QTabBar#cartesianGroupTabs::tab {
+                padding: 5px 12px;
+            }
+
+            QPushButton#segmentButton {
+                background: #2a2f36;
+                border-radius: 0px;
+                padding: 6px 14px;
+            }
+
+            QPushButton#segmentButton:checked {
+                background: #414b59;
+                border-color: #8fa3bd;
+                color: #ffffff;
+            }
+
+            QPushButton#segmentButton:disabled {
+                color: #6b7480;
+                background: #24282e;
             }
 
 

@@ -10,6 +10,7 @@ try:
         QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
         QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
         QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
+        QButtonGroup, QStackedWidget, QTabBar,
         QVBoxLayout, QWidget,
     )
     QT_BINDING = 'PySide6'
@@ -22,6 +23,7 @@ except ImportError:
             QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
             QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
             QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
+            QButtonGroup, QStackedWidget, QTabBar,
             QVBoxLayout, QWidget,
         )
         QT_BINDING = 'PyQt5'

@@ -358,7 +358,7 @@ class ControlTransport:
                 'motion_state': self.get_motion_state(),
                 'cartesian_snapshots': {
                     arm: self.get_cartesian_snapshot(arm)
-                    for arm in ('right_arm', 'left_arm')
+                    for arm in self.cartesian_links
                 },
                 'task_commands': {
                     command_id: task_command_state_to_dict(state)
