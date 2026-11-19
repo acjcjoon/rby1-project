@@ -71,6 +71,11 @@ class OperatorNode(Node):
             'vo_topic': '/rby1/vslam/camera_odometry',
             'base_vo_topic': '/rby1/vslam/odom',
             'localization_topic': '/rby1/vslam/localization_odom',
+            'slam_topic': '/rby1/vslam/slam_odom',
+            'experiment_event_topic': '/rby1/vslam/experiment_event',
+            'experiment_dir': str(Path.home() / 'rby1_bags' / 'exp3'),
+            'tag_image_topic': '/d435/d435/infra1/image_rect_raw',
+            'tag_info_topic': '/d435/d435/infra1/camera_info',
             'max_linear_speed': 0.2, 'max_angular_speed': 0.4,
             'status_timeout_sec': 1.0, 'operation_timeout_sec': 10.0,
         }
@@ -93,6 +98,12 @@ class OperatorNode(Node):
         self.station_client = self.create_client(SetBool, self.p['station_service'])
         self.reset_client = self.create_client(Trigger, self.p['reset_visual_service'])
         self.control_pub = self.create_publisher(String, self.p['control_command_topic'], 20)
+        self.experiment_pub = self.create_publisher(String, self.p['experiment_event_topic'], 20)
+        # Experiment hooks: when False, a Nav2 arrival stops without a station
+        # correction (wheel-only condition). The observer gets arrival, ready
+        # and failure notifications.
+        self.correct_on_arrival = True
+        self.observer = None
         self.statuses = {}
         self.poses = {}
         self.localization_pose_after_ns = 0
@@ -119,6 +130,7 @@ class OperatorNode(Node):
         for name, topic in (
             ('Camera VO', self.p['vo_topic']), ('Base VO', self.p['base_vo_topic']),
             ('Localization', self.p['localization_topic']),
+            ('SLAM', self.p['slam_topic']),
         ):
             self.create_subscription(
                 Odometry, topic, lambda msg, key=name: self._on_pose(key, msg),
@@ -282,16 +294,17 @@ class OperatorNode(Node):
         if (not self.fresh('localization') or state.get('initialized') is not True
                 or state.get('healthy') is not True):
             self.emit_log('Goto blocked: first complete station VO correction.')
-            return
+            return False
         if state.get('station_mode') is True and (
                 state.get('station_converged') is not True
                 or state.get('stationary_ready') is not True):
             self.emit_log('Goto blocked: wait for stationary VO correction at this station.')
-            return
+            return False
         if not self._gate_present():
             self.emit_log('Goto blocked: navigation gate is unavailable.')
-            return
+            return False
         self._begin('navigate', waypoint)
+        return self.pending is not None
 
     def request_station(self, label='Current station'):
         self._begin('station', label)
@@ -303,6 +316,15 @@ class OperatorNode(Node):
         self.stop()
         self.operation_text = message
         self.emit_log(message)
+        self._notify('on_failed', message)
+
+    def _notify(self, name, *args):
+        callback = getattr(self.observer, name, None)
+        if callback is not None:
+            try:
+                callback(*args)
+            except Exception as exc:  # never let the experiment panel break control
+                self.get_logger().error(f'experiment observer {name} failed: {exc}')
 
     def _response_ready(self, future):
         if future is None:
@@ -396,6 +418,7 @@ class OperatorNode(Node):
                     self.operation_text = str(pending['target']) + ': correction complete; station ready'
                     self.emit_log(self.operation_text)
                     self.pending = None
+                    self._notify('on_ready', pending['target'])
         except Exception as exc:
             self.fail('Blocked: ' + str(exc))
 
@@ -478,13 +501,22 @@ class OperatorNode(Node):
             return
         try:
             status = int(future.result().status)
-            if status == 4:
+            if status == 4 and self.correct_on_arrival:
                 self.emit_log(station_name + ': Nav2 arrived; stopping and waiting for VO correction.')
+                self._notify('on_arrived', station_name)
                 self.request_station(station_name)
+            elif status == 4:
+                # Wheel-only condition: keep the last map->odom correction fixed.
+                self.stop()
+                self.operation_text = station_name + ': arrived (wheel-only, no correction)'
+                self.emit_log(self.operation_text)
+                self._notify('on_arrived', station_name)
+                self._notify('on_ready', station_name)
             else:
                 self.stop()
                 self.operation_text = 'Navigation ' + GOAL_STATUS_NAMES.get(status, str(status))
                 self.emit_log(self.operation_text)
+                self._notify('on_failed', self.operation_text)
         except Exception as exc:
             self.stop()
             self.fail('Nav2 result error: ' + str(exc))
@@ -617,6 +649,9 @@ class OperatorWindow(QMainWindow):
         go.setMinimumHeight(38)
         go.clicked.connect(self._go_selected)
         waypoint_layout.addWidget(go)
+        experiment = QPushButton('Station round-trip experiment / 스테이션 왕복 실험…')
+        experiment.clicked.connect(self._open_experiment)
+        waypoint_layout.addWidget(experiment)
         layout.addWidget(box)
         self.log_list = QListWidget()
         self.log_list.setMaximumHeight(95)
@@ -638,6 +673,8 @@ class OperatorWindow(QMainWindow):
 
     def tick(self):
         self.node.tick()
+        if getattr(self, 'experiment_window', None) is not None:
+            self.experiment_window.tick()
         if self.manual_velocity is not None:
             if not self.isActiveWindow() or not self.node.set_manual_velocity(*self.manual_velocity):
                 self._stop_manual()
@@ -776,6 +813,13 @@ class OperatorWindow(QMainWindow):
         self._release_manual()
         self.node.enable_then_navigate(self.waypoints[index])
 
+    def _open_experiment(self):
+        from .experiment_ui import ExperimentWindow
+        if getattr(self, 'experiment_window', None) is None:
+            self.experiment_window = ExperimentWindow(self.node, lambda: self.waypoints)
+        self.experiment_window.show()
+        self.experiment_window.raise_()
+
     def _control(self, operation, arguments):
         self._stop()
         if self.node.fresh('control'):
@@ -828,6 +872,10 @@ class OperatorWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
+        if getattr(self, 'experiment_window', None) is not None:
+            if self.experiment_window.state not in ('idle', 'done'):
+                self.experiment_window.abort()
+            self.experiment_window.close()
         self._release_manual()
         self.node.shutdown_future = self.node.stop()
         event.accept()

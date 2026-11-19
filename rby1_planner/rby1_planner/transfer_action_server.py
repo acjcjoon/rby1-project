@@ -8,16 +8,27 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 
-from .task import pick_up_move_and_put_down_object
+from .task import transfer
+from .task_commands import _load_current_location
 from .task_lifecycle import TaskProgress, TaskRunResult, TaskRunStatus
 
 
 class TransferActionServer:
-    """Translate one transfer goal into the existing real planner Task."""
+    """Translate one transfer goal into the planner transfer Task.
+
+    로봇이 마지막으로 도착한 장비를 기억해 다음 운반의 출발 위치(start)로 쓴다.
+    처음에는 settings.yaml current_location 을 쓴다. 운반이 성공하지 못하면 위치를
+    모른다고 보고(None), 다음 운반은 로봇이 이미 source 에 있다고 가정한다.
+    """
 
     def __init__(self, node, runner, action_name: str) -> None:
         self._node = node
         self._runner = runner
+        try:
+            self._location: Optional[str] = _load_current_location()
+        except ValueError as exc:
+            node.get_logger().warning(f'current_location ignored: {exc}')
+            self._location = None
         self._active_goal = None
         self._completion: Optional[Future] = None
         self._goal_reserved = False
@@ -102,10 +113,7 @@ class TransferActionServer:
                 )
 
             try:
-                task = pick_up_move_and_put_down_object(
-                    source,
-                    destination,
-                )
+                task = transfer(source, destination, start=self._location)
             except Exception as exc:
                 goal_handle.abort()
                 return self._make_result(
@@ -123,6 +131,9 @@ class TransferActionServer:
                 )
 
             outcome = await self._completion
+            self._location = (
+                destination if outcome.status is TaskRunStatus.SUCCEEDED else None
+            )
             if outcome.status is TaskRunStatus.SUCCEEDED:
                 goal_handle.succeed()
                 return self._make_result(

@@ -128,6 +128,9 @@ def generate_launch_description():
     operator = Node(
         package='rby1_vslam', executable='mobile_base_qt', name='mobile_base_qt',
         namespace=LaunchConfiguration('namespace'), output='screen',
+        # The UI needs no ~/.local packages; the user-site numpy 2.x breaks the
+        # system OpenCV used for AprilTag ground truth.
+        additional_env={'PYTHONNOUSERSITE': '1'},
         condition=IfCondition(LaunchConfiguration('start_ui')),
         parameters=[{
             'max_linear_speed': value('max_linear_speed', float),

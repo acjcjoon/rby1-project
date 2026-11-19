@@ -7,12 +7,7 @@ from rby1_planner.backend_contract import (
     TaskCommandStatus,
 )
 from rby1_planner.control_commands import CommandKind, TaskCommand
-from rby1_planner.task import (
-    WAVE_TORSO_DOWN,
-    WAVE_TORSO_UP,
-    build_tasks,
-    wave_both_arms,
-)
+from rby1_planner.task import build_tasks, wave_both_arms
 from rby1_planner.task_commands import (
     BackgroundGripperStep,
     DynamicTaskDefinition,
@@ -262,6 +257,11 @@ def test_stop_cancels_the_background_gripper_and_the_arm():
     runner.stop()
     assert not runner.active
     assert set(backend.canceled) == {'command-0', 'command-1'}
+
+
+# wave_both_arms 의 토르소 자세 (ready_pose 높이 정면 / 약 4.5 cm 일어선 자세)
+WAVE_TORSO_DOWN = [0.065048, 45.375276, -90.959835, 45.153373, 0.026976, 0.0]
+WAVE_TORSO_UP = [0.065048, 40.0, -80.0, 39.568814, 0.026976, 0.0]
 
 
 def test_wave_both_arms_moves_torso_and_grippers_with_the_arms():

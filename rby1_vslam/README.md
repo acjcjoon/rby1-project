@@ -29,6 +29,22 @@ docker exec -it rby1-isaac-vslam bash -lc '
 Omni 경로 추종 플러그인 `rby1_omni_controller`는 Nav2가 실행되는 호스트에서 빌드한다.
 컨테이너는 cuVSLAM과 localization만 실행하므로 이 C++ 플러그인 빌드가 필요 없다.
 
+## 한 번에 실행 (터미널 1개)
+
+아래 터미널 1~4를 순서대로 띄우고, 각 단계의 토픽을 확인한 뒤 다음을 시작한다.
+로그는 `[base]` `[cam]` `[vslam]` `[nav]`가 붙어 한 화면에 나오고 `~/rby1_bags/logs/stack_<시각>/`에 저장된다.
+`Ctrl-C` 한 번이면 역순(Nav2 → VSLAM → 카메라 → 베이스)으로 정리하며, 컨테이너 안의 cuVSLAM도 함께 끈다.
+하나가 종료되면 나머지도 정리된다.
+
+```bash
+cd /home/nvidia/rby1_ros2_ws/src/rby1-project
+bash rby1_vslam/run_station_stack.sh                      # 90 fps, ~/rby1_bags/exp3_stations.yaml
+bash rby1_vslam/run_station_stack.sh --fps 30             # IR 30 fps
+bash rby1_vslam/run_station_stack.sh --record exp3_vslam  # bag 기록 포함
+bash rby1_vslam/run_station_stack.sh --no-nav             # Nav2 없이 (수동 주행 실험)
+bash rby1_vslam/run_station_stack.sh --dry-run            # 실행할 명령만 출력
+```
+
 ## 실행: 호스트 터미널 4개
 
 각 터미널에서 공통으로 실행한다.

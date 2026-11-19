@@ -1244,45 +1244,6 @@ def _load_task_settings() -> dict:
     return settings
 
 
-def _load_tag_approach_offset(object_id: str) -> tuple[float, float, float]:
-    """선택한 태그에서 지점 중앙까지의 접근·접촉 공용 보정(m)을 읽는다.
-
-    XY는 태그 축 기준으로 기록하고 기존 yaw_only=True 규칙에 따라
-    실행 시 태그 yaw로 base 축에 변환한다. Z는 base 수직 방향이며,
-    동일한 XYZ 보정을 접근·접촉 목표 양쪽에 적용한다.
-    """
-    if not isinstance(object_id, str) or not object_id.strip():
-        raise ValueError('object_id must be a nonempty string')
-    object_id = object_id.strip()
-    locations = _load_move_locations()
-    location_tags = _location_tags(locations)
-    matches = [
-        (location_name, config)
-        for location_name, (tag_id, config) in location_tags.items()
-        if tag_id == object_id
-    ]
-    if not matches:
-        raise ValueError(f'Unknown tag {object_id!r} in settings.yaml')
-    location_name, config = matches[0]
-    offset = config.get('offset')
-    if not isinstance(offset, list) or len(offset) != 3:
-        raise ValueError(
-            f'Location {location_name!r} tag {object_id!r} offset must be '
-            '[x, y, z] in metres'
-        )
-    if any(
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        for value in offset
-    ):
-        raise ValueError(
-            f'Location {location_name!r} tag {object_id!r} offset must '
-            'contain finite numbers'
-        )
-    return float(offset[0]), float(offset[1]), float(offset[2])
-
-
 def load_impedance_preset(name: str = DEFAULT_IMPEDANCE_PRESET) -> JointImpedance:
     """settings.yaml 의 impedance_presets 에서 이름으로 임피던스를 읽는다.
 
@@ -1320,132 +1281,282 @@ def load_impedance_preset(name: str = DEFAULT_IMPEDANCE_PRESET) -> JointImpedanc
 set_impedance_preset_loader(load_impedance_preset)
 
 
+# ---------------------------------------------------------------------------
+# 장비(stations) 설정 — config/settings.yaml
+#
+#   current_location: LH1          # Task 구성 시작 지점 (지점 참조, 생략 가능)
+#   stations:
+#     LH1:
+#       kind: plain                # plain | door_switch
+#       enabled: true              # 생략 시 true. false 면 이동/파지에 쓸 수 없다
+#       points: {place: {position: [x, y], side: front|left|right}}
+#       place: {point: place, tag: tag_3, offset: [dx, dy, dz]}
+#     ZS:
+#       kind: door_switch
+#       points: {work: {...}, via: {...}, place: {...}}
+#       route: [work, via, place]  # 작업 위치 -> 놓는 위치 (복귀는 역순)
+#       place: {...}
+#       door: {open: {tag: tag_6, ...}, close: {tag: tag_7, ...}}
+#       switch: {tag: tag_5, ...}
+#
+# 지점 참조: 'LH1' (= LH1 의 place 지점) 또는 'ZS.work' 처럼 '장비.지점'.
+# 좌표는 모든 장비가 공통 좌표계 하나를 쓴다 (base 방향은 모든 지점에서 같다).
+# 태그 ID 는 모든 장비를 통틀어 한 곳에서만 쓸 수 있다.
+# ---------------------------------------------------------------------------
+STATION_KINDS = ('plain', 'door_switch')
+POINT_SIDES = ('left', 'right', 'front')
+
+
+def _finite_list(value: object, count: int, what: str) -> tuple[float, ...]:
+    if (
+        not isinstance(value, list) or len(value) != count
+        or any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+            for v in value
+        )
+    ):
+        raise ValueError(f'{what} must be a list of {count} finite numbers')
+    return tuple(float(v) for v in value)
+
+
+def _yaml_number(value: object, what: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f'{what} must be a finite number')
+    return float(value)
+
+
+# 지점에 head_pitch_deg 가 없을 때의 머리 pitch (deg).
+POINT_HEAD_PITCH_DEFAULT_DEG = 0.0
+
+
+def _head_pitch_value(value: object, what: str) -> float:
+    """머리 pitch 절대각(deg). 관절 한계(±90°) 안이어야 한다."""
+    pitch = _yaml_number(value, what)
+    if not -90.0 < pitch < 90.0:
+        raise ValueError(f'{what} must be between -90 and 90 degrees')
+    return pitch
+
+
+def _load_move_head_pitch_deg() -> float:
+    """settings.yaml head_pitch_deg.move: 이동 중 머리 pitch 절대각(deg)을 매번 읽는다."""
+    head = _load_task_settings().get('head_pitch_deg')
+    if not isinstance(head, dict):
+        raise ValueError('settings.yaml head_pitch_deg must be a mapping with move')
+    return _head_pitch_value(head.get('move'), 'settings.yaml head_pitch_deg.move')
+
+
+def _is_tag_id(value: object) -> bool:
+    return (
+        isinstance(value, str) and value.startswith('tag_')
+        and value.removeprefix('tag_').isdigit()
+    )
+
+
+def _station_tags(name: str, station: dict) -> list[tuple[str, str]]:
+    """(용도, 태그 ID) 목록. 용도 예: 'ZS.place', 'ZS.work.door.open'."""
+    found: list[tuple[str, object]] = [(f'{name}.place', station['place'].get('tag'))]
+    work = station.get('work')
+    work = work if isinstance(work, dict) else {}
+    door = work.get('door')
+    if isinstance(door, dict):
+        for action in ('open', 'close'):
+            if isinstance(door.get(action), dict):
+                found.append((f'{name}.work.door.{action}', door[action].get('tag')))
+    switch = work.get('switch')
+    if isinstance(switch, dict):
+        found.append((f'{name}.work.switch', switch.get('tag')))
+    for usage, tag in found:
+        if tag is not None and not _is_tag_id(tag):
+            raise ValueError(f'Station tag {usage} has invalid tag ID {tag!r}')
+    return [(usage, tag) for usage, tag in found if tag is not None]
+
+
+def _validate_station(name: object, station: object) -> None:
+    if not isinstance(name, str) or not name.strip() or '.' in name:
+        raise ValueError(f'settings.yaml station names must be nonempty strings without ".": {name!r}')
+    if not isinstance(station, dict):
+        raise ValueError(f'Station {name!r} must be a mapping')
+    if station.get('kind') not in STATION_KINDS:
+        raise ValueError(f'Station {name!r} kind must be one of {STATION_KINDS}')
+    if not isinstance(station.get('enabled', True), bool):
+        raise ValueError(f'Station {name!r} enabled must be true or false')
+    points = station.get('points')
+    if not isinstance(points, dict) or not points:
+        raise ValueError(f'Station {name!r} points must be a nonempty mapping')
+    for point_name, point in points.items():
+        where = f'Location {name}.{point_name}'
+        if not isinstance(point_name, str) or not point_name.strip() or '.' in point_name:
+            raise ValueError(f'Station {name!r} point names must be nonempty strings without "."')
+        if not isinstance(point, dict):
+            raise ValueError(f'{where} must contain position and side')
+        _finite_list(point.get('position'), 2, f'{where} position [x, y]')
+        if point.get('side') not in POINT_SIDES:
+            raise ValueError(f'{where} side must be left, right, or front')
+        if 'head_pitch_deg' in point:   # 없으면 0° (POINT_HEAD_PITCH_DEFAULT_DEG)
+            _head_pitch_value(point['head_pitch_deg'], f'{where} head_pitch_deg')
+    place = station.get('place')
+    if not isinstance(place, dict):
+        raise ValueError(f'Station {name!r} place must be a mapping')
+    if place.get('point') not in points:
+        raise ValueError(f'Station {name!r} place.point must name one of its points')
+    if place.get('tag') is not None:
+        _finite_list(place.get('offset'), 3, f'Station {name!r} place offset [x, y, z] in metres')
+    if 'head_pitch_deg' in place:
+        raise ValueError(
+            f'Station {name!r} place.head_pitch_deg moved to points.<point>.head_pitch_deg'
+        )
+    if station['kind'] == 'door_switch':
+        route = station.get('route')
+        if (
+            not isinstance(route, list) or len(route) < 2
+            or any(p not in points for p in route)
+        ):
+            raise ValueError(f'Station {name!r} route must list at least two of its points')
+        if route[-1] != place['point']:
+            raise ValueError(f'Station {name!r} route must end at place.point')
+        # work: work 지점에서 하는 문/스위치 작업 (door, switch)
+        if 'work' not in points:
+            raise ValueError(f'Station {name!r} door_switch needs a work point')
+        work = station.get('work')
+        if not isinstance(work, dict):
+            raise ValueError(f'Station {name!r} work must be a mapping with door and switch')
+        _yaml_number(work.get('wall_yaw_deg'), f'Station {name!r} work.wall_yaw_deg')
+        door = work.get('door')
+        if not isinstance(door, dict) or not all(isinstance(door.get(a), dict) for a in ('open', 'close')):
+            raise ValueError(f'Station {name!r} work.door must contain open and close mappings')
+        _finite_list(door.get('hinge_to_handle_wall'), 3, f'Station {name!r} work.door.hinge_to_handle_wall [x, y, z]')
+        _yaml_number(door.get('swing_deg'), f'Station {name!r} work.door.swing_deg')
+        for action in ('open', 'close'):
+            target = door[action]
+            if not _is_tag_id(target.get('tag')):
+                raise ValueError(f'Station {name!r} work.door.{action}.tag must be a tag ID')
+            _finite_list(target.get('base_align_xy'), 2, f'Station {name!r} work.door.{action}.base_align_xy [x, y]')
+            _finite_list(target.get('ee_offset_tag'), 3, f'Station {name!r} work.door.{action}.ee_offset_tag [x, y, z]')
+        switch = work.get('switch')
+        if not isinstance(switch, dict):
+            raise ValueError(f'Station {name!r} work.switch must be a mapping')
+        if not _is_tag_id(switch.get('tag')):
+            raise ValueError(f'Station {name!r} work.switch.tag must be a tag ID')
+        if 'button_offset_in_tag' in switch:
+            _finite_list(switch['button_offset_in_tag'], 2, f'Station {name!r} work.switch.button_offset_in_tag [x, y]')
+        _yaml_number(switch.get('approach_standoff_m'), f'Station {name!r} work.switch.approach_standoff_m')
+        if _yaml_number(switch.get('press_depth_m'), f'Station {name!r} work.switch.press_depth_m') <= 0.0:
+            raise ValueError(f'Station {name!r} work.switch.press_depth_m must be positive')
+
+
 def _load_move_locations() -> dict:
-    """공통 설정에서 이동 지점 항목만 검증한다."""
-    settings = _load_task_settings()
-    locations = settings.get('locations')
-    if not isinstance(locations, dict) or not locations:
-        raise ValueError('settings.yaml locations must be a nonempty mapping')
-    # current_location은 지점 정의가 아닌 작업 구성용 초기 위치이다.
-    locations = {
-        name: config for name, config in locations.items()
-        if name != 'current_location'
-    }
-    if not locations:
-        raise ValueError('settings.yaml locations must be a nonempty mapping')
-    return locations
+    """settings.yaml 의 stations 를 검증해 돌려준다.
+
+    태그 ID 가 두 곳 이상에서 쓰이면 오류다 (태그 하나 = 용도 하나).
+    """
+    stations = _load_task_settings().get('stations')
+    if not isinstance(stations, dict) or not stations:
+        raise ValueError('settings.yaml stations must be a nonempty mapping')
+    owners: dict[str, str] = {}
+    for name, station in stations.items():
+        _validate_station(name, station)
+        for usage, tag in _station_tags(name, station):
+            if tag in owners:
+                raise ValueError(f'Tag {tag!r} is used by both {owners[tag]} and {usage}')
+            owners[tag] = usage
+    return stations
+
+
+def _resolve_location(stations: dict, ref: object) -> tuple[str, str]:
+    """지점 참조('LH1' 또는 'ZS.work')를 (장비, 지점) 이름으로 바꾼다."""
+    if not isinstance(ref, str) or not ref.strip():
+        raise ValueError('location name must be a nonempty string')
+    station_name, _, point_name = ref.partition('.')
+    station = stations.get(station_name)
+    if station is None:
+        raise ValueError(f'Unknown location {ref!r} in settings.yaml')
+    if station.get('enabled', True) is not True:
+        raise ValueError(
+            f'Location {ref!r} is disabled until its position and tag are calibrated'
+        )
+    point_name = point_name or station['place']['point']
+    if point_name not in station['points']:
+        raise ValueError(f'Unknown location {ref!r} in settings.yaml')
+    return station_name, point_name
+
+
+def _load_station(name: str) -> dict:
+    """설정을 읽어 장비 하나의 설정을 돌려준다 (비활성 장비는 오류)."""
+    if not isinstance(name, str) or '.' in name:
+        raise ValueError(f'station name expected (no point), got {name!r}')
+    stations = _load_move_locations()
+    station_name, _ = _resolve_location(stations, name)
+    return stations[station_name]
+
+
+def _move_location(stations: dict, ref: str) -> tuple[float, float, str]:
+    """이동에 사용할 지점의 좌표(공통 좌표계)와 허리 방향."""
+    station_name, point_name = _resolve_location(stations, ref)
+    point = stations[station_name]['points'][point_name]
+    x, y = (float(v) for v in point['position'])
+    return x, y, point['side']
+
+
+def _point_head_pitch(stations: dict, ref: str) -> float:
+    """지점의 머리 pitch 절대각(deg): 그 지점에 도착해 작업할 때의 각도 (없으면 0°)."""
+    station_name, point_name = _resolve_location(stations, ref)
+    point = stations[station_name]['points'][point_name]
+    return float(point.get('head_pitch_deg', POINT_HEAD_PITCH_DEFAULT_DEG))
+
+
+def _load_point_head_pitch(ref: str) -> float:
+    """설정을 읽어 지점('LH1' = place 지점, 'ZS.work')의 머리 pitch 절대각을 돌려준다."""
+    return _point_head_pitch(_load_move_locations(), ref)
+
+
+def _location_tag_id(stations: dict, ref: str) -> str:
+    """지점의 집기/놓기 태그 ID. place 지점이 아니면(경유/작업 지점) 오류."""
+    station_name, point_name = _resolve_location(stations, ref)
+    place = stations[station_name]['place']
+    if point_name != place['point']:
+        raise ValueError(f'Location {ref!r} has no place tag (waypoint only)')
+    if place.get('tag') is None:
+        raise ValueError(f'Location {ref!r} has no place tag yet')
+    return place['tag']
+
+
+def _load_location_tag_id(ref: str) -> str:
+    """설정을 읽어 지점의 집기/놓기 태그 ID 를 돌려준다."""
+    return _location_tag_id(_load_move_locations(), ref)
 
 
 def _load_current_location() -> Optional[str]:
-    """Read the initial named location without changing the settings file."""
-    locations = _load_task_settings().get('locations')
-    if not isinstance(locations, dict):
-        raise ValueError('settings.yaml locations must be a nonempty mapping')
-    current_location = locations.get('current_location')
+    """settings.yaml 최상위 current_location (Task 구성 시작 지점). 파일은 바꾸지 않는다."""
+    settings = _load_task_settings()
+    stations = _load_move_locations()
+    current_location = settings.get('current_location')
     if current_location is None:
         return None
     if not isinstance(current_location, str) or not current_location.strip():
         raise ValueError('settings.yaml current_location must be a location name')
-    _move_location(locations, current_location)
+    _resolve_location(stations, current_location)
     return current_location
 
 
-def _location_tags(locations: dict) -> dict[str, tuple[str, dict]]:
-    """Return and validate the single fixed AprilTag assigned to each point."""
-    result: dict[str, tuple[str, dict]] = {}
-    tag_locations: dict[str, str] = {}
-    for location_name, location in locations.items():
-        if not isinstance(location_name, str) or not location_name.strip():
-            raise ValueError('settings.yaml location names must be nonempty strings')
-        if not isinstance(location, dict):
-            raise ValueError(
-                f'Location {location_name!r} must contain position, side, and one tag'
+def _load_tag_approach_offset(object_id: str) -> tuple[float, float, float]:
+    """집기/놓기 태그에서 지점 중앙까지의 접근·접촉 공용 보정(m)을 읽는다.
+
+    XY는 태그 축 기준으로 기록하고 기존 yaw_only=True 규칙에 따라
+    실행 시 태그 yaw로 base 축에 변환한다. Z는 base 수직 방향이며,
+    동일한 XYZ 보정을 접근·접촉 목표 양쪽에 적용한다.
+    """
+    if not isinstance(object_id, str) or not object_id.strip():
+        raise ValueError('object_id must be a nonempty string')
+    object_id = object_id.strip()
+    for name, station in _load_move_locations().items():
+        place = station['place']
+        if place.get('tag') == object_id:
+            return _finite_list(
+                place.get('offset'), 3,
+                f'Station {name!r} place offset [x, y, z] in metres',
             )
-        tag_ids = [
-            key for key in location
-            if isinstance(key, str) and key.startswith('tag_')
-        ]
-        if not tag_ids:
-            # 태그 없는 경유 지점(예: AP): 이동에만 쓰고 파지/배치에는 쓸 수 없다.
-            continue
-        if len(tag_ids) != 1:
-            raise ValueError(
-                f'Location {location_name!r} must contain exactly one tag_* mapping'
-            )
-        tag_id = tag_ids[0]
-        if not tag_id.removeprefix('tag_').isdigit():
-            raise ValueError(
-                f'Location {location_name!r} has invalid tag ID {tag_id!r}'
-            )
-        config = location[tag_id]
-        if not isinstance(config, dict):
-            raise ValueError(
-                f'Location {location_name!r} tag {tag_id!r} must contain an offset'
-            )
-        # 같은 태그 ID 를 여러 지점에서 쓸 수 있다(예: LH1, ZS 의 tag_3). 접근 보정은
-        # 태그 ID 로 찾으므로(_load_tag_approach_offset) offset 이 같아야 한다.
-        previous_location = tag_locations.get(tag_id)
-        if previous_location is not None:
-            previous_offset = result[previous_location][1].get('offset')
-            if previous_offset != config.get('offset'):
-                raise ValueError(
-                    f'Tag {tag_id!r} is shared by locations {previous_location!r} '
-                    f'and {location_name!r} but their offsets differ'
-                )
-        tag_locations[tag_id] = location_name
-        result[location_name] = (tag_id, config)
-    return result
+    raise ValueError(f'Unknown place tag {object_id!r} in settings.yaml')
 
-
-def _location_tag_id(locations: dict, name: str) -> str:
-    """Return the fixed AprilTag ID assigned to a named movement point."""
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError('location name must be a nonempty string')
-    if name not in locations:
-        raise ValueError(f'Unknown location {name!r} in settings.yaml')
-    location = locations[name]
-    if isinstance(location, dict) and location.get('enabled', True) is not True:
-        raise ValueError(
-            f'Location {name!r} is disabled until its position and tag are calibrated'
-        )
-    tags = _location_tags(locations)
-    if name not in tags:
-        raise ValueError(f'Location {name!r} has no tag_* mapping (waypoint only)')
-    return tags[name][0]
-
-
-def _load_location_tag_id(name: str) -> str:
-    """Load settings and return the fixed AprilTag assigned to one point."""
-    return _location_tag_id(_load_move_locations(), name)
-
-
-def _move_location(locations: dict, name: str) -> tuple[float, float, str]:
-    """이동에 사용할 지점의 좌표와 준비 자세를 검증한다."""
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError('location name must be a nonempty string')
-    if name not in locations:
-        raise ValueError(f'Unknown location {name!r} in settings.yaml')
-    location = locations[name]
-    if not isinstance(location, dict):
-        raise ValueError(f'Location {name!r} must contain position and side')
-    if location.get('enabled', True) is not True:
-        raise ValueError(
-            f'Location {name!r} is disabled until its position and tag are calibrated'
-        )
-    position = location.get('position')
-    if not isinstance(position, list) or len(position) != 2:
-        raise ValueError(f'Location {name!r} position must be [x, y] in metres')
-    if any(
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        for value in position
-    ):
-        raise ValueError(f'Location {name!r} position must contain finite numbers')
-    side = location.get('side')
-    if side not in ('left', 'right', 'front'):
-        raise ValueError(f'Location {name!r} side must be left, right, or front')
-    return float(position[0]), float(position[1]), side
 
 __all__ = [
     'BODY_JOINT_GROUPS',

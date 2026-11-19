@@ -14,6 +14,7 @@ from rby1_planner.task_commands import (
     Task,
 )
 from rby1_planner.task_runner import PlannerTaskRunner
+from station_settings import stations_settings
 from test_task_runner import FakeBackend, FakeCamera, FakeNode, _camera_observation
 
 
@@ -44,7 +45,7 @@ def nested_settings(location_tags=LOCATION_TAGS, offsets=OFFSETS):
             **LOCATION_FIELDS[location_name],
             tag_id: {'offset': offsets[tag_id]},
         }
-    return {'locations': locations}
+    return stations_settings(locations)
 
 
 @pytest.fixture
@@ -59,19 +60,34 @@ def settings_file(tmp_path, monkeypatch):
     return path
 
 
+def _aligned(in_place_name):
+    """_pick_or_place 와 같은 순서: base 정렬 -> 손목 카메라 파지/배치 -> 초기 자세."""
+    def build(object_id, *, arm):
+        task = Task(f'aligned_{in_place_name}')
+        task.extend(task_source.align_base_to_tag(object_id, arm=arm))
+        task.extend(getattr(task_source, in_place_name)(object_id, arm=arm))
+        task.extend(task_source.object_gripping_initial_pose())
+        return task.build()
+    return build
+
+
+align_and_pick_up = _aligned('pick_up_object_in_place')
+align_and_put_down = _aligned('put_down_object_in_place')
+
+
 def camera_steps(definition):
     return [step for step in definition.commands if isinstance(step, CameraLinearAbsoluteStep)]
 
 
 @pytest.mark.parametrize('object_id', OFFSETS)
 @pytest.mark.parametrize('operation', [
-    'align_base_and_pick_up_object',
-    'align_base_and_put_down_object',
+    align_and_pick_up,
+    align_and_put_down,
 ])
 def test_both_camera_moves_get_same_tag_correction(
     settings_file, monkeypatch, object_id, operation,
 ):
-    builder = getattr(task_source, operation)
+    builder = operation
     definition = builder(object_id, arm='right_arm')
     approach, contact = camera_steps(definition)
     dx, dy, dz = OFFSETS[object_id]
@@ -104,8 +120,8 @@ def test_custom_approach_is_added_once_without_mutating_arguments(settings_file)
     approach_offset = [0.01, -0.02, 0.2]
     contact_offset = [0.0, 0.0, 0.065]
     args = ('tag_3', approach_offset, contact_offset, (3.0, 1.0, 1.0, 1.0))
-    first = task_source._configured_tag_approach_contact_move(*args, arm='right_arm')
-    second = task_source._configured_tag_approach_contact_move(*args, arm='right_arm')
+    first = task_source.move_hand_to_tag(*args, arm='right_arm')
+    second = task_source.move_hand_to_tag(*args, arm='right_arm')
     approach, contact = camera_steps(first)
     assert approach.object_to_end_effector_position == pytest.approx((0.06, -0.0825, 0.191))
     assert contact.object_to_end_effector_position == pytest.approx((0.05, -0.0625, 0.056))
@@ -115,12 +131,12 @@ def test_custom_approach_is_added_once_without_mutating_arguments(settings_file)
 
 
 def test_yaml_is_read_again_when_task_is_rebuilt(settings_file):
-    first = task_source.align_base_and_put_down_object('tag_3', arm='right_arm')
+    first = align_and_put_down('tag_3', arm='right_arm')
     settings_file.write_text(yaml.safe_dump(nested_settings(
         {'C': 'tag_3'},
         {'tag_3': [0.01, 0.02, 0.03]},
     )), encoding='utf-8')
-    second = task_source.align_base_and_put_down_object('tag_3', arm='right_arm')
+    second = align_and_put_down('tag_3', arm='right_arm')
     assert camera_steps(first)[0].object_to_end_effector_position == pytest.approx((0.05, -0.0625, 0.131))
     assert camera_steps(second)[0].object_to_end_effector_position == pytest.approx((0.01, 0.02, 0.17))
     assert camera_steps(first)[1].object_to_end_effector_position == pytest.approx((0.05, -0.0625, 0.056))
@@ -128,33 +144,37 @@ def test_yaml_is_read_again_when_task_is_rebuilt(settings_file):
 
 
 @pytest.mark.parametrize('text', [
-    '', '[]', 'locations: [', 'locations: []', 'locations: {}',
-    'tag: {tag_3: {offset: [0, 0, 0]}}',
-    'locations: {C: null}',
-    'locations: {C: {position: [0, 0], side: left}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: null}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, 0, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: "0,0,0"}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [true, 0, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, .nan, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, .inf]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, "0.1"]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_name: {offset: [0, 0, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_2: {offset: [0, 0, 0]}, tag_3: {offset: [0, 0, 0]}}}',
-    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, 0]}}, D: {position: [1, 0], side: left, tag_3: {offset: [0, 0, 0.01]}}}',
+    '',
+    '[]',
+    'stations: [',
+    'stations: []',
+    'stations: {}',
+    'locations: {C: {position: [0, 0], side: left, tag_3: {offset: [0, 0, 0]}}}',
+    'stations: {C: null}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, 0, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: "0,0,0"}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [true, 0, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, .nan, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, .inf]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, "0.1"]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_name, offset: [0, 0, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, 0]}}, D: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, 0]}}}',
+    'stations: {C: {kind: shelf, points: {place: {position: [0, 0], side: left}}, place: {point: place, tag: tag_3, offset: [0, 0, 0]}}}',
+    'stations: {C: {kind: plain, points: {place: {position: [0, 0], side: left}}, place: {point: other, tag: tag_3, offset: [0, 0, 0]}}}',
 ])
 def test_bad_or_missing_tag_config_fails_before_motion(settings_file, text):
     settings_file.write_text(text, encoding='utf-8')
     with pytest.raises(ValueError):
-        task_source.align_base_and_put_down_object('tag_3', arm='right_arm')
+        align_and_put_down('tag_3', arm='right_arm')
 
 
 def test_missing_settings_file_is_not_silently_ignored(settings_file):
     settings_file.unlink()
     with pytest.raises(ValueError, match='Cannot load planner settings'):
-        task_source.align_base_and_put_down_object('tag_3', arm='right_arm')
+        align_and_put_down('tag_3', arm='right_arm')
 
 
 @pytest.mark.parametrize('object_id', ['', ' ', None])
@@ -175,10 +195,10 @@ def test_location_to_tag_mapping_drives_the_handover(settings_file):
     for name, tag_id in location_tags.items():
         locations[name][tag_id] = {'offset': [0.0, 0.0, 0.0]}
     settings_file.write_text(
-        yaml.safe_dump({'locations': locations}), encoding='utf-8',
+        yaml.safe_dump(stations_settings(locations)), encoding='utf-8',
     )
 
-    definition = task_source.object_handover_demo_final()
+    definition = task_source.transfer('LH1', 'LH2')
     alignment_steps = [
         step for step in definition.commands
         if isinstance(step, CameraMoveToTagStep)
@@ -211,7 +231,7 @@ def test_runner_keeps_centre_xy_when_selecting_and_reusing_ee_yaw(
         FakeNode(), backend, camera=camera,
         on_status=messages.append, clock=lambda: backend.now,
     )
-    definition = task_source._configured_tag_approach_contact_move(
+    definition = task_source.move_hand_to_tag(
         'tag_3', (0.0, 0.0, 0.14), (0.0, 0.0, 0.065),
         (3.0, 1.0, 1.0, 1.0), arm='right_arm',
     )
@@ -275,7 +295,7 @@ def test_same_physical_centre_when_base_heading_changes(settings_file, base_yaw_
     )
     offset_world_xy = rotate_xy(*OFFSETS['tag_3'][:2], tag_yaw_world)
     centre_world = tuple(t + d for t, d in zip(tag_world, (*offset_world_xy, OFFSETS['tag_3'][2])))
-    approach, contact = camera_steps(task_source.align_base_and_put_down_object('tag_3', arm='right_arm'))
+    approach, contact = camera_steps(align_and_put_down('tag_3', arm='right_arm'))
     for command, height in ((approach, 0.14), (contact, 0.065)):
         goal_base = command.resolve_observation(observation).values[:3]
         goal_world_xy = rotate_xy(*goal_base[:2], base_yaw_deg)
@@ -285,8 +305,8 @@ def test_same_physical_centre_when_base_heading_changes(settings_file, base_yaw_
 
 
 @pytest.mark.parametrize('operation', [
-    'align_base_and_pick_up_object',
-    'align_base_and_put_down_object',
+    align_and_pick_up,
+    align_and_put_down,
 ])
 @pytest.mark.parametrize('arm, gripper, source, frame', [
     ('right_arm', 'right', 'd405_right', 'd405_right_camera_center'),
@@ -295,7 +315,7 @@ def test_same_physical_centre_when_base_heading_changes(settings_file, base_yaw_
 def test_pick_and_place_derive_gripper_and_camera_from_arm(
     settings_file, operation, arm, gripper, source, frame,
 ):
-    definition = getattr(task_source, operation)('tag_1', arm=arm)
+    definition = operation('tag_1', arm=arm)
     base_step = next(
         step for step in definition.commands
         if isinstance(step, CameraMoveToTagStep)
@@ -314,11 +334,9 @@ def test_pick_and_place_derive_gripper_and_camera_from_arm(
 
 
 @pytest.mark.parametrize('call', [
-    lambda: task_source.align_base_and_pick_up_object('tag_1'),
-    lambda: task_source.align_base_and_put_down_object('tag_1'),
-    lambda: task_source.pick_up_object_at('A'),
-    lambda: task_source.put_down_object_at('A'),
-    lambda: task_source.pick_up_move_and_put_down_object('A', 'C'),
+    lambda: task_source.align_base_to_tag('tag_1'),
+    lambda: task_source.pick_up_object_in_place('tag_1'),
+    lambda: task_source.put_down_object_in_place('tag_1'),
 ])
 def test_pick_and_place_require_explicit_arm(settings_file, call):
     with pytest.raises(TypeError, match="arm"):
@@ -327,7 +345,7 @@ def test_pick_and_place_require_explicit_arm(settings_file, call):
 
 def test_pick_and_place_reject_non_arm_group(settings_file):
     for call in (
-        task_source.align_base_and_pick_up_object,
+        task_source.align_base_to_tag,
         task_source.pick_up_object_in_place,
         task_source.put_down_object_in_place,
     ):

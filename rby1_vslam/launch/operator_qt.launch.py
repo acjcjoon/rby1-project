@@ -54,6 +54,7 @@ def generate_launch_description():
             name='station_operator',
             namespace='/rby1/vslam',
             output='screen',
+            additional_env={'PYTHONNOUSERSITE': '1'},
             emulate_tty=True,
             parameters=[{
                 'use_sim_time': False,

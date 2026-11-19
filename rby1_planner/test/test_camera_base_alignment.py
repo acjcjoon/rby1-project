@@ -10,7 +10,7 @@ from rby1_planner.navigation_protocol import (
 )
 from rby1_planner.observation import rpy_deg_to_quaternion
 from rby1_planner.task import (
-    _configured_tag_approach_contact_move,
+    move_hand_to_tag,
     object_handover_demo7,
 )
 from rby1_planner.task_commands import CameraMoveToTagStep, Task
@@ -214,7 +214,7 @@ def test_distance_limit_applies_to_actual_correction():
 @pytest.mark.parametrize('error', [(-0.04, 0.02), (-0.08, 0.09)])
 def test_alignment_continues_to_fresh_d405_approach_contact_and_lift(error):
     task = alignment_task().open_gripper('left')
-    task.extend(_configured_tag_approach_contact_move(
+    task.extend(move_hand_to_tag(
         'tag_4', (0.0, 0.0, 0.15), (0.0, 0.0, 0.05),
         (3.0, 1.0, 1.0, 1.0), arm='left_arm',
     ))
