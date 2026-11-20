@@ -77,6 +77,12 @@ plain 장비(LH1, LH2)는 태그로 base 정렬 후 집기/놓기만 한다.
 | `test1` | 왼손만. base·허리 고정. tag_3 ↔ tag_0 픽앤플레이스 10 회 반복 |
 | `test2` | LH1 → LH2 → LH1 왕복 (`transfer` 두 번) |
 
+## 8. VSLAM
+
+| Task | 내용 |
+|---|---|
+| `offline_map_creation` | 운영 전 오프라인 맵 생성. 머리 2°(`head_pitch_deg.move`) → cuVSLAM mapping 시작·tracking 대기 → 출발 지점 보정 → **작업자가 Base 탭으로 지점을 돌며 VSLAM 탭에서 `Stop + correct` / `Save Point`** → `Finish mapping` → 지도를 `map_<날짜>_<시각>` 으로 저장. 끝나도 VSLAM 은 켜 둔다. 조그 전에 상단 Stream 을 켠다 |
+
 ## 등록되지 않은 helper
 
 | 함수 | 내용 |

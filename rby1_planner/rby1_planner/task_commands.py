@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import math
 from pathlib import Path
+import re
 from typing import (
     TYPE_CHECKING,
     Iterable,
@@ -408,6 +409,54 @@ class MoveToStep:
         )
 
 
+VSLAM_STEP_ACTIONS = ('start', 'correct', 'operator', 'save_map')
+
+
+@dataclass(frozen=True)
+class VslamStep:
+    """cuVSLAM stack operation executed through the planner's VSLAM client.
+
+    ``start``     start the stack in ``mode`` and wait for visual tracking.
+    ``correct``   stop the base and wait for a station correction.
+    ``operator``  hand the base to the operator (Base tab jog) until
+                  "Finish mapping" is pressed in the VSLAM tab.
+    ``save_map``  save the cuVSLAM map; an empty ``map_name`` becomes
+                  ``map_<date>_<time>`` when the step runs.
+    """
+
+    action: str
+    mode: str = 'mapping'
+    map_name: str = ''
+    timeout_sec: float = 120.0
+
+    def __post_init__(self) -> None:
+        action = str(self.action).strip()
+        if action not in VSLAM_STEP_ACTIONS:
+            raise ValueError(
+                f'vslam action must be one of {VSLAM_STEP_ACTIONS}'
+            )
+        mode = str(self.mode).strip()
+        if mode not in ('mapping', 'localization'):
+            raise ValueError("vslam mode must be 'mapping' or 'localization'")
+        map_name = str(self.map_name or '').strip()
+        if map_name and not re.match(
+            r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$', map_name
+        ):
+            raise ValueError(
+                'vslam map_name must use letters, digits, "_", "." or "-"'
+            )
+        if action == 'start' and mode == 'localization' and not map_name:
+            raise ValueError('vslam localization start requires map_name')
+        object.__setattr__(self, 'action', action)
+        object.__setattr__(self, 'mode', mode)
+        object.__setattr__(self, 'map_name', map_name)
+        object.__setattr__(
+            self,
+            'timeout_sec',
+            _finite_number(self.timeout_sec, 'timeout_sec', positive=True),
+        )
+
+
 @dataclass(frozen=True)
 class CameraMoveToTagStep:
     """Deferred camera observation followed by relative base navigation."""
@@ -583,6 +632,7 @@ DynamicTaskStep = Union[
     CameraMoveToTagStep,
     MoveToStep,
     RewindStep,
+    VslamStep,
 ]
 
 
@@ -608,6 +658,7 @@ class DynamicTaskDefinition:
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    VslamStep,
                     BackgroundGripperStep,
                     RewindStep,
                 ),
@@ -633,6 +684,7 @@ class DynamicTaskDefinition:
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    VslamStep,
                     BackgroundGripperStep,
                     RewindStep,
                 ),
@@ -702,6 +754,47 @@ class Task(_CanonicalTask):
             y=y,
             yaw=yaw,
             timeout_sec=timeout_sec,
+        ))
+        return self
+
+    def vslam_start(
+        self,
+        mode: str = 'mapping',
+        map_name: str = '',
+        *,
+        timeout_sec: float = 120.0,
+    ) -> 'Task':
+        """Start cuVSLAM in the Isaac container and wait for tracking.
+
+        If the stack already runs in the same ``mode`` it is reused.
+        """
+        self.task_list.append(VslamStep(
+            'start', mode=mode, map_name=map_name, timeout_sec=timeout_sec,
+        ))
+        return self
+
+    def vslam_station_correct(self, *, timeout_sec: float = 30.0) -> 'Task':
+        """Stop the base and wait for a converged station correction."""
+        self.task_list.append(VslamStep('correct', timeout_sec=timeout_sec))
+        return self
+
+    def vslam_operator_mapping(self) -> 'Task':
+        """Let the operator drive (Base tab) until "Finish mapping".
+
+        The Task stays active; points are saved from the VSLAM tab.
+        """
+        self.task_list.append(VslamStep('operator'))
+        return self
+
+    def vslam_save_map(
+        self,
+        map_name: str = '',
+        *,
+        timeout_sec: float = 180.0,
+    ) -> 'Task':
+        """Save the cuVSLAM map (empty name = ``map_<date>_<time>``)."""
+        self.task_list.append(VslamStep(
+            'save_map', map_name=map_name, timeout_sec=timeout_sec,
         ))
         return self
 
@@ -1135,6 +1228,7 @@ class Task(_CanonicalTask):
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    VslamStep,
                     BackgroundGripperStep,
                     RewindStep,
                 ),
@@ -1155,6 +1249,7 @@ class Task(_CanonicalTask):
                     CameraLinearAbsoluteStep,
                     CameraMoveToTagStep,
                     MoveToStep,
+                    VslamStep,
                     BackgroundGripperStep,
                     RewindStep,
                 ),
@@ -1574,6 +1669,7 @@ __all__ = [
     'DynamicTaskDefinition',
     'DynamicTaskStep',
     'MoveToStep',
+    'VslamStep',
     'RewindStep',
     'RunnableTaskDefinition',
     'STREAM_PATH_KINDS',

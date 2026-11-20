@@ -41,6 +41,18 @@ STARTUP_TIMEOUT_SEC="${RBY1_STARTUP_TIMEOUT_SEC:-45}"
 D405_SERIAL="${RBY1_D405_SERIAL:-262622274864}"            # 오른손 (USB 2-3.2)
 D405_LEFT_SERIAL="${RBY1_D405_LEFT_SERIAL:-260322273756}"  # 왼손 (USB 2-3.3)
 D435_SERIAL="${RBY1_D435_SERIAL:-}"
+# 머리 D435 한 대를 AprilTag(Color 1080p)와 cuVSLAM(IR 스테레오)이 함께 쓴다.
+# 장치는 한 프로세스만 열 수 있으므로 이 런처의 노드가 두 스트림을 모두 발행한다.
+# off 로 두면 IR 을 끄고 Color 만 발행한다 (VSLAM 탭 사용 불가).
+D435_IR_FPS="${RBY1_D435_IR_FPS:-90}"
+D435_VSLAM_CONFIG="${RBY1_D435_VSLAM_CONFIG:-${SCRIPT_DIR}/rby1_vslam/config/d435i_host.yaml}"
+ISAAC_CONTAINER="${RBY1_ISAAC_CONTAINER:-rby1-isaac-vslam}"
+# Fast DDS 공유메모리 세그먼트(32 MB)를 D435 카메라 노드에만 건다. 기본 512 KiB 는
+# Color 한 장(2.7 MB)보다 작다. 컨테이너의 cuVSLAM 쪽과 같은 프로파일이다.
+D435_FASTDDS_PROFILE="${RBY1_D435_FASTDDS_PROFILE:-${SCRIPT_DIR}/rby1_vslam/config/fastdds_camera.xml}"
+# robot_state_publisher 의 TF 상한 주기. VSLAM pose_adapter 가 영상 취득 시각의
+# head TF 를 조회하므로 joint_states(~100 Hz)를 그대로 내보낸다.
+ROBOT_TF_PUBLISH_FREQUENCY="${RBY1_ROBOT_TF_PUBLISH_FREQUENCY:-200.0}"
 
 usage() {
   printf '%s\n' \
@@ -48,6 +60,7 @@ usage() {
     "" \
     "Starts the real RB-Y1 driver, state publisher, physical gripper," \
     "RealSense, AprilTag vision, control, navigation, and planner UI." \
+    "The head D435 also publishes the IR stereo pair for the UI's VSLAM tab." \
     "" \
     "Options:" \
     "  --namespace NAME             ROS namespace (default: rby1)" \
@@ -71,6 +84,7 @@ usage() {
     "  --d405-serial SERIAL         Right-wrist D405 serial (default: 262622274864)" \
     "  --d405-left-serial SERIAL    Left-wrist D405 serial (default: 260322273756)" \
     "  --d435-serial SERIAL         Pin the D435; default: select by model" \
+    "  --d435-ir-fps 30|60|90|off   D435 IR stereo rate for VSLAM (default: 90; off = color only)" \
     "  -h, --help                   Show this help"
 }
 
@@ -195,6 +209,11 @@ while (($# > 0)); do
       D435_SERIAL="$2"
       shift 2
       ;;
+    --d435-ir-fps)
+      require_value "$1" "$#"
+      D435_IR_FPS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -220,6 +239,10 @@ D435_SERIAL="${D435_SERIAL#_}"
    && "${D405_SERIAL}" != "${D435_SERIAL}" \
    && "${D405_LEFT_SERIAL}" != "${D435_SERIAL}" ]] || \
   die 'Right D405, left D405 and D435 serial numbers must all be different.'
+[[ "${D435_IR_FPS}" =~ ^(30|60|90|off)$ ]] || \
+  die 'D435 IR fps must be 30, 60, 90 or off.'
+[[ "${ROBOT_TF_PUBLISH_FREQUENCY}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || \
+  die 'RBY1_ROBOT_TF_PUBLISH_FREQUENCY must be a positive number.'
 [[ "${ROBOT_MODEL}" == "a" || "${ROBOT_MODEL}" == "m" ]] || \
   die 'Robot model must be a or m.'
 [[ "${GRIPPER_TRANSPORT}" == "real" || "${GRIPPER_TRANSPORT}" == "sim" ]] || \
@@ -246,6 +269,12 @@ for required_file in \
   "${ROBOT_URDF}"; do
   [[ -r "${required_file}" ]] || die "Required file is missing: ${required_file}"
 done
+[[ -r "${D435_FASTDDS_PROFILE}" ]] || \
+  die "D435 Fast DDS profile is missing: ${D435_FASTDDS_PROFILE}"
+if [[ "${D435_IR_FPS}" != "off" ]]; then
+  [[ -r "${D435_VSLAM_CONFIG}" ]] || \
+    die "D435 VSLAM camera config is missing: ${D435_VSLAM_CONFIG}"
+fi
 
 if [[ -r "${ROS_SETUP}" ]]; then
   # shellcheck disable=SC1090
@@ -267,6 +296,7 @@ PROJECT_PACKAGES=(
   rby1_camera
   rby1_control
   rby1_navigation
+  rby1_vslam
   rby1_planner
 )
 
@@ -329,6 +359,7 @@ RUNTIME_PACKAGES=(
   rby1_camera
   rby1_control
   rby1_navigation
+  rby1_vslam
   rby1_planner
 )
 
@@ -361,7 +392,7 @@ fi
 # results. The gripper driver also holds the serial port, so a leftover copy
 # makes the new one start NOT READY.
 # ---------------------------------------------------------------------------
-STALE_PATTERN='rby1_driver/rby1_ros2_driver|rby1_gripper_driver/gripper_driver|realsense2_camera_node|apriltag_node|robot_state_publisher|camera_mount_tf_publisher|depth_tag_tf_node|rby1_navigation/navigation_node|rby1_control/rby1_control|rby1_planner/planner_ui|ros2 launch (rby1_|realsense2_camera|apriltag)|ros2 run (rby1_driver|robot_state_publisher)'
+STALE_PATTERN='rby1_driver/rby1_ros2_driver|rby1_gripper_driver/gripper_driver|realsense2_camera_node|apriltag_node|robot_state_publisher|rby1_base_footprint|camera_mount_tf_publisher|depth_tag_tf_node|rby1_navigation/navigation_node|rby1_control/rby1_control|rby1_planner/planner_ui|lib/nav2_[a-z_]+/|rby1_vslam/(nav2_gate|wheel_odom_adapter)|ros2 launch (rby1_|realsense2_camera|apriltag)|ros2 run (rby1_driver|robot_state_publisher)'
 
 list_stale_pids() {
   # Excludes this launcher and any child it started itself.
@@ -420,6 +451,30 @@ stop_stale_processes() {
   wait_for_pids_to_exit 3 "${pids[@]}"
 }
 
+# cuVSLAM runs inside the Isaac container (started from the UI's VSLAM tab), so
+# pgrep on the host cannot see it. A leftover copy keeps publishing vslam TF and
+# status into the next session.
+VSLAM_CONTAINER_PATTERN='ros2 launch rby1_vslam jetson.launch.py'
+
+container_vslam_running() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker exec "${ISAAC_CONTAINER}" pgrep -f "${VSLAM_CONTAINER_PATTERN}" >/dev/null 2>&1
+}
+
+stop_container_vslam() {
+  container_vslam_running || return 0
+  printf '[launcher] Stopping cuVSLAM inside container %s\n' "${ISAAC_CONTAINER}"
+  docker exec "${ISAAC_CONTAINER}" pkill -INT -f "${VSLAM_CONTAINER_PATTERN}" 2>/dev/null || true
+  local deadline=$((SECONDS + 10))
+  while ((SECONDS < deadline)); do
+    container_vslam_running || return 0
+    sleep 0.5
+  done
+  docker exec "${ISAAC_CONTAINER}" pkill -TERM -f 'jetson.launch.py' 2>/dev/null || true
+  sleep 1
+  ! container_vslam_running
+}
+
 CHILD_PIDS=()
 CHILD_NAMES=()
 
@@ -448,6 +503,15 @@ if ((${#STALE_PIDS[@]} > 0)); then
   fi
 else
   printf '[launcher] No leftover stack processes.\n'
+fi
+
+if container_vslam_running; then
+  if [[ "${STALE_CLEANUP}" == "true" ]]; then
+    stop_container_vslam || \
+      die "Leftover cuVSLAM in container ${ISAAC_CONTAINER} could not be stopped."
+  else
+    die "cuVSLAM is still running in container ${ISAAC_CONTAINER} (--no-stale-cleanup)."
+  fi
 fi
 
 check_robot_connection() {
@@ -561,6 +625,8 @@ cleanup() {
   # Safety net: nodes that outlived their wrapper are stopped here so the
   # next launch never meets a duplicate driver or a held serial port.
   CHILD_PIDS=()
+  stop_container_vslam || \
+    printf '[launcher] WARNING: cuVSLAM is still running in container %s\n' "${ISAAC_CONTAINER}" >&2
   if stop_stale_processes; then
     printf '[launcher] All stack processes stopped.\n'
   else
@@ -583,7 +649,7 @@ printf '%s\n' \
   "[launcher] gripper=${GRIPPER_TRANSPORT}, auto_home=${GRIPPER_AUTO_HOME}" \
   "[launcher] d405_right=${D405_SERIAL}" \
   "[launcher] d405_left=${D405_LEFT_SERIAL}" \
-  "[launcher] d435=${D435_SERIAL:-auto-by-model}"
+  "[launcher] d435=${D435_SERIAL:-auto-by-model}, ir_stereo=${D435_IR_FPS}"
 
 if [[ "${GRIPPER_TRANSPORT}" == "real" && "${GRIPPER_AUTO_HOME}" == "true" ]]; then
   printf '%s\n' \
@@ -604,7 +670,16 @@ start_process robot_state_publisher \
   ros2 run robot_state_publisher robot_state_publisher \
   "${ROBOT_URDF}" \
   --ros-args \
+  -p "publish_frequency:=${ROBOT_TF_PUBLISH_FREQUENCY}" \
   -r "joint_states:=/${NAMESPACE}/joint_states"
+
+# Driver odometry ends at base_footprint; the vendor URDF starts at base.
+# VSLAM localization needs the two trees joined (identity transform).
+start_process base_footprint_tf \
+  ros2 run tf2_ros static_transform_publisher \
+  --x 0 --y 0 --z 0 --roll 0 --pitch 0 --yaw 0 \
+  --frame-id base_footprint --child-frame-id base \
+  --ros-args -r __node:=rby1_base_footprint
 
 start_process gripper_driver \
   ros2 launch rby1_gripper_driver gripper_driver.launch.py \
@@ -639,6 +714,7 @@ start_process realsense_d405_left \
 wait_for_topic '/d405_left/d405_left/color/image_raw' realsense_d405_left
 
 D435_REALSENSE_ARGS=(
+  env "FASTRTPS_DEFAULT_PROFILES_FILE=${D435_FASTDDS_PROFILE}"
   ros2 launch realsense2_camera rs_launch.py
   camera_namespace:=d435
   camera_name:=d435
@@ -648,14 +724,46 @@ D435_REALSENSE_ARGS=(
   enable_depth:=false
   align_depth.enable:=false
 )
+if [[ "${D435_IR_FPS}" != "off" ]]; then
+  # Same stereo settings as rby1_vslam/run_d435i_host.sh mode 0: rectified Y8
+  # IR pair, projector off (config file), no depth. Color stays untouched.
+  D435_REALSENSE_ARGS+=(
+    "config_file:=${D435_VSLAM_CONFIG}"
+    enable_infra1:=true
+    enable_infra2:=true
+    "depth_module.infra_profile:=640,480,${D435_IR_FPS}"
+    depth_module.enable_auto_exposure:=true
+    depth_module.inter_cam_sync_mode:=0
+    enable_sync:=false
+    pointcloud.enable:=false
+    enable_gyro:=false
+    enable_accel:=false
+    publish_tf:=true
+    tf_publish_rate:=0.0
+  )
+fi
 if [[ -n "${D435_SERIAL}" ]]; then
   D435_REALSENSE_ARGS+=("serial_no:=_${D435_SERIAL}")
 fi
 start_process realsense_d435 "${D435_REALSENSE_ARGS[@]}"
 wait_for_topic '/d435/d435/color/image_raw' realsense_d435
+if [[ "${D435_IR_FPS}" != "off" ]]; then
+  wait_for_topic '/d435/d435/infra1/image_rect_raw' realsense_d435
+  # rs_launch.py ignores the emitter keys of the config file, so the IR dot
+  # projector is switched off on the running node. cuVSLAM needs it off.
+  if timeout 10 ros2 param set /d435/d435 depth_module.emitter_enabled 0 >/dev/null 2>&1; then
+    printf '[launcher] D435 IR projector off (stereo IR 640x480@%s for VSLAM)\n' "${D435_IR_FPS}"
+  else
+    printf '[launcher] WARNING: could not switch the D435 IR projector off; check before using VSLAM:\n' >&2
+    printf '[launcher]   ros2 param get /d435/d435 depth_module.emitter_enabled\n' >&2
+  fi
+fi
 
-start_process apriltag_vision \
-  ros2 launch rby1_camera apriltag_vision.launch.py
+# Camera mount TF only. The AprilTag detection pair of each camera costs about
+# one CPU core, so the planner starts it on demand (tag_detection_mode).
+start_process camera_mount_tf \
+  ros2 launch rby1_camera apriltag_vision.launch.py \
+  detection_cameras:=none
 
 start_process control \
   ros2 launch rby1_control control.launch.py \

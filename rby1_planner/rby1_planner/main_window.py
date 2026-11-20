@@ -123,6 +123,9 @@ class MainWindow(QMainWindow):
         self._action_buttons: Dict[str, QPushButton] = {}
         self._closing = False
         self._scenario_active = False
+        # True while a running Task hands the base to the operator (planner
+        # VSLAM mapping step); Base jog is then allowed despite the Task.
+        self._operator_base_control = False
 
         self._joint_target_cache = {
             key: [0.0] * dof
@@ -2225,15 +2228,27 @@ class MainWindow(QMainWindow):
         )
         return self.scenario_panel
 
+    def _base_jog_blocked(self) -> bool:
+        return self._scenario_active and not self._operator_base_control
+
     def _scenario_active_changed(self, active: bool) -> None:
         self._scenario_active = bool(active)
         if active:
             self._stop_cartesian_hold(cancel_motion=False)
             self._stop_base_only()
+        else:
+            self._operator_base_control = False
 
         # Manual Base and Joint/Cartesian controls cannot race a Task.
-        self.tabs.setTabEnabled(0, not active)
+        self.tabs.setTabEnabled(0, not self._base_jog_blocked())
         self.tabs.setTabEnabled(1, not active)
+
+    def _operator_base_control_changed(self, enabled: bool) -> None:
+        """A Task step gives the base to the operator, or takes it back."""
+
+        self._operator_base_control = bool(enabled) and self._scenario_active
+        self._stop_base_only()
+        self.tabs.setTabEnabled(0, not self._base_jog_blocked())
 
     def _build_diagnostics_tab(self) -> QWidget:
         tab = QWidget()
@@ -2330,7 +2345,7 @@ class MainWindow(QMainWindow):
         self,
         action: str,
     ) -> None:
-        if self._scenario_active:
+        if self._base_jog_blocked():
             return
         self._pressed_actions.add(action)
         self._refresh_command()
@@ -2383,7 +2398,7 @@ class MainWindow(QMainWindow):
             self.backend.cancel_motion()
 
     def _refresh_command(self) -> None:
-        if self._closing or self._scenario_active:
+        if self._closing or self._base_jog_blocked():
             return
 
         vx, vy, wz = self._calculate_command()

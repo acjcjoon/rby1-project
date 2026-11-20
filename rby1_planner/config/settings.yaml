@@ -16,18 +16,18 @@ head_pitch_deg: {move: 2.0}
 stations:
   LH1:
     kind: plain
-    points: {place: {position: [0.4, 0.0], side: front, head_pitch_deg: 32}}
+    points: {place: {position: [0.0, -0.31], side: front, head_pitch_deg: 50}}
     place: {point: place, tag: tag_3, offset: [-0.05, 0.061, -0.009]}
   LH2:
     kind: plain
-    points: {place: {position: [0.4, 0.81], side: right, head_pitch_deg: 32}}
+    points: {place: {position: [0.0, -0.41], side: right, head_pitch_deg: 40}}
     place: {point: place, tag: tag_0, offset: [-0.05, 0.061, -0.009]}
   ZS:
     kind: door_switch
     points:
-      work:  {position: [0.0, 0.0],   side: left,  head_pitch_deg: 32}  # 문/스위치 작업 위치 (구 ZSSW)
+      work:  {position: [0.0, 0.0],   side: left,  head_pitch_deg: 40}  # 문/스위치 작업 위치 (구 ZSSW)
       via:   {position: [-0.75, 0.0], side: left,  head_pitch_deg: 2}   # 경유 지점 (구 AP)
-      place: {position: [-0.75, 0.70], side: front, head_pitch_deg: 47}  # 놓는 위치 (구 ZS)
+      place: {position: [-0.75, 0.70], side: front, head_pitch_deg: 50}  # 놓는 위치 (구 ZS)
     route: [work, via, place]                        # 작업 위치 -> 놓는 위치. 복귀는 역순
     place:  {point: place, tag: tag_2, offset: [-0.05, 0.061, -0.009]}
     work:

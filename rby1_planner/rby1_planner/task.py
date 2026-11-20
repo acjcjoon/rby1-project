@@ -76,7 +76,6 @@ def _wall_move(station: str, offset_wall: Sequence[float]) -> tuple[float, ...]:
     """벽 좌표 이동량 -> linear_relative 용 base 이동 [dx, dy, dz, 0, 0, 0]."""
     return (*_wall_to_base(station, offset_wall), 0.0, 0.0, 0.0)
 
-
 def _switch(station: str) -> dict:
     """stations.<station>.work.switch."""
     switch = (_load_station(station).get('work') or {}).get('switch')
@@ -744,6 +743,24 @@ def wave_both_arms(count: int = 3) -> RunnableTaskDefinition:
     return task.build()
 
 # ===========================================================================
+# 8. VSLAM
+# ===========================================================================
+def offline_map_creation(map_name: str = '') -> RunnableTaskDefinition:
+    """운영 전 오프라인 맵 생성. 머리를 이동 각도로 -> cuVSLAM mapping 시작 -> 제자리 보정
+    -> 작업자가 Base 탭으로 지점을 돌며 VSLAM 탭에서 보정 + Point 저장 -> Finish mapping -> 지도 저장.
+
+    map_name 이 비어 있으면 map_<날짜>_<시각> 으로 저장한다. 끝나도 VSLAM 은 켜 둔다.
+    """
+    task = Task('offline_map_creation')
+    task.extend(head_pitch_pose(_load_move_head_pitch_deg()))   # 주행 때와 같은 머리 각도로 지도를 만든다
+    task.vslam_start('mapping')
+    task.vslam_station_correct()        # 출발 지점에서 localization 초기화
+    task.vslam_operator_mapping()       # 수동 주행 + Point 저장 (VSLAM 탭 Finish mapping 으로 종료)
+    task.vslam_save_map(map_name)
+    return task.build()
+
+
+# ===========================================================================
 # 7. 테스트
 # ===========================================================================
 # test0: base 정렬 후 파지 (허리 자세 무관)
@@ -818,6 +835,9 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         'impedance_demo_joint': impedance_demo_joint(),
         'wave_both_arms': wave_both_arms(),
 
+        # --- 8. VSLAM ---
+        'offline_map_creation': offline_map_creation(),
+
         # --- 7. 테스트 ---
         'test0': test0(),
         'test1': test1(),
@@ -842,4 +862,6 @@ __all__ = [
     'go_to', 'pick_at_station', 'place_at_station', 'transfer', 'transfer_demo',
     # 6. 데모
     'impedance_demo_press', 'impedance_demo_joint', 'wave_both_arms',
+    # 8. VSLAM
+    'offline_map_creation',
 ]

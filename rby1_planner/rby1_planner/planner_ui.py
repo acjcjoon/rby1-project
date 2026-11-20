@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict
 
 from .main_window import MainWindow
-from .qt_compat import QLabel, QWidget
+from .qt_compat import QComboBox, QHBoxLayout, QLabel, QTimer, QWidget
 from .scenario_ui import ScenarioPanel
 
 from .task_commands import (
@@ -17,8 +17,10 @@ from .task_commands import (
     MoveToStep,
     RewindStep,
     RunnableTaskDefinition,
+    VslamStep,
 )
 from .task_registry import load_tasks_from_source
+from .vslam_ui import VslamPanel
 
 
 class PlannerScenarioPanel(ScenarioPanel):
@@ -47,6 +49,7 @@ class PlannerScenarioPanel(ScenarioPanel):
         self._build_ui()
         self._update_source_note()
         self._connect_cancel_to_planner_runner()
+        self._build_tag_detection_row()
         self.reload_tasks(initial=True)
 
     def _update_source_note(self) -> None:
@@ -57,6 +60,64 @@ class PlannerScenarioPanel(ScenarioPanel):
                     'Delete removes only the current UI list entry.'
                 )
                 break
+
+    def _build_tag_detection_row(self) -> None:
+        """Mode switch for the per-camera AprilTag detection processes."""
+
+        self.vision = getattr(self.backend, 'vision', None)
+        if self.vision is None:
+            return
+        row = QHBoxLayout()
+        self.tag_mode_combo = QComboBox()
+        for label, value in (
+            ('Auto (only during tag steps)', 'auto'),
+            ('Always on', 'on'),
+            ('Off', 'off'),
+        ):
+            self.tag_mode_combo.addItem(label, value)
+        self._style_combo_popup(self.tag_mode_combo)
+        self.tag_mode_combo.setCurrentIndex(
+            ('auto', 'on', 'off').index(self.vision.mode)
+        )
+        self.tag_mode_combo.setToolTip(
+            'AprilTag detection costs about one CPU core per camera. Auto '
+            'starts a camera only for Task steps that read a tag. Use '
+            '"Always on" to view tags or measure offsets outside a Task.'
+        )
+        self.tag_mode_combo.currentIndexChanged.connect(
+            self._tag_mode_changed
+        )
+        self.tag_status_label = QLabel('')
+        self.tag_status_label.setObjectName('secondaryNote')
+        self.tag_status_label.setWordWrap(True)
+        row.addWidget(QLabel('Tag detection'))
+        row.addWidget(self.tag_mode_combo, 1)
+        tasks_layout = self.task_list.parentWidget().layout()
+        tasks_layout.addLayout(row)
+        tasks_layout.addWidget(self.tag_status_label)
+        self._tag_status_timer = QTimer(self)
+        self._tag_status_timer.setInterval(500)
+        self._tag_status_timer.timeout.connect(self._refresh_tag_status)
+        self._tag_status_timer.start()
+
+    def _tag_mode_changed(self, *_args) -> None:
+        mode = str(self.tag_mode_combo.currentData())
+        try:
+            self.vision.set_mode(mode)
+        except Exception as exc:
+            self._log('warning', f'Tag detection mode not changed: {exc}')
+            self.tag_mode_combo.blockSignals(True)
+            self.tag_mode_combo.setCurrentIndex(
+                ('auto', 'on', 'off').index(self.vision.mode)
+            )
+            self.tag_mode_combo.blockSignals(False)
+            return
+        self._log('info', f'Tag detection mode: {mode}')
+
+    def _refresh_tag_status(self) -> None:
+        for line in self.vision.drain_log():
+            self._log('info', line)
+        self.tag_status_label.setText(self.vision.status_text())
 
     def _connect_cancel_to_planner_runner(self) -> None:
         try:
@@ -141,6 +202,29 @@ class PlannerScenarioPanel(ScenarioPanel):
                     f'{inner.group}; speed={speed}; next step starts '
                     'without waiting'
                 )
+                continue
+            if isinstance(command, VslamStep):
+                detail = {
+                    'start': (
+                        f'start cuVSLAM in {command.mode} mode'
+                        + (f' (map {command.map_name})'
+                           if command.map_name else '')
+                        + f'; wait for tracking <= {command.timeout_sec:.0f} s'
+                    ),
+                    'correct': (
+                        'stop base, wait for station correction '
+                        f'<= {command.timeout_sec:.0f} s'
+                    ),
+                    'operator': (
+                        'operator drives with the Base tab and saves points '
+                        'in the VSLAM tab until "Finish mapping"'
+                    ),
+                    'save_map': (
+                        'save map '
+                        + (command.map_name or 'map_<date>_<time>')
+                    ),
+                }[command.action]
+                lines.append(f'{index}. vslam_{command.action}: {detail}')
                 continue
             if isinstance(command, MoveToStep):
                 lines.append(
@@ -253,6 +337,25 @@ class PlannerMainWindow(MainWindow):
     def __init__(self, backend) -> None:
         super().__init__(backend)
         self.setWindowTitle('RB-Y1 Planner')
+        # Inserted before Diagnostics; Base (0) and Joints (1) keep their
+        # indexes, which the Scenario lock uses.
+        self.vslam_panel = VslamPanel(
+            getattr(backend, 'vslam', None),
+            on_log=self.append_log,
+            stop_base=self._stop_base_only,
+            runner=backend.task_runner,
+        )
+        self.tabs.insertTab(self.tabs.count() - 1, self.vslam_panel, 'VSLAM')
+        backend.task_runner.on_operator_control = (
+            self._operator_base_control_changed
+        )
+
+    def _base_jog_blocked(self) -> bool:
+        # A Nav2 Goto owns the base: Base tab jog must not fight it.
+        vslam = getattr(self.backend, 'vslam', None)
+        if vslam is not None and vslam.navigation_busy():
+            return True
+        return super()._base_jog_blocked()
 
     def _build_scenario_tab(self) -> QWidget:
         self.scenario_panel = PlannerScenarioPanel(

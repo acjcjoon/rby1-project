@@ -192,6 +192,7 @@ def _launch(context):
             'enabled': value('enable', bool),
             'nav2_cmd_topic': '/rby1/vslam/nav2_cmd_vel',
             'cmd_raw_topic': '/rby1/cmd_raw',
+            'allowed_cmd_raw_publishers': value('allowed_cmd_raw_publishers', str),
             'base_frame': value('base_frame', str),
             'wheel_odom_topic': value('wheel_odom_topic', str),
             'require_nvblox': use_nvblox,
@@ -239,6 +240,10 @@ def generate_launch_description():
         DeclareLaunchArgument('use_scan', default_value='false',
                               description='Enable LaserScan obstacle input only when scan_topic is available.'),
         DeclareLaunchArgument('start_gate', default_value='true'),
+        DeclareLaunchArgument(
+            'allowed_cmd_raw_publishers', default_value='',
+            description='Comma-separated node names that may also publish cmd_raw '
+                        'while idle (planner odometry navigation). Empty = exclusive.'),
         DeclareLaunchArgument('start_localization_tf', default_value='true',
                               description='Disable when localization already runs with the VSLAM container.'),
         DeclareLaunchArgument('require_origin_alignment', default_value='false',

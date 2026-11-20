@@ -53,6 +53,10 @@ class Nav2Gate(Node):
                                    '/rby1/vslam/nav2/navigate_through_poses'],
             'cancel_response_timeout_sec': 3.0, 'cancel_retry_sec': 1.0,
             'require_nvblox': False, 'forward_only': False,
+            # Comma-separated node names that may also publish cmd_raw, as
+            # long as they are idle while this gate is enabled (for example
+            # the planner's odometry navigation node). Empty = exclusive.
+            'allowed_cmd_raw_publishers': '',
             'nvblox_depth_topic': '/rby1/nvblox/depth',
             'nvblox_slice_topic': '/nvblox_node/static_map_slice',
             'nvblox_integrated_depth_topic':
@@ -66,6 +70,9 @@ class Nav2Gate(Node):
         for name in ('control_rate_hz', 'cancel_response_timeout_sec', 'cancel_retry_sec'):
             if not math.isfinite(float(self.p[name])) or self.p[name] <= 0:
                 raise ValueError(name + ' must be positive and finite')
+        self.allowed_publishers = {
+            name.strip() for name in
+            str(self.p['allowed_cmd_raw_publishers']).split(',') if name.strip()}
         actions = self.p['navigation_actions']
         if (not actions or len(set(actions)) != len(actions) or
                 any(not name.startswith('/') or name.endswith('/') for name in actions)):
@@ -229,9 +236,19 @@ class Nav2Gate(Node):
                 'integrated_depth', 'invalid nvblox integrated depth: ' + str(exc))
         self._stop_if_latched(was_enabled)
 
+    def competing_publisher(self):
+        """Another cmd_raw publisher that is not explicitly allowed."""
+        if not self.allowed_publishers:
+            return self.count_publishers(self.p['cmd_raw_topic']) > 1
+        others = [
+            info.node_name
+            for info in self.get_publishers_info_by_topic(self.p['cmd_raw_topic'])
+            if info.node_name != self.get_name()]
+        return any(name not in self.allowed_publishers for name in others)
+
     def on_enable(self, request, response):
         self.arm_on_ready = False
-        self.core.set_competing_publisher(self.count_publishers(self.p['cmd_raw_topic']) > 1)
+        self.core.set_competing_publisher(self.competing_publisher())
         if request.data and not self.core.enabled and self.active_goal_count():
             response.success = False
             response.message = 'an existing Nav2 goal is still active; cancel it before enabling'
@@ -336,7 +353,7 @@ class Nav2Gate(Node):
     def tick(self):
         now, ros_now = time.monotonic(), self.ros_now()
         was_enabled = self.core.enabled
-        self.core.set_competing_publisher(self.count_publishers(self.p['cmd_raw_topic']) > 1)
+        self.core.set_competing_publisher(self.competing_publisher())
         velocity = self.core.tick(now, ros_now)
         self._stop_if_latched(was_enabled)
         self._pump_cancellation(now)

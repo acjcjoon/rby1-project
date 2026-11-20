@@ -11,6 +11,7 @@ try:
         QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
         QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
         QButtonGroup, QStackedWidget, QTabBar,
+        QTableWidget, QTableWidgetItem,
         QVBoxLayout, QWidget,
     )
     QT_BINDING = 'PySide6'
@@ -24,6 +25,7 @@ except ImportError:
             QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
             QListWidget, QScrollBar, QSizePolicy, QSpacerItem, QTabWidget,
             QButtonGroup, QStackedWidget, QTabBar,
+            QTableWidget, QTableWidgetItem,
             QVBoxLayout, QWidget,
         )
         QT_BINDING = 'PyQt5'

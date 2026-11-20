@@ -39,3 +39,24 @@
     object_pose_average_enabled: true
     object_pose_average_sample_count: 10
     object_pose_average_outlier_count: 2
+
+    # 카메라별 AprilTag 검출 프로세스 (apriltag_node + depth_tag_tf_node, 카메라당 약 1코어).
+    #   auto: 태그를 읽는 Task 스텝에서만 해당 카메라를 켜고, 더 쓰지 않으면 끈다
+    #   on  : 세 카메라 모두 항상 켠다 (RViz 로 태그 확인, 오프셋 측정)
+    #   off : 켜지 않는다 (카메라 스텝은 실패한다)
+    # Scenario 탭의 Tag detection 에서 실행 중에도 바꿀 수 있다.
+    tag_detection_mode: auto
+
+    # cuVSLAM (VSLAM 탭 / vslam_* Task 스텝). Isaac 컨테이너 안에서 실행하며
+    # 지도 경로는 컨테이너 경로와 그 호스트 마운트 경로를 함께 적는다.
+    # nvblox / Nav2 는 여기서 시작하지 않는다.
+    vslam_enabled: true
+    vslam_launch_script: ""        # 비우면 rby1_vslam/scripts/run_isaac_vslam_docker.sh
+    vslam_container: rby1-isaac-vslam
+    vslam_map_root_host: /mnt/ssd/workspaces/isaac_ros-dev/maps
+    vslam_map_root_container: /workspaces/isaac_ros-dev/maps
+    vslam_waypoints_file: ""       # 비우면 rby1_vslam/data/rby1_vslam_waypoints.yaml
+    # Nav2 Goto (VSLAM 탭). Nav2 와 rby1_navigation 은 함께 떠 있지만 동시에 쓰지 않는다.
+    # 아래 노드는 정지 상태일 때 cmd_raw 발행자로 남아 있어도 Nav2 gate 가 허용한다.
+    vslam_navigation_script: ""    # 비우면 rby1_vslam/scripts/run_navigation.sh
+    vslam_allowed_cmd_raw_publishers: rby1_navigation_node

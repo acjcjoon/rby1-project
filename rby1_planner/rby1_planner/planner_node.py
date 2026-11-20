@@ -1,6 +1,7 @@
 """Independent camera-aware planner node."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from rclpy.node import Node
@@ -12,6 +13,8 @@ from .task_commands import RunnableTaskDefinition
 from .task_lifecycle import TaskProgress, TaskRunResult
 from .task_runner import PlannerTaskRunner
 from .transfer_action_server import TransferActionServer
+from .vision_manager import VisionManager
+from .vslam_client import VslamClient
 
 
 # camera_source -> (detections 토픽, 가공 태그 TF prefix)
@@ -65,6 +68,32 @@ class PlannerNode(Node):
             'transfer_action_name',
             'planner/execute_transfer',
         )
+        # AprilTag detection processes per camera: auto = only while a Task
+        # step reads a tag, on = always, off = never.
+        self.declare_parameter('tag_detection_mode', 'auto')
+        # cuVSLAM stack (Isaac container). Empty launch script = the installed
+        # rby1_vslam/scripts/run_isaac_vslam_docker.sh.
+        self.declare_parameter('vslam_enabled', True)
+        self.declare_parameter('vslam_launch_script', '')
+        self.declare_parameter('vslam_container', 'rby1-isaac-vslam')
+        self.declare_parameter(
+            'vslam_map_root_host',
+            '/mnt/ssd/workspaces/isaac_ros-dev/maps',
+        )
+        self.declare_parameter(
+            'vslam_map_root_container',
+            '/workspaces/isaac_ros-dev/maps',
+        )
+        # Empty = rby1_vslam/data/rby1_vslam_waypoints.yaml.
+        self.declare_parameter('vslam_waypoints_file', '')
+        # Nav2 Goto (VSLAM tab). Empty script = run_navigation.sh next to the
+        # VSLAM launch script. The listed nodes may keep an idle cmd_raw
+        # publisher while the Nav2 gate drives the base.
+        self.declare_parameter('vslam_navigation_script', '')
+        self.declare_parameter(
+            'vslam_allowed_cmd_raw_publishers',
+            'rby1_navigation_node',
+        )
 
         shared_camera_options = {
             'target_frame': str(
@@ -113,6 +142,15 @@ class PlannerNode(Node):
                 self.get_parameter('navigation_state_topic').value
             ),
         )
+        self.vslam = self._create_vslam_client()
+        self.vision = VisionManager(
+            self,
+            {
+                source: camera.object_pose_topic
+                for source, camera in self.cameras.items()
+            },
+            mode=str(self.get_parameter('tag_detection_mode').value),
+        )
         self.transfer_action_server = None
         self.task_runner = PlannerTaskRunner(
             self,
@@ -120,6 +158,8 @@ class PlannerNode(Node):
             camera=self.camera,
             cameras=self.cameras,
             navigation=self.navigation_client,
+            vslam=self.vslam,
+            vision=self.vision,
             on_status=self._task_status,
             on_progress=self._task_progress,
             on_finished=self._task_finished,
@@ -146,6 +186,48 @@ class PlannerNode(Node):
             'Planner is ready and idle; transfer Action server is available.'
         )
 
+    def _create_vslam_client(self) -> Optional[VslamClient]:
+        """VSLAM is optional: without rby1_vslam the planner still runs."""
+
+        if not bool(self.get_parameter('vslam_enabled').value):
+            return None
+        script = str(self.get_parameter('vslam_launch_script').value).strip()
+        try:
+            if not script:
+                from ament_index_python.packages import (
+                    get_package_share_directory,
+                )
+                script = str(
+                    Path(get_package_share_directory('rby1_vslam'))
+                    / 'scripts' / 'run_isaac_vslam_docker.sh'
+                )
+            navigation_script = str(
+                self.get_parameter('vslam_navigation_script').value
+            ).strip() or str(Path(script).with_name('run_navigation.sh'))
+            return VslamClient(
+                self,
+                launch_script=script,
+                navigation_script=navigation_script,
+                allowed_cmd_raw_publishers=str(
+                    self.get_parameter(
+                        'vslam_allowed_cmd_raw_publishers'
+                    ).value
+                ),
+                container=str(self.get_parameter('vslam_container').value),
+                map_root_host=str(
+                    self.get_parameter('vslam_map_root_host').value
+                ),
+                map_root_container=str(
+                    self.get_parameter('vslam_map_root_container').value
+                ),
+                waypoints_file=str(
+                    self.get_parameter('vslam_waypoints_file').value
+                ),
+            )
+        except Exception as exc:
+            self.get_logger().warning(f'VSLAM client is unavailable: {exc}')
+            return None
+
     def run_task(self, task: RunnableTaskDefinition) -> None:
         """Start one explicitly supplied Task through the control backend."""
 
@@ -160,6 +242,9 @@ class PlannerNode(Node):
         try:
             self.task_runner.close()
         finally:
+            self.vision.close()
+            if self.vslam is not None:
+                self.vslam.close()
             if self.transfer_action_server is not None:
                 self.transfer_action_server.destroy()
                 self.transfer_action_server = None

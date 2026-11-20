@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 import math
 import time
 from typing import Callable, Optional
@@ -36,6 +37,7 @@ from .task_commands import (
     STREAM_PATH_KINDS,
     TaskCommand,
     TaskDefinition,
+    VslamStep,
     impedance_tag_for,
     list_sum,
 )
@@ -51,6 +53,8 @@ class PlannerTaskRunner:
     MOTION_TIMEOUT_SCALE = 3.0
     MOTION_TIMEOUT_MARGIN_SEC = 5.0
     CAMERA_IDLE_TIMEOUT_SEC = 3.0
+    # Time allowed for a camera's tag detection processes to come up.
+    VISION_START_TIMEOUT_SEC = 15.0
     NAVIGATION_FINALIZATION_MARGIN_SEC = 5.0
     # Time budget for the backend's post-impedance re-anchor goal.
     IMPEDANCE_REANCHOR_MARGIN_SEC = 3.0
@@ -63,6 +67,8 @@ class PlannerTaskRunner:
         camera=None,
         cameras=None,
         navigation=None,
+        vslam=None,
+        vision=None,
         on_status: Optional[Callable[[str], None]] = None,
         on_active_changed: Optional[Callable[[bool], None]] = None,
         on_progress: Optional[Callable[[TaskProgress], None]] = None,
@@ -104,6 +110,20 @@ class PlannerTaskRunner:
             self.cameras.setdefault('d405_right', camera)
         self.camera = self.cameras.get('d405_right', camera)
         self.navigation = navigation
+        self.vslam = vslam
+        # Optional on-demand tag detection (VisionManager). None = detection
+        # is assumed to be running all the time.
+        self.vision = vision
+        self._vision_deadline: Optional[float] = None
+        self._vision_released_index = -1
+        # Called with True while a VslamStep('operator') hands the base to
+        # the operator, and with False when that step ends.
+        self.on_operator_control: Callable[[bool], None] = lambda _on: None
+        self._vslam_stage: Optional[str] = None
+        self._vslam_deadline = 0.0
+        self._vslam_last_detail = ''
+        self._operator_control = False
+        self._operator_done = False
         self.camera_average_enabled = camera_average_enabled
         self.camera_average_sample_count = int(camera_average_sample_count)
         self.camera_average_outlier_count = int(camera_average_outlier_count)
@@ -160,6 +180,13 @@ class PlannerTaskRunner:
             raise TypeError('task must be a planner Task definition')
         if not task.commands:
             raise ValueError('Task has no commands')
+        # Nav2 Goto and Task base motion (rby1_navigation) share cmd_raw and
+        # are never used at the same time.
+        busy = getattr(self.vslam, 'navigation_busy', None)
+        if callable(busy) and busy():
+            raise RuntimeError(
+                'a VSLAM Goto is running; stop it before starting a Task'
+            )
         self._require_safe_state(self.backend.task_state(), require_idle=True)
         self._task = task
         self._index = 0
@@ -189,6 +216,9 @@ class PlannerTaskRunner:
         self._run_number = 1
         self._background_command_id = None
         self._background_deadline = 0.0
+        self._reset_vslam_step()
+        self._vision_deadline = None
+        self._vision_released_index = -1
         self.on_active_changed(True)
         self.on_status(f'Task started: {task.name}')
         self.on_progress(TaskProgress(
@@ -346,8 +376,18 @@ class PlannerTaskRunner:
                 self._rewind(command)
                 return
 
+            self._release_unused_vision()
+            if not self._vision_ready(command, now):
+                return
+
             if isinstance(command, CameraMoveToTagStep):
                 self._tick_camera_move_to_tag(command, state, now)
+                return
+
+            if isinstance(command, VslamStep):
+                # Placed before the Stream policy below: the operator step
+                # needs the Stream state the operator chose for base jog.
+                self._tick_vslam(command, now)
                 return
 
             # The stock driver reports a streamed Cartesian command as kOk
@@ -1026,6 +1066,216 @@ class PlannerTaskRunner:
             )
         )
 
+    # ------------------------------------------------------------------
+    # On-demand tag detection
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _vision_source(command) -> Optional[str]:
+        """Camera whose tag detection ``command`` reads, if any."""
+
+        if isinstance(command, CameraMoveToTagStep):
+            return command.camera_source
+        if isinstance(command, CameraLinearAbsoluteStep):
+            # A reused observation was measured by the preceding step.
+            if command.reuse_previous_observation:
+                return None
+            return command.camera_source
+        return None
+
+    def _remaining_vision_sources(self) -> set:
+        if self._task is None:
+            return set()
+        commands = self._task.commands
+        # With a rewind every step may run again.
+        start = 0 if isinstance(commands[-1], RewindStep) else self._index
+        return {
+            source for source in map(self._vision_source, commands[start:])
+            if source is not None
+        }
+
+    def _release_unused_vision(self) -> None:
+        """Stop detection for cameras no later step of this Task reads."""
+
+        if self.vision is None or self._vision_released_index == self._index:
+            return
+        self._vision_released_index = self._index
+        self.vision.release_except(self._remaining_vision_sources())
+
+    def _vision_ready(self, command, now: float) -> bool:
+        source = self._vision_source(command)
+        if self.vision is None or source is None:
+            return True
+        if self._vision_deadline is None:
+            self.vision.require(source)
+            self._vision_deadline = now + self.VISION_START_TIMEOUT_SEC
+        ready, detail = self.vision.ready(source)
+        if ready:
+            self._vision_deadline = None
+            return True
+        if now > self._vision_deadline:
+            raise RuntimeError(
+                f'tag detection for {source} did not start: {detail}'
+            )
+        return False
+
+    def _reset_vision(self) -> None:
+        self._vision_deadline = None
+        self._vision_released_index = -1
+        if self.vision is not None:
+            try:
+                self.vision.release_all()
+            except Exception as exc:
+                self.on_status(f'Tag detection stop warning: {exc}')
+
+    # ------------------------------------------------------------------
+    # VSLAM steps
+    # ------------------------------------------------------------------
+    @property
+    def operator_step_active(self) -> bool:
+        """True while the operator owns the base inside a running Task."""
+
+        return self._operator_control
+
+    def finish_operator_step(self) -> bool:
+        """Operator pressed "Finish mapping"; False if no such step runs."""
+
+        if not self._operator_control:
+            return False
+        self._operator_done = True
+        return True
+
+    def _reset_vslam_step(self) -> None:
+        self._vslam_stage = None
+        self._vslam_deadline = 0.0
+        self._vslam_last_detail = ''
+        self._operator_done = False
+        if self._operator_control:
+            self._operator_control = False
+            self.on_operator_control(False)
+
+    def _vslam_status(self, text: str) -> None:
+        total = len(self._task.commands) if self._task is not None else 0
+        self.on_status(f'Task step {self._index + 1}/{total}: {text}')
+
+    def _tick_vslam(self, command: VslamStep, now: float) -> None:
+        vslam = self.vslam
+        if vslam is None:
+            raise RuntimeError('VSLAM client is unavailable')
+        process = vslam.process_state()
+        action = command.action
+
+        if action == 'start':
+            if self._vslam_stage is None:
+                if process == 'stopping':
+                    raise RuntimeError('VSLAM stack is still stopping')
+                if process == 'running':
+                    if vslam.mode != command.mode:
+                        raise RuntimeError(
+                            f'VSLAM is running in {vslam.mode} mode; stop it '
+                            f'before a {command.mode} Task'
+                        )
+                    self._vslam_status(
+                        f'vslam start: reusing running {command.mode} stack'
+                    )
+                else:
+                    vslam.start(command.mode, command.map_name)
+                    self._vslam_status(
+                        f'vslam start: {command.mode} mode, waiting for '
+                        'visual tracking'
+                    )
+                self._vslam_stage = 'tracking'
+                self._vslam_deadline = now + command.timeout_sec
+                return
+            if process != 'running':
+                raise RuntimeError(
+                    'VSLAM stack exited during startup; see the VSLAM tab log'
+                )
+            ready, detail = vslam.tracking_ready()
+            if ready:
+                self._vslam_stage = None
+                self._complete_step()
+            elif now > self._vslam_deadline:
+                raise RuntimeError(
+                    'VSLAM tracking did not become ready: '
+                    + (detail or 'no tracking status')
+                )
+            return
+
+        if process != 'running':
+            raise RuntimeError(
+                f'VSLAM stack is not running (state: {process})'
+            )
+
+        if action == 'correct':
+            if self._vslam_stage is None:
+                self.backend.stop(publish_immediately=True)
+                vslam.request_station_correction(command.timeout_sec)
+                self._vslam_stage = 'correcting'
+                self._vslam_status(
+                    'vslam station correction: keep the base and head still'
+                )
+                return
+            result = vslam.correction_state()
+            if result.status == 'succeeded':
+                self._vslam_stage = None
+                self._complete_step()
+            elif result.status != 'running':
+                raise RuntimeError(
+                    'station correction failed: '
+                    + (result.message or result.status)
+                )
+            elif result.message != self._vslam_last_detail:
+                self._vslam_last_detail = result.message
+                self.on_status(f'Station correction: {result.message}')
+            return
+
+        if action == 'operator':
+            if self._vslam_stage is None:
+                self._vslam_stage = 'operator'
+                self._operator_done = False
+                self._operator_control = True
+                self.on_operator_control(True)
+                self._vslam_status(
+                    'operator mapping: drive with the Base tab; at each point '
+                    'use "Stop + correct" and "Save point" in the VSLAM tab, '
+                    'then press "Finish mapping"'
+                )
+                return
+            if self._operator_done:
+                self.backend.stop(publish_immediately=True)
+                self._operator_control = False
+                self._operator_done = False
+                self.on_operator_control(False)
+                self._vslam_stage = None
+                self._complete_step()
+            return
+
+        if action == 'save_map':
+            if self._vslam_stage is None:
+                self.backend.stop(publish_immediately=True)
+                name = command.map_name or datetime.now().strftime(
+                    'map_%Y%m%d_%H%M%S'
+                )
+                saved = vslam.save_map(name)
+                self._vslam_stage = 'saving'
+                self._vslam_deadline = now + command.timeout_sec
+                self._vslam_status(f'vslam save map: {saved}')
+                return
+            result = vslam.job_state()
+            if result.status == 'succeeded':
+                self.on_status(f'Map saved: {result.message}')
+                self._vslam_stage = None
+                self._complete_step()
+            elif result.status != 'running':
+                raise RuntimeError(
+                    'map save failed: ' + (result.message or result.status)
+                )
+            elif now > self._vslam_deadline:
+                raise RuntimeError('map save timed out')
+            return
+
+        raise RuntimeError(f'unsupported vslam action: {action}')
+
     def _tick_navigation(self, now: float) -> None:
         if self.navigation is None or self._navigation_command_id is None:
             raise RuntimeError('active navigation command is missing')
@@ -1222,6 +1472,8 @@ class PlannerTaskRunner:
             return f'{command.command.kind.value}_background'
         if isinstance(command, MoveToStep):
             return 'move_to'
+        if isinstance(command, VslamStep):
+            return f'vslam_{command.action}'
         if isinstance(command, RewindStep):
             return 'rewind'
         return type(command).__name__.removesuffix('Step').lower()
@@ -1258,6 +1510,9 @@ class PlannerTaskRunner:
                 self.backend.request_stream(False)
             except Exception as exc:
                 self.on_status(f'Stream stop warning: {exc}')
+        if self._operator_control:
+            # The operator may be holding a jog button; stop the base.
+            self.backend.stop(publish_immediately=True)
         if not command_cancel_requested:
             self.backend.cancel_motion()
 
@@ -1292,6 +1547,8 @@ class PlannerTaskRunner:
         self._run_number = 0
         self._background_command_id = None
         self._background_deadline = 0.0
+        self._reset_vslam_step()
+        self._reset_vision()
         if was_active:
             self.on_active_changed(False)
 
