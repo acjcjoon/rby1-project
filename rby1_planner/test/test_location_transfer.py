@@ -213,5 +213,5 @@ def test_door_is_released_before_leaving_the_station(settings_file):
 
 def test_real_settings_task_registry_builds():
     tasks = task_source.build_tasks()
-    for name in ('transfer_demo(LH1->ZS, LH1->LH2)', 'pick_at_station(ZS)'):
+    for name in ('transfer_demo(LH1_1->ZS, LH1_2->LH2)', 'pick_at_station(ZS)'):
         assert tasks[name].commands, name

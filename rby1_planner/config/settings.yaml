@@ -1,5 +1,5 @@
 # Task 구성 시작 지점 (지점 참조). 실제 로봇 위치가 아니며 파일은 바뀌지 않는다.
-current_location: LH1
+current_location: LH1_1
 
 # 이동 중(turn_and_move, SLAM) 머리 pitch 절대각 (deg, + = 숙임). 도착 후 각도는 지점별 head_pitch_deg.
 head_pitch_deg: {move: 2.0}
@@ -12,24 +12,35 @@ head_pitch_deg: {move: 2.0}
 #         head_pitch_deg 는 그 지점에서의 머리 pitch 절대각 (deg, + = 숙임). 없으면 0
 # place: 집기/놓기 지점과 태그. offset 은 태그 -> 지점 중앙 보정 [x, y, z] m
 # work: (door_switch) work 지점에서 하는 문/스위치 작업 설정
-# 지점 참조: 'LH1' (= LH1 의 place 지점) 또는 'ZS.work'. 태그 ID 는 장비 전체에서 한 번만 쓴다.
+# 지점 참조: 'LH1_1' (= LH1_1 의 place 지점) 또는 'ZS.work'. 태그 ID 는 장비 전체에서 한 번만 쓴다.
 stations:
   LH1:
-    kind: plain
-    points: {place: {position: [0.0, 0.0], side: front, head_pitch_deg: 55}}
-    place: {point: place, tag: tag_1, offset: [-0.0496, 0.0629, -0.011]}
+    slots:
+      1: # 'LH1_1'
+        kind: plain
+        points: {place: {position: [0.0, 0.0], side: front, head_pitch_deg: 55}}
+        place: {point: place, tag: tag_1, offset: [-0.0496, 0.0629, -0.010]}
+      2: # 'LH1_2'
+        kind: plain
+        points: {place: {position: [0.0, -0.350], side: front, head_pitch_deg: 55}}
+        place: {point: place, tag: tag_2, offset: [-0.0497, 0.0626, -0.010]}
+      3:
+        enabled: false
+        kind: plain
+        points: {place: {position: [0.0, 0.0], side: front, head_pitch_deg: 55}}
+        place: {point: place, tag: tag_3, offset: [-0.0496, 0.0629, -0.010]}  # tag_n
   LH2:
     kind: plain
     points: {place: {position: [-0.2880, -0.4910] , side: right, head_pitch_deg: 50}}
-    place: {point: place, tag: tag_2, offset: [-0.0509, 0.0632, -0.009]}
+    place: {point: place, tag: tag_4, offset: [-0.0509, 0.0632, -0.009]}
   ZS:
     kind: door_switch
     points:
-      work:  {position: [0.0, 0.0],   side: left,  head_pitch_deg: 40}  # 문/스위치 작업 위치 (구 ZSSW)
+      work:  {position: [0.0, 0.0],   side: left,  head_pitch_deg: 10}  # 문/스위치 작업 위치 (구 ZSSW)
       via:   {position: [-0.75, 0.0], side: fixed, head_pitch_deg: 2}   # 경유 지점 (구 AP). fixed: 도착할 때 허리를 돌리지 않는다
       place: {position: [-0.75, 0.70], side: front, head_pitch_deg: 50}  # 놓는 위치 (구 ZS)
     route: [work, via, place]                        # 작업 위치 -> 놓는 위치. 복귀는 역순
-    place:  {point: place, tag: tag_3, offset: [-0.05, 0.061, -0.009]}
+    place:  {point: place, tag: tag_8, offset: [-0.05, 0.061, -0.009]}
     work:
       # 벽 좌표 = 태그 축과 같은 [x 벽 따라 수평, y 위, z 벽에서 로봇 쪽] m.
       # wall_yaw_deg: work 지점에서 본 벽 방향 (base XY, 0 = +x, 90 = +y). 배치가 바뀌면 이 값만 고친다.
@@ -38,9 +49,9 @@ stations:
         hinge_to_handle_wall: [0.18975, 0.0, 0.0325]   # 닫힘 상태 경첩 -> 손잡이 중심, 벽 좌표 (m)
         swing_deg: 90.0
         # ee_offset_tag: 태그 -> 손(ee_right) 위치, 태그 축 [x 벽 따라 수평, y 위, z 벽에서 로봇 쪽] m
-        open:  {tag: tag_6, base_align_xy: [0.619, -0.326],   ee_offset_tag: [0.02, 0.09, 0.02]}
-        close: {tag: tag_7, base_align_xy: [0.4188, -0.1004], ee_offset_tag: [0.02, 0.08, 0.006]}
-      switch: {tag: tag_5, button_offset_in_tag: [0.0, 0.0], approach_standoff_m: 0.08, press_depth_m: 0.01}  # 접근: 태그 z 0.08 m, 누름: 거기서 벽 쪽으로 press_depth_m
+        open:  {tag: tag_6, base_align_xy: [1.119, -0.326],   ee_offset_tag: [0.02, 0.09, 0.72]} # [0.619, -0.326], [0.02, 0.09, 0.02]
+        close: {tag: tag_55, base_align_xy: [0.4188, -0.1004], ee_offset_tag: [0.02, 0.08, 0.006]}
+      switch: {tag: tag_7, button_offset_in_tag: [0.0, 0.0], approach_standoff_m: 0.08, press_depth_m: 0.01}  # 접근: 태그 z 0.08 m, 누름: 거기서 벽 쪽으로 press_depth_m
   # 아래는 실제 위치/태그 보정 전의 자리표시자 (enabled: false 동안 사용 불가).
   MPR:   {enabled: false, kind: plain, points: {place: {position: [0.0, 0.0], side: left, head_pitch_deg: 32}}, place: {point: place, tag: null}}
   INC:   {enabled: false, kind: plain, points: {place: {position: [0.0, 0.0], side: left, head_pitch_deg: 32}}, place: {point: place, tag: null}}

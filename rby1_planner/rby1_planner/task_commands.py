@@ -1414,14 +1414,16 @@ set_impedance_preset_loader(load_impedance_preset)
 # ---------------------------------------------------------------------------
 # 장비(stations) 설정 — config/settings.yaml
 #
-#   current_location: LH1          # Task 구성 시작 지점 (지점 참조, 생략 가능)
+#   current_location: LH1_1        # Task 구성 시작 지점 (지점 참조, 생략 가능)
 #   stations:
-#     LH1:
+#     LH2:
 #       kind: plain                # plain | door_switch
 #       enabled: true              # 생략 시 true. false 면 이동/파지에 쓸 수 없다
 #       points: {place: {position: [x, y], side: front|left|right}}
 #                  side: fixed = 경유 지점 전용. 그 지점으로 갈 때 허리를 돌리지 않는다
 #       place: {point: place, tag: tag_3, offset: [dx, dy, dz]}
+#     LH1:                         # 묶음: slots 의 키 n -> 장비 LH1_n (각 slot 은 위 장비와 같은 양식)
+#       slots: {1: {kind: plain, ...}, 2: {...}}
 #     ZS:
 #       kind: door_switch
 #       points: {work: {...}, via: {...}, place: {...}}
@@ -1430,7 +1432,7 @@ set_impedance_preset_loader(load_impedance_preset)
 #       door: {open: {tag: tag_6, ...}, close: {tag: tag_7, ...}}
 #       switch: {tag: tag_5, ...}
 #
-# 지점 참조: 'LH1' (= LH1 의 place 지점) 또는 'ZS.work' 처럼 '장비.지점'.
+# 지점 참조: 'LH1_1' (= LH1_1 의 place 지점) 또는 'ZS.work' 처럼 '장비.지점'.
 # 좌표는 모든 장비가 공통 좌표계 하나를 쓴다 (base 방향은 모든 지점에서 같다).
 # 태그 ID 는 모든 장비를 통틀어 한 곳에서만 쓸 수 있다.
 # ---------------------------------------------------------------------------
@@ -1582,14 +1584,38 @@ def _validate_station(name: object, station: object) -> None:
             raise ValueError(f'Station {name!r} work.switch.press_depth_m must be positive')
 
 
+def _expand_station_slots(stations: dict) -> dict:
+    """slots 묶음을 개별 장비로 펼친다: LH1: {slots: {1: {...}, 2: {...}}} -> LH1_1, LH1_2.
+
+    묶음은 보기 편하게 모아 두는 것뿐이고, 각 slot 은 일반 장비와 같은 양식이다.
+    """
+    expanded: dict = {}
+    for name, station in stations.items():
+        if isinstance(station, dict) and 'slots' in station:
+            if set(station) != {'slots'}:
+                raise ValueError(f'Station group {name!r} may only contain slots')
+            slots = station['slots']
+            if not isinstance(slots, dict) or not slots:
+                raise ValueError(f'Station group {name!r} slots must be a nonempty mapping')
+            members = [(f'{name}_{slot}', member) for slot, member in slots.items()]
+        else:
+            members = [(name, station)]
+        for member_name, member in members:
+            if member_name in expanded:
+                raise ValueError(f'Station {member_name!r} is defined twice in settings.yaml')
+            expanded[member_name] = member
+    return expanded
+
+
 def _load_move_locations() -> dict:
-    """settings.yaml 의 stations 를 검증해 돌려준다.
+    """settings.yaml 의 stations 를 검증해 돌려준다 (slots 묶음은 LH1_1 처럼 펼친다).
 
     태그 ID 가 두 곳 이상에서 쓰이면 오류다 (태그 하나 = 용도 하나).
     """
     stations = _load_task_settings().get('stations')
     if not isinstance(stations, dict) or not stations:
         raise ValueError('settings.yaml stations must be a nonempty mapping')
+    stations = _expand_station_slots(stations)
     owners: dict[str, str] = {}
     for name, station in stations.items():
         _validate_station(name, station)
@@ -1601,7 +1627,7 @@ def _load_move_locations() -> dict:
 
 
 def _resolve_location(stations: dict, ref: object) -> tuple[str, str]:
-    """지점 참조('LH1' 또는 'ZS.work')를 (장비, 지점) 이름으로 바꾼다."""
+    """지점 참조('LH1_1' 또는 'ZS.work')를 (장비, 지점) 이름으로 바꾼다."""
     if not isinstance(ref, str) or not ref.strip():
         raise ValueError('location name must be a nonempty string')
     station_name, _, point_name = ref.partition('.')
@@ -1643,7 +1669,7 @@ def _point_head_pitch(stations: dict, ref: str) -> float:
 
 
 def _load_point_head_pitch(ref: str) -> float:
-    """설정을 읽어 지점('LH1' = place 지점, 'ZS.work')의 머리 pitch 절대각을 돌려준다."""
+    """설정을 읽어 지점('LH1_1' = place 지점, 'ZS.work')의 머리 pitch 절대각을 돌려준다."""
     return _point_head_pitch(_load_move_locations(), ref)
 
 

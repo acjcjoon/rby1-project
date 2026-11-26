@@ -191,8 +191,9 @@ def door_handle_grasp_pose() -> Task:
 def search_pose() -> Task:
     task = Task('search_pose')
     task.whole_body_joint_absolute(
+        torso=[0.0, 0.0, 0.0, 0.0, 0.0, 90.0],   # 허리 쭉 편 자세 (키 최대). yaw 90 = left (ZS 작업 위치 방향)
         right_arm = [-2.639050, -48.778294, 9.475941, -105.823940, -48.357757, 5.870969, -18.970059],
-        joint_motion=(2.5, 1.0, 1.0),
+        joint_motion=(5.0, 1.0, 1.0),             # 허리가 크게 움직이니 최소 시간 2.5 -> 5 s
     )
     return task.build()
 
@@ -200,7 +201,8 @@ def search_switch_pose() -> Task:
     task = Task('search_switch_pose')
     # base 180° 회전 배치: torso_5 를 -89.999130 -> +90.000870 (상체는 이전과 같은 방향)
     task.whole_body_joint_absolute(
-        torso=[0.060044, 43.042258, -86.290755, 42.812307, 0.030457, 90.000870],
+        # torso=[0.060044, 43.042258, -86.290755, 42.812307, 0.030457, 90.000870],
+        torso=[0.0, 0.0, 0.0, 0.0, 0.0, 90.0],
         right_arm = [-32.177210, -57.932216, 44.146889, -91.228664, -64.357215, -9.066141, -33.238335],        
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
         joint_motion=(2.5, 1.0, 1.0),
@@ -501,6 +503,17 @@ def open_door(station: str = 'ZS') -> RunnableTaskDefinition:
     task.extend(door_open_stream(station))
     return task.build()
 
+def open_door_at_work(station: str = 'ZS') -> RunnableTaskDefinition:
+    """작업 위치(work)에서 문 열기만 단독 실행한다 (Scenario UI 용).
+
+    _door_switch_visit 처럼 머리를 work 지점 pitch 로 맞춘 뒤 open_door 를 한다.
+    base_align_xy 가 그 머리 pitch 기준이기 때문이다. 로봇은 work 지점 근처에서 시작한다.
+    """
+    task = Task(f'open_door({station})')
+    task.extend(head_pitch_pose(_load_point_head_pitch(f'{station}.work')))
+    task.extend(open_door(station))
+    return task.build()
+
 def push_switch(
     station: str = 'ZS',
     approach_motion: Sequence[float] = (3.0, 0.1, 0.3, 0.5),
@@ -721,16 +734,16 @@ def transfer(source: str, destination: str, *, start: Optional[str] = None) -> R
 # 6. 데모
 # ===========================================================================
 def transfer_demo() -> RunnableTaskDefinition:
-    """LH1 -> ZS 운반 뒤 ZS 에서 LH1 로 돌아와 LH1 -> LH2 운반 (왼팔). 로봇은 LH1 에서 시작한다."""
-    task = Task('transfer_demo(LH1->ZS, LH1->LH2)')
-    task.extend(transfer('LH1', 'ZS'))
-    task.extend(transfer('LH1', 'LH2', start='ZS'))  # ZS -> LH1 이동부터
+    """LH1_1 -> ZS 운반 뒤 ZS 에서 LH1_2 로 돌아와 LH1_2 -> LH2 운반 (왼팔). 로봇은 LH1_1 에서 시작한다."""
+    task = Task('transfer_demo(LH1_1->ZS, LH1_2->LH2)')
+    task.extend(transfer('LH1_1', 'ZS'))
+    task.extend(transfer('LH1_2', 'LH2', start='ZS'))  # ZS -> LH1_2 이동부터
     return task.build()
 
 def lh1_to_lh2_demo() -> RunnableTaskDefinition:
-    """LH1 에서 plate 를 집어 LH2 로 이동해 놓는다 (왼팔). 로봇은 LH1 에서 시작한다."""
-    task = Task('lh1_to_lh2_demo(LH1->LH2)')
-    task.extend(transfer('LH1', 'LH2'))
+    """LH1_1 에서 plate 를 집어 LH1_2 로 이동해 놓는다 (왼팔). 로봇은 LH1_1 에서 시작한다."""
+    task = Task('lh1_to_lh2_demo(LH1_1->LH1_2)')
+    task.extend(transfer('LH1_1', 'LH1_2'))
     return task.build()
 
 def impedance_demo_joint() -> Task:
@@ -868,12 +881,12 @@ def test1() -> RunnableTaskDefinition:
     task.rewind(runs)
     return task.build()
 
-# test2: LH1 <-> LH2 왕복 픽앤플레이스 1회 (왼팔)
+# test2: LH1_1 <-> LH2 왕복 픽앤플레이스 1회 (왼팔)
 def test2() -> RunnableTaskDefinition:
-    """LH1 -> LH2 -> LH1 왕복 픽앤플레이스 1회 (왼팔)."""
+    """LH1_1 -> LH2 -> LH1_1 왕복 픽앤플레이스 1회 (왼팔)."""
     task = Task('test2')
-    task.extend(transfer('LH1', 'LH2'))  # 가기
-    task.extend(transfer('LH2', 'LH1'))  # 오기
+    task.extend(transfer('LH1_1', 'LH2'))  # 가기
+    task.extend(transfer('LH2', 'LH1_1'))  # 오기
     return task.build()
 
 # move_base: base 만 상대 이동 (Measurements 탭 Start frame xy 를 그대로 넣으면 된다)
@@ -903,17 +916,19 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         # ZS 문 태그 기준 base 정렬. 태그는 settings.yaml stations.ZS.work.door.<open|close>.tag
         'align_base_to_door(open)': align_base_to_door('ZS', 'open'),
         'align_base_to_door(close)': align_base_to_door('ZS', 'close'),
+        'open_door(ZS)': open_door_at_work('ZS'),   # 단독 문 열기 (시늉 확인용)
+        'door_open_stream': door_open_stream('ZS'),  # 지금 손 위치에서 바로 원호로 문 열기 (자세 이동 없음)
 
         # --- 4. 장비 단위 ---
         # 집기/놓기 지점 base 정렬만 (허리 side 는 settings.yaml 지점 side 로 자동)
-        'align_at_station(LH1)': align_at_station('LH1'),
+        'align_at_station(LH1_1)': align_at_station('LH1_1'),
         'align_at_station(LH2)': align_at_station('LH2'),
         'align_at_station(ZS)': align_at_station('ZS'),
         'pick_at_station(ZS)': pick_at_station('ZS'),
 
         # --- 6. 데모 ---
-        'transfer_demo(LH1->ZS, LH1->LH2)': transfer_demo(),
-        'lh1_to_lh2_demo(LH1->LH2)': lh1_to_lh2_demo(),
+        'transfer_demo(LH1_1->ZS, LH1_2->LH2)': transfer_demo(),
+        'lh1_to_lh2_demo(LH1_1->LH1_2)': lh1_to_lh2_demo(),
         'impedance_demo_press': impedance_demo_press(),
         'impedance_demo_joint': impedance_demo_joint(),
         'wave_both_arms': wave_both_arms(),
@@ -940,7 +955,7 @@ __all__ = [
     'move_hand_to_door_handle', 'move_hand_to_tag',
     'door_open_stream', 'door_close_stream',
     # 3. 장비 동작
-    'open_door', 'push_switch',
+    'open_door', 'open_door_at_work', 'push_switch',
     'move_hand_from_door_to_switch', 'close_door',
     # 4. 장비 단위 / 5. 운반
     'go_to', 'align_at_station', 'pick_at_station', 'place_at_station', 'transfer', 'transfer_demo', 'lh1_to_lh2_demo',
