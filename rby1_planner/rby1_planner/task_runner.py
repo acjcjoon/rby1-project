@@ -628,6 +628,26 @@ class PlannerTaskRunner:
                 )
                 desired_x = frame_position[0] + desired_offset[0]
                 desired_y = frame_position[1] + desired_offset[1]
+            shift_text = ''
+            if command.shift_toward_m > 0.0:
+                lookup = getattr(camera, 'lookup_frame_pose', None)
+                if not callable(lookup):
+                    raise RuntimeError('camera must provide lookup_frame_pose()')
+                toward_position, _ = lookup('base', command.shift_toward_frame)
+                toward_x = toward_position[0] - desired_x
+                toward_y = toward_position[1] - desired_y
+                toward_norm = math.hypot(toward_x, toward_y)
+                if not math.isfinite(toward_norm) or toward_norm < 1e-6:
+                    raise RuntimeError(
+                        f'cannot shift toward {command.shift_toward_frame!r}: '
+                        'it coincides with the desired point in base XY'
+                    )
+                desired_x += command.shift_toward_m * toward_x / toward_norm
+                desired_y += command.shift_toward_m * toward_y / toward_norm
+                shift_text = (
+                    f' shifted {command.shift_toward_m * 1000.0:.1f} mm '
+                    f'toward {command.shift_toward_frame!r}'
+                )
             rotated_desired_x = cosine * desired_x - sine * desired_y
             rotated_desired_y = sine * desired_x + cosine * desired_y
             error_x = observation.position[0] - rotated_desired_x
@@ -649,7 +669,7 @@ class PlannerTaskRunner:
             self.on_status(
                 f'Camera base alignment [{command.camera_source}] '
                 f'{command.object_id!r} relative to '
-                f'{command.desired_tag_frame!r}: '
+                f'{command.desired_tag_frame!r}{shift_text}: '
                 f'error_base=({error_x:.3f}, {error_y:.3f}) m, '
                 f'allowed_x=[{-command.threshold_x_minus:.3f}, 0.000] m, '
                 f'allowed_y=[0.000, {command.threshold_y_plus:.3f}] m'
@@ -683,7 +703,7 @@ class PlannerTaskRunner:
                 f'{observation.position[0]:.3f}, '
                 f'{observation.position[1]:.3f}) m, desired_base=('
                 f'{desired_x:.3f}, {desired_y:.3f}) m from '
-                f'{command.desired_tag_frame!r}, move=('
+                f'{command.desired_tag_frame!r}{shift_text}, move=('
                 f'{move_x:.3f}, {move_y:.3f}, {yaw:.3f}), '
                 f'planned_residual_base=({residual_x:.3f}, '
                 f'{residual_y:.3f}) m'

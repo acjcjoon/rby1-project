@@ -70,6 +70,9 @@ class VisionManager:
         self._started_at: dict[str, float] = {}
         self._heartbeat: dict[str, float] = {}
         self._held: set[str] = set()
+        # Non-Task holders (Measurements tab): owner -> cameras. Kept apart
+        # from the Task hold so release_except() cannot stop their cameras.
+        self._owner_holds: dict[str, set[str]] = {}
         self._log: deque[str] = deque(maxlen=self.LOG_LINES)
         if subscribe:
             qos = QoSProfile(depth=1)
@@ -100,6 +103,10 @@ class VisionManager:
                 raise RuntimeError(
                     'a running Task is using tag detection; stop it first'
                 )
+            if mode == 'off' and self._owner_cameras():
+                raise RuntimeError(
+                    'a measurement is using tag detection; wait for it'
+                )
             self._mode = mode
             self._apply_mode()
 
@@ -109,7 +116,7 @@ class VisionManager:
                 self._start(camera)
         else:
             for camera in list(self._processes):
-                if self._mode == 'off' or camera not in self._held:
+                if self._mode == 'off' or not self._is_held(camera):
                     self._stop(camera)
 
     # ------------------------------------------------------------------
@@ -156,11 +163,41 @@ class VisionManager:
         with self._lock:
             for camera in sorted(self._held - keep):
                 self._held.discard(camera)
-                if self._mode == 'auto':
+                if self._mode == 'auto' and not self._is_held(camera):
                     self._stop(camera)
 
     def release_all(self) -> None:
         self.release_except(())
+
+    # ------------------------------------------------------------------
+    # Non-Task holders (Measurements tab)
+    # ------------------------------------------------------------------
+    def hold(self, owner: str, camera: str) -> None:
+        """Keep ``camera`` running for ``owner`` until ``release_owner``."""
+
+        camera = self._known(camera)
+        owner = str(owner).strip()
+        with self._lock:
+            if self._mode == 'off':
+                raise RuntimeError(
+                    'tag detection is switched off (Scenario tab: Tag '
+                    'detection); camera ' + camera + ' is needed'
+                )
+            self._owner_holds.setdefault(owner, set()).add(camera)
+            self._start(camera)
+
+    def release_owner(self, owner: str) -> None:
+        with self._lock:
+            cameras = self._owner_holds.pop(str(owner).strip(), set())
+            for camera in sorted(cameras):
+                if self._mode == 'auto' and not self._is_held(camera):
+                    self._stop(camera)
+
+    def _owner_cameras(self) -> set[str]:
+        return set().union(*self._owner_holds.values())
+
+    def _is_held(self, camera: str) -> bool:
+        return camera in self._held or camera in self._owner_cameras()
 
     # ------------------------------------------------------------------
     # Status
@@ -191,6 +228,7 @@ class VisionManager:
     def close(self) -> None:
         with self._lock:
             self._held.clear()
+            self._owner_holds.clear()
             processes = list(self._processes.items())
             self._processes.clear()
         for _camera, process in processes:

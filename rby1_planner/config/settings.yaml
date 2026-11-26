@@ -8,7 +8,7 @@ head_pitch_deg: {move: 2.0}
 # kind: plain = 그냥 집기/놓기, door_switch = 문/스위치를 거쳐 집기/놓기
 # points: 장비 안의 이동 지점. position 은 공통 좌표계 [x, y] m
 #         (원점 = ZS.work, 축 = base 180° 회전 배치의 base 축. base 방향은 모든 지점에서 같다)
-#         side 는 그 지점에서의 허리 방향 (front / left / right)
+#         side 는 그 지점에서의 허리 방향 (front / left / right). fixed = 경유 지점 전용, 허리를 돌리지 않고 지나간다
 #         head_pitch_deg 는 그 지점에서의 머리 pitch 절대각 (deg, + = 숙임). 없으면 0
 # place: 집기/놓기 지점과 태그. offset 은 태그 -> 지점 중앙 보정 [x, y, z] m
 # work: (door_switch) work 지점에서 하는 문/스위치 작업 설정
@@ -16,20 +16,20 @@ head_pitch_deg: {move: 2.0}
 stations:
   LH1:
     kind: plain
-    points: {place: {position: [0.0, -0.31], side: front, head_pitch_deg: 50}}
-    place: {point: place, tag: tag_3, offset: [-0.05, 0.061, -0.009]}
+    points: {place: {position: [0.0, 0.0], side: front, head_pitch_deg: 55}}
+    place: {point: place, tag: tag_1, offset: [-0.0496, 0.0629, -0.011]}
   LH2:
     kind: plain
-    points: {place: {position: [0.0, -0.41], side: right, head_pitch_deg: 40}}
-    place: {point: place, tag: tag_0, offset: [-0.05, 0.061, -0.009]}
+    points: {place: {position: [-0.2880, -0.4910] , side: right, head_pitch_deg: 50}}
+    place: {point: place, tag: tag_2, offset: [-0.0509, 0.0632, -0.009]}
   ZS:
     kind: door_switch
     points:
       work:  {position: [0.0, 0.0],   side: left,  head_pitch_deg: 40}  # 문/스위치 작업 위치 (구 ZSSW)
-      via:   {position: [-0.75, 0.0], side: left,  head_pitch_deg: 2}   # 경유 지점 (구 AP)
+      via:   {position: [-0.75, 0.0], side: fixed, head_pitch_deg: 2}   # 경유 지점 (구 AP). fixed: 도착할 때 허리를 돌리지 않는다
       place: {position: [-0.75, 0.70], side: front, head_pitch_deg: 50}  # 놓는 위치 (구 ZS)
     route: [work, via, place]                        # 작업 위치 -> 놓는 위치. 복귀는 역순
-    place:  {point: place, tag: tag_2, offset: [-0.05, 0.061, -0.009]}
+    place:  {point: place, tag: tag_3, offset: [-0.05, 0.061, -0.009]}
     work:
       # 벽 좌표 = 태그 축과 같은 [x 벽 따라 수평, y 위, z 벽에서 로봇 쪽] m.
       # wall_yaw_deg: work 지점에서 본 벽 방향 (base XY, 0 = +x, 90 = +y). 배치가 바뀌면 이 값만 고친다.

@@ -58,6 +58,39 @@ def test_feedback_marks_command_complete_within_tolerance():
     assert controller.status().motion_active is False
 
 
+def test_one_side_command_ignores_other_side_resting_on_an_object():
+    # transfer_demo: the left hand closed on an object and stopped at 0.33
+    # (settled, target 1.0). Opening the right hand must still complete.
+    clock = Clock()
+    controller = ready_controller(clock)
+    marker = controller.status().feedback_sequence
+    controller.command('close', 'left')
+    clock.now += 0.9
+    assert controller.update_state((0.25, 0.33)) is False
+    controller.complete_after_settle(marker)
+
+    assert controller.command('open', 'right') == (0.0, 1.0)
+    clock.now += 0.5
+    assert controller.update_state((0.1, 0.33)) is False
+    clock.now += 0.5
+    assert controller.update_state((0.003, 0.33)) is True
+    status = controller.status()
+    assert status.motion_active is False
+    assert status.error is None
+    assert status.target == (0.0, 1.0)
+
+
+def test_unfinished_side_stays_checked_when_other_side_is_added():
+    clock = Clock()
+    controller = ready_controller(clock)
+    controller.command('close', 'left')
+    controller.command('open', 'right')
+    clock.now += 0.9
+
+    assert controller.update_state((0.0, 0.5)) is False
+    assert controller.update_state((0.0, 0.98)) is True
+
+
 def test_arbitrary_ratio_command_preserves_other_side():
     controller = ready_controller(Clock())
     assert controller.command_ratio(0.6, "left") == (0.25, 0.6)

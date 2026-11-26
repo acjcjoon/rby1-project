@@ -301,6 +301,7 @@ class RBY1ControlNode(Node):
             'cartesian_state_period_sec',
             0.25,
         )
+        self.declare_parameter('cartesian_pose_request_timeout_sec', 1.0)
         self.declare_parameter(
             'joint_limits_file',
             'joint_limits_rby1m_v1_3.yaml',
@@ -325,6 +326,9 @@ class RBY1ControlNode(Node):
         # Scenario commands keep their explicit values from task.py.
         self.declare_parameter('manual_joint_velocity_limit', 0.2)
         self.declare_parameter('manual_joint_acceleration_limit', 0.2)
+        # Task (task.py) head Joint commands: the model has no verified head
+        # acceleration limit, so Task head moves are capped by this value.
+        self.declare_parameter('task_head_joint_acceleration_limit', 1.5)
         self.declare_parameter(
             'manual_cartesian_linear_velocity_limit',
             0.05,
@@ -548,6 +552,13 @@ class RBY1ControlNode(Node):
             ).value,
             fallback=0.25,
         )
+        # A GetCartesianPose reply can be lost (e.g. a request sent right
+        # after the service appears). Without a timeout the pending flag
+        # would block every later request for that group forever.
+        self.cartesian_pose_request_timeout_sec = self._positive_float(
+            self.get_parameter('cartesian_pose_request_timeout_sec').value,
+            fallback=1.0,
+        )
 
         joint_limits_file = str(
             self.get_parameter('joint_limits_file').value
@@ -622,6 +633,10 @@ class RBY1ControlNode(Node):
         self.manual_joint_acceleration_limit = self._positive_float(
             self.get_parameter('manual_joint_acceleration_limit').value,
             fallback=0.2,
+        )
+        self.task_head_joint_acceleration_limit = self._positive_float(
+            self.get_parameter('task_head_joint_acceleration_limit').value,
+            fallback=1.5,
         )
         self.manual_cartesian_linear_velocity_limit = self._positive_float(
             self.get_parameter(
@@ -864,6 +879,21 @@ class RBY1ControlNode(Node):
 
         self._cartesian_request_pending = {
             group: False for group in self.cartesian_links
+        }
+        # In-flight GetCartesianPose futures and send times, per group, for
+        # the periodic poll and the on-demand snapshot. A late reply to an
+        # expired request is ignored by future identity.
+        self._cartesian_request_future = {
+            group: None for group in self.cartesian_links
+        }
+        self._cartesian_request_sent_at = {
+            group: None for group in self.cartesian_links
+        }
+        self._cartesian_snapshot_future = {
+            group: None for group in self.cartesian_links
+        }
+        self._cartesian_snapshot_sent_at = {
+            group: None for group in self.cartesian_links
         }
 
         # Keep one manipulation command active at a time.
@@ -1467,6 +1497,13 @@ class RBY1ControlNode(Node):
             return
 
         for arm in self.cartesian_links:
+            self._expire_cartesian_request(
+                arm,
+                self._cartesian_request_pending,
+                self._cartesian_request_future,
+                self._cartesian_request_sent_at,
+                'Cartesian pose',
+            )
             if self._cartesian_request_pending[arm]:
                 continue
 
@@ -1481,6 +1518,8 @@ class RBY1ControlNode(Node):
             )
 
             self._cartesian_request_pending[arm] = True
+            self._cartesian_request_future[arm] = future
+            self._cartesian_request_sent_at[arm] = time.monotonic()
             self._pending_futures.append(future)
 
             future.add_done_callback(
@@ -1490,6 +1529,42 @@ class RBY1ControlNode(Node):
                     arm_name,
                 )
             )
+
+    def _expire_cartesian_request(
+        self,
+        arm: str,
+        pending: Dict[str, bool],
+        futures: Dict[str, object],
+        sent_at: Dict[str, Optional[float]],
+        label: str,
+    ) -> None:
+        """Drop an in-flight GetCartesianPose request whose reply is lost."""
+
+        started = sent_at.get(arm)
+        if not pending.get(arm) or started is None:
+            return
+        if time.monotonic() - started <= self.cartesian_pose_request_timeout_sec:
+            return
+        future = futures.get(arm)
+        pending[arm] = False
+        futures[arm] = None
+        sent_at[arm] = None
+        if future is not None:
+            self._discard_future(future)
+            remove = getattr(
+                self.cartesian_pose_client, 'remove_pending_request', None,
+            )
+            if callable(remove):
+                try:
+                    remove(future)
+                except Exception:
+                    pass
+            future.cancel()
+        self._push_event(
+            'warning',
+            f'{label} request for {arm} got no reply within '
+            f'{self.cartesian_pose_request_timeout_sec:.1f} s; retrying.',
+        )
 
     def _transform_to_pose(self, transform) -> List[float]:
         quaternion = self._normalize_quaternion(
@@ -1520,7 +1595,11 @@ class RBY1ControlNode(Node):
         arm: str,
     ) -> None:
         self._discard_future(future)
+        if future is not self._cartesian_request_future[arm]:
+            return  # reply to a request that already timed out
         self._cartesian_request_pending[arm] = False
+        self._cartesian_request_future[arm] = None
+        self._cartesian_request_sent_at[arm] = None
 
         try:
             response = future.result()
@@ -1553,7 +1632,11 @@ class RBY1ControlNode(Node):
         arm: str,
         ) -> None:
         self._discard_future(future)
+        if future is not self._cartesian_snapshot_future[arm]:
+            return  # reply to a request that already timed out
         self._cartesian_snapshot_pending[arm] = False
+        self._cartesian_snapshot_future[arm] = None
+        self._cartesian_snapshot_sent_at[arm] = None
 
         try:
             response = future.result()
@@ -1650,6 +1733,13 @@ class RBY1ControlNode(Node):
             )
             return False
 
+        self._expire_cartesian_request(
+            arm,
+            self._cartesian_snapshot_pending,
+            self._cartesian_snapshot_future,
+            self._cartesian_snapshot_sent_at,
+            'Get TCP',
+        )
         if self._cartesian_snapshot_pending[arm]:
             return False
 
@@ -1666,6 +1756,8 @@ class RBY1ControlNode(Node):
         future = self.cartesian_pose_client.call_async(request)
 
         self._cartesian_snapshot_pending[arm] = True
+        self._cartesian_snapshot_future[arm] = future
+        self._cartesian_snapshot_sent_at[arm] = time.monotonic()
         self._pending_futures.append(future)
 
         future.add_done_callback(
@@ -2750,9 +2842,22 @@ class RBY1ControlNode(Node):
 
                 velocity_limits = JOINT_MAX_VELOCITY_RAD.get(group)
                 acceleration_limits = JOINT_MAX_ACCELERATION_RAD.get(group)
+                velocity_limit = float(command.velocity_limit)
+                acceleration_limit = float(command.acceleration_limit)
+                if (
+                    group == 'head'
+                    and command.kind is CommandKind.JOINT_ABSOLUTE_MULTI
+                ):
+                    # 몸통과 같이 움직이는 head: 공유 joint_motion 이 head 상한보다
+                    # 크면 거부하지 않고 head 상한으로 낮춘다 (minimum_time 은 공유).
+                    velocity_limit = min(velocity_limit, min(velocity_limits))
+                    acceleration_limit = min(
+                        acceleration_limit,
+                        float(self.task_head_joint_acceleration_limit),
+                    )
                 if (
                     velocity_limits is None
-                    or float(command.velocity_limit) > min(velocity_limits)
+                    or velocity_limit > min(velocity_limits)
                 ):
                     raise ValueError(
                         f'Task {group} velocity_limit exceeds the '
@@ -2761,9 +2866,11 @@ class RBY1ControlNode(Node):
                 if acceleration_limits is not None and all(
                     value is None for value in acceleration_limits
                 ):
-                    # 모델에 가속도 한계가 없는 그룹(head)은 Joint 탭 수동 조작과
-                    # 같은 상한(manual_joint_acceleration_limit)까지만 허용한다.
-                    acceleration_cap = float(self.manual_joint_acceleration_limit)
+                    # 모델에 가속도 한계가 없는 그룹(head)은 Task 전용 상한
+                    # (task_head_joint_acceleration_limit)까지만 허용한다.
+                    acceleration_cap = float(
+                        self.task_head_joint_acceleration_limit
+                    )
                 elif acceleration_limits is None or any(
                     value is None for value in acceleration_limits
                 ):
@@ -2774,7 +2881,7 @@ class RBY1ControlNode(Node):
                     )
                 if (
                     acceleration_cap is None
-                    or float(command.acceleration_limit) > acceleration_cap
+                    or acceleration_limit > acceleration_cap
                 ):
                     raise ValueError(
                         f'Task {group} acceleration_limit is '
@@ -2786,10 +2893,8 @@ class RBY1ControlNode(Node):
                     math.radians(value) for value in values_deg
                 ]
                 message.minimum_time = float(command.minimum_time)
-                message.velocity_limit = float(command.velocity_limit)
-                message.acceleration_limit = float(
-                    command.acceleration_limit
-                )
+                message.velocity_limit = velocity_limit
+                message.acceleration_limit = acceleration_limit
                 if joint_impedance is not None:
                     self._apply_joint_impedance(
                         message,

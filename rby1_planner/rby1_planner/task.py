@@ -5,6 +5,7 @@ import math
 from typing import Optional, Sequence
 
 from .task_commands import (
+    FIXED_SIDE,
     JointImpedance,
     RunnableTaskDefinition,
     Task,
@@ -16,6 +17,7 @@ from .task_commands import (
     _load_tag_approach_offset,
     _move_location,
     arc_waypoints,
+    end_effector_frame,
     list_sum,
     wrist_camera_frame,
 )
@@ -71,7 +73,6 @@ def _wall_to_base(station: str, offset_wall: Sequence[float]) -> tuple[float, fl
     base = (x * s - z * c, -x * c - z * s, y)
     return tuple(round(v, 12) + 0.0 for v in base)
 
-
 def _wall_move(station: str, offset_wall: Sequence[float]) -> tuple[float, ...]:
     """벽 좌표 이동량 -> linear_relative 용 base 이동 [dx, dy, dz, 0, 0, 0]."""
     return (*_wall_to_base(station, offset_wall), 0.0, 0.0, 0.0)
@@ -98,7 +99,8 @@ def ready_pose() -> Task:
 
 def _grip_torso(side: str) -> tuple:
     """허리 관절 6개 값: 높이(torso_0~4)는 공통, yaw(torso_5)만 side 로 고른다."""
-    height = (0.065048, 45.375276, -90.959835, 45.153373, 0.026976)  # torso_0~4
+    # height = (0.065048, 45.375276, -90.959835, 45.153373, 0.026976)  # torso_0~4
+    height = [0.058956, 39.346066, -78.884882, 39.102191, 0.031110]
     yaw_deg = {'front': 0.0, 'left': 90.0, 'right': -90.0}
     try:
         yaw = yaw_deg[side]
@@ -106,49 +108,70 @@ def _grip_torso(side: str) -> tuple:
         raise ValueError(f"torso side must be 'front', 'left' or 'right', got {side!r}") from None
     return (*height, yaw)
 
-def torso_align(side: str = 'front', joint_motion: Sequence[float] = (5.0, 2.0, 3.0)) -> Task:
+def _head_target(head_pitch_deg: Optional[float]) -> Optional[tuple]:
+    """머리 관절 2개 값 (yaw 0, pitch). None 이면 머리를 움직이지 않는다."""
+    return None if head_pitch_deg is None else (0.0, float(head_pitch_deg))
+
+def torso_align(
+    side: str = 'front',
+    joint_motion: Sequence[float] = (5.0, 2.0, 3.0),
+    *,
+    head_pitch_deg: Optional[float] = None,
+) -> Task:
     """허리만 정렬한다 (팔은 그대로, 물체를 든 채 회전 가능).
 
     side: front / left / right. joint_motion: [최소 시간 s, 속도, 가속도].
+    head_pitch_deg: 주면 머리 pitch 도 같은 스텝에서 같이 맞춘다
+    (머리 속도/가속도는 control 이 머리 상한으로 낮춘다).
     """
     task = Task(f'torso_align({side})')
-    task.whole_body_joint_absolute(torso=_grip_torso(side), joint_motion=joint_motion)
+    task.whole_body_joint_absolute(
+        torso=_grip_torso(side), head=_head_target(head_pitch_deg), joint_motion=joint_motion,
+    )
     return task.build()
 
-def object_gripping_initial_pose(torso: Optional[str] = None, joint_motion: Optional[Sequence[float]] = None) -> Task:
+def object_gripping_initial_pose(
+    torso: Optional[str] = None,
+    joint_motion: Optional[Sequence[float]] = None,
+    *,
+    head_pitch_deg: Optional[float] = None,
+) -> Task:
     """양팔 파지 준비 자세.
 
     torso=None 이면 팔만 움직인다 (허리 그대로).
     torso='front' / 'left' / 'right' 이면 허리와 팔을 한 스텝에서 같이 움직인다.
-    joint_motion: [최소 시간 s, 속도, 가속도]. 생략 시 팔만 (3.0, 2.0, 3.0),
+    joint_motion: [최소 시간 s, 속도, 가속도]. 생략 시 팔만 (1.5, 2.0, 3.0),
     허리 포함 (5.0, 2.0, 3.0).
+    head_pitch_deg: 주면 머리 pitch 도 같은 스텝에서 같이 맞춘다
+    (머리 속도/가속도는 control 이 머리 상한으로 낮춘다).
     """
     right_arm = (-38.280283, -61.948097, 45.740109, -95.376122, 15.278687, 36.629077, 83.445557)
     left_arm = (-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812)
     if joint_motion is None:
-        joint_motion = (3.0, 2.0, 3.0) if torso is None else (5.0, 2.0, 3.0)
+        joint_motion = (1.5, 2.0, 3.0) if torso is None else (5.0, 2.0, 3.0)
 
     name = 'object_gripping_initial_pose' if torso is None else f'object_gripping_initial_pose({torso})'
     task = Task(name)
-    if torso is None:
-        task.whole_body_joint_absolute(
-            right_arm=right_arm, left_arm=left_arm, joint_motion=joint_motion,
-        )
-    else:
-        task.whole_body_joint_absolute(
-            torso=_grip_torso(torso), right_arm=right_arm, left_arm=left_arm,
-            joint_motion=joint_motion,
-        )
+    task.whole_body_joint_absolute(
+        torso=None if torso is None else _grip_torso(torso),
+        right_arm=right_arm, left_arm=left_arm, head=_head_target(head_pitch_deg),
+        joint_motion=joint_motion,
+    )
     return task.build()
 
-def pose_before_base_movement() -> Task:
-    task = Task('pose_before_base_movement')
-    # 오른팔: object_gripping_initial_pose('left') 에서 TCP 를 base (-y 0.12 -> +x 0.07) 옮긴 자세
-    # (손 방향 동일, SDK 모델 IK 계산값). 이전 값:
+def pose_before_base_movement(side: str) -> Task:
+    """door_switch 작업 위치로 들어가기 전 자세: 허리 side + 오른팔을 스위치 탐색에 방해되지 않게.
+
+    side: 허리 방향 (front / left / right) = 들어갈 작업 위치(work)의 side.
+    직전 허리 방향이 다르면(경유 지점이 fixed) 이 스텝에서 허리도 돌므로 5 s.
+    """
+    task = Task(f'pose_before_base_movement({side})')
+    # 오른팔: object_gripping_initial_pose 에서 TCP 를 (-y 0.12 -> +x 0.07) 옮긴 자세
+    # (허리 기준, 손 방향 동일, SDK 모델 IK 계산값. 계산은 허리 left 에서). 이전 값:
     # right_arm=[-16.485584, -81.212678, 36.201365, -117.319844, 5.521069, 37.464697, 72.280151]
     # 왼팔은 object_gripping_initial_pose 의 왼팔과 같다.
     task.whole_body_joint_absolute(
-        torso=_grip_torso('left'),
+        torso=_grip_torso(side),
         right_arm=[-8.030944, -85.718373, 30.622439, -119.996443, 3.002524, 34.710418, 68.873201],
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
         joint_motion=(5.0, 2.0, 3.0),
@@ -169,7 +192,7 @@ def search_pose() -> Task:
     task = Task('search_pose')
     task.whole_body_joint_absolute(
         right_arm = [-2.639050, -48.778294, 9.475941, -105.823940, -48.357757, 5.870969, -18.970059],
-        joint_motion=(5.0, 1.0, 1.0),
+        joint_motion=(2.5, 1.0, 1.0),
     )
     return task.build()
 
@@ -180,11 +203,11 @@ def search_switch_pose() -> Task:
         torso=[0.060044, 43.042258, -86.290755, 42.812307, 0.030457, 90.000870],
         right_arm = [-32.177210, -57.932216, 44.146889, -91.228664, -64.357215, -9.066141, -33.238335],        
         left_arm=(-37.023491, 61.226480, -44.046256, -95.222313, -16.824243, 35.951221, -84.381812),
-        joint_motion=(5.0, 1.0, 1.0),
+        joint_motion=(2.5, 1.0, 1.0),
     )
     return task.build()
 
-def head_pitch_pose(pitch_deg: float, joint_motion: Sequence[float] = (2.0, 0.2, 0.2)) -> Task:
+def head_pitch_pose(pitch_deg: float, joint_motion: Sequence[float] = (1.5, 1.5, 1.5)) -> Task:
     """머리를 pitch 절대각(deg, + = 숙임)으로 맞춘다. yaw(head_0)는 0.
 
     joint_motion: [최소 시간 s, 속도, 가속도]. 모든 머리 이동이 이 기본값을 쓴다.
@@ -198,22 +221,35 @@ def head_pitch_pose(pitch_deg: float, joint_motion: Sequence[float] = (2.0, 0.2,
 # ===========================================================================
 # 2. 기본 동작 — base 이동, 태그 기준 손 접근, 문 원호
 # ===========================================================================
-def turn_and_move(start_point: str, end_point: str, *, move_head: bool = True) -> RunnableTaskDefinition:
+def turn_and_move(
+    start_point: str,
+    end_point: str,
+    *,
+    move_head: bool = True,
+    current_side: Optional[str] = None,
+) -> RunnableTaskDefinition:
+    """허리 방향이 바뀌면 먼저 맞추고(머리 이동도 같은 스텝) start -> end 로 base 를 직선 이동한다.
+
+    도착 지점 side 가 fixed 면 허리를 그대로 둔다.
+    current_side: 지금 허리 방향. 생략하면 start 지점의 side (fixed 지점에서 출발하면 필수).
+    """
     locations = _load_move_locations()
 
     start_x, start_y, start_side = _move_location(locations, start_point)
     end_x, end_y, side = _move_location(locations, end_point)
+    if current_side is not None:
+        start_side = current_side
+    if start_side == FIXED_SIDE:
+        raise ValueError(
+            f'turn_and_move from {start_point!r} (side: fixed) needs current_side'
+        )
+    head_pitch = _load_move_head_pitch_deg() if move_head else None
 
     task = Task('turn_and_move')
-    if move_head:
-        task.extend(head_pitch_pose(_load_move_head_pitch_deg()))
-    if start_side != side:
-        if side == 'left':
-            task.extend(object_gripping_initial_pose('left'))
-        elif side == 'front':
-            task.extend(torso_align())
-        else:
-            task.extend(object_gripping_initial_pose('right'))
+    if side != FIXED_SIDE and start_side != side:
+        task.extend(object_gripping_initial_pose(side, head_pitch_deg=head_pitch))
+    elif head_pitch is not None:
+        task.extend(head_pitch_pose(head_pitch))
 
     task.move_to(end_x - start_x, end_y - start_y, 0.0, timeout_sec=15.0)
     return task.build()
@@ -246,11 +282,14 @@ def align_base_to_tag(
     threshold_y_plus: float = 0.0,
     arm: str,
     camera_frame: Optional[str] = None,
+    shift_toward_ee_m: float = 0.002,
 ) -> RunnableTaskDefinition:
     """D435 로 태그를 보고 base 를 정렬한다 (태그가 arm 손목 카메라 아래에 오도록).
 
     arm 필수: 정렬 목표가 그 팔의 손목 카메라 프레임이다. 뒤따르는
     pick_up/put_down_object_in_place 에는 같은 태그와 같은 arm 을 넘길 것.
+    shift_toward_ee_m: 목표점을 카메라 중심에서 그 팔 end effector 쪽으로
+    base XY 에서 이만큼 옮긴다 (m, 기본 2 mm, 0 이면 카메라 중심 그대로).
     """
     camera_frame = wrist_camera_frame(arm, camera_frame)
     task = Task(f'align_base_to_tag_{object_id}')
@@ -260,13 +299,14 @@ def align_base_to_tag(
         threshold_x_minus=threshold_x_minus, threshold_y_plus=threshold_y_plus,
         relative_yaw=0.0, detection_timeout_sec=5.0, navigation_timeout_sec=30.0,
         max_translation_m=0.8,
+        shift_toward_frame=end_effector_frame(arm), shift_toward_m=shift_toward_ee_m,
     )
     return task.build()
 
 def move_hand_to_door_handle(
     station: str = 'ZS',
     action: str = 'open',
-    tcp_motion: Sequence[float] = (3.0, 0.1, 0.3, 0.5),
+    tcp_motion: Sequence[float] = (1.5, 0.2, 0.6, 0.5),
 ) -> RunnableTaskDefinition:
     """D435 로 손잡이 태그(open/close)를 보고 오른손 TCP 를 ee_offset_tag 지점으로 옮긴다.
 
@@ -345,7 +385,7 @@ def door_open_stream(
     open_angle_deg: Optional[float] = None,
     step_deg: float = 2.0,
     yaw_follows_door: bool = False,
-    path_motion: Sequence[float] = (12.0, 0.05, 0.3),
+    path_motion: Sequence[float] = (10.0, 0.05, 0.3),
 ) -> Task:
     """손잡이를 잡은 오른손으로 경첩 중심 원호를 시계 방향으로 따라 문을 연다.
 
@@ -372,7 +412,7 @@ def door_close_stream(
     close_angle_deg: Optional[float] = None,
     step_deg: float = 2.0,
     yaw_follows_door: bool = False,
-    path_motion: Sequence[float] = (12.0, 0.05, 0.3),
+    path_motion: Sequence[float] = (10.0, 0.05, 0.3),
 ) -> Task:
     """swing 만큼 열린 문을 닫는다: door_open_stream 경로를 반시계로 되감는다.
 
@@ -408,7 +448,7 @@ def pick_up_object_in_place(
     *,
     arm: str,
     camera_source: Optional[str] = None,
-    approach_motion: Sequence[float] = (3.0, 1.0, 1.0, 1.0),
+    approach_motion: Sequence[float] = (1.5, 1.0, 1.0, 1.0),
     lift_motion: Sequence[float] = (1.0, 1.0, 1.0, 1.0),
 ) -> RunnableTaskDefinition:
     """base 이동 없이 현재 자세에서 손목 카메라로 태그를 보고 그리퍼 열기 -> 접근·접촉 -> 파지 -> 상승.
@@ -552,6 +592,28 @@ def go_to(from_station: str, to_station: str) -> RunnableTaskDefinition:
         task.extend(turn_and_move(_entry_point(from_station), _entry_point(to_station)))
     return task.build()
 
+def align_at_station(station: str, *, set_torso: bool = True) -> RunnableTaskDefinition:
+    """장비의 집기/놓기 지점에서 base 정렬만 한다 (집기/놓기 없음, 왼팔 손목 카메라 기준).
+
+    허리 방향(front/left/right)마다 함수를 따로 둘 필요 없다: 정렬 목표(손목 카메라 위치)는
+    실행 시점의 TF(base <- 손목 카메라)로 읽으므로 지금 허리 yaw 가 그대로 반영된다.
+    단, 정렬 전에 허리가 그 지점 side 로 돌아가 있어야 한다 (D435 가 태그를 보고
+    손목 카메라가 태그 위로 갈 수 있도록).
+
+    set_torso=True: 그 지점 side 로 허리+팔 파지 준비 자세 + 머리 pitch 를 한 스텝에서 맞춘다
+    (Scenario 에서 단독 실행용). False: 머리만 맞춘다 (허리는 이미 맞춰져 있다고 본다).
+    """
+    ref = f"{station}.{_load_station(station)['place']['point']}"
+    _, _, side = _move_location(_load_move_locations(), ref)
+    head_pitch = _load_point_head_pitch(ref)
+    task = Task(f'align_at_station({station})')
+    if set_torso and side != FIXED_SIDE:
+        task.extend(object_gripping_initial_pose(side, head_pitch_deg=head_pitch))
+    else:
+        task.extend(head_pitch_pose(head_pitch))
+    task.extend(align_base_to_tag(_load_location_tag_id(ref), arm=TRANSFER_ARM))
+    return task.build()
+
 def _pick_or_place(station: str, action: str) -> RunnableTaskDefinition:
     """장비의 집기/놓기 지점에서 집거나 놓는다.
 
@@ -559,10 +621,8 @@ def _pick_or_place(station: str, action: str) -> RunnableTaskDefinition:
     머리 속도는 head_pitch_pose 기본값 하나로 관리한다.
     """
     task = Task(f'{action}_at_station({station})')
-    
-    task.extend(head_pitch_pose(_load_point_head_pitch(station)))
+    task.extend(align_at_station(station, set_torso=False))
     tag = _load_location_tag_id(station)
-    task.extend(align_base_to_tag(tag, arm=TRANSFER_ARM))
     if action == 'pick':
         task.extend(pick_up_object_in_place(tag, arm=TRANSFER_ARM))
     else:
@@ -580,7 +640,9 @@ def _door_switch_visit(
     작업 위치(work)에서 시작해 작업 위치에서 끝난다. 집기/놓기 손은 왼팔, 문/스위치는 오른팔.
     hand_motion: 스위치를 누른 뒤 손 빼기 직선 이동 [최소 시간 s, 선속도 m/s, 각속도 rad/s, 가속도 비율].
     """
-    route = [f'{station}.{point}' for point in _load_station(station)['route']]
+    config = _load_station(station)
+    route = [f'{station}.{point}' for point in config['route']]
+    route_side = {f'{station}.{point}': config['points'][point]['side'] for point in config['route']}
     work_pitch = _load_point_head_pitch(f'{station}.work')
     move_pitch = _load_move_head_pitch_deg()
 
@@ -593,9 +655,13 @@ def _door_switch_visit(
     # 스위치를 누른 뒤 오른손을 벽에서 뺀다 (벽 좌표 z 0.25 m).
     task.linear_relative(SWITCH_DOOR_ARM, _wall_move(station, (0.0, 0.0, 0.25)), hand_motion)
 
+    # 허리 방향을 따라가며 이동한다: side: fixed 경유 지점에서는 허리를 그대로 둔다.
+    side = route_side[route[0]]
     task.extend(head_pitch_pose(move_pitch))
     for start, end in zip(route, route[1:]):
-        task.extend(turn_and_move(start, end, move_head=False))
+        task.extend(turn_and_move(start, end, move_head=False, current_side=side))
+        if route_side[end] != FIXED_SIDE:
+            side = route_side[end]
 
     task.extend(_pick_or_place(station, action))
 
@@ -604,9 +670,13 @@ def _door_switch_visit(
     for start, end in zip(back, back[1:]):
         if end == back[-1]:
             # 작업 위치로 들어가기 전: 오른손을 스위치 탐색에 방해되지 않는 자세로 둔다.
-            # (앞 구간의 허리 회전 자세가 팔을 덮어쓰므로 그 뒤에 한다.)
-            task.extend(pose_before_base_movement())
-        task.extend(turn_and_move(start, end, move_head=False))
+            # 허리도 작업 위치의 side 로 맞추므로(경유 지점이 fixed 면 여기서 회전)
+            # 마지막 구간은 허리가 그대로다.
+            side = route_side[end]
+            task.extend(pose_before_base_movement(side))
+        task.extend(turn_and_move(start, end, move_head=False, current_side=side))
+        if route_side[end] != FIXED_SIDE:
+            side = route_side[end]
 
     task.extend(head_pitch_pose(work_pitch))
     task.extend(align_base_to_door(station, 'close'))
@@ -647,7 +717,6 @@ def transfer(source: str, destination: str, *, start: Optional[str] = None) -> R
     task.extend(place_at_station(destination))
     return task.build()
 
-
 # ===========================================================================
 # 6. 데모
 # ===========================================================================
@@ -656,6 +725,12 @@ def transfer_demo() -> RunnableTaskDefinition:
     task = Task('transfer_demo(LH1->ZS, LH1->LH2)')
     task.extend(transfer('LH1', 'ZS'))
     task.extend(transfer('LH1', 'LH2', start='ZS'))  # ZS -> LH1 이동부터
+    return task.build()
+
+def lh1_to_lh2_demo() -> RunnableTaskDefinition:
+    """LH1 에서 plate 를 집어 LH2 로 이동해 놓는다 (왼팔). 로봇은 LH1 에서 시작한다."""
+    task = Task('lh1_to_lh2_demo(LH1->LH2)')
+    task.extend(transfer('LH1', 'LH2'))
     return task.build()
 
 def impedance_demo_joint() -> Task:
@@ -759,7 +834,6 @@ def offline_map_creation(map_name: str = '') -> RunnableTaskDefinition:
     task.vslam_save_map(map_name)
     return task.build()
 
-
 # ===========================================================================
 # 7. 테스트
 # ===========================================================================
@@ -775,7 +849,7 @@ def test0() -> RunnableTaskDefinition:
 
 # test1: 왼손 좌우 픽앤플레이스 반복 (base/허리 고정, 왼팔만 이동)
 def test1() -> RunnableTaskDefinition:
-    """허리 왼쪽 고정. 왼팔: tag_3 잡기 -> 왼쪽(-x) 15 cm -> tag_0 놓기/다시 잡기 -> 오른쪽(+x) 15 cm -> tag_3 놓기, 10회 반복."""
+    """허리 왼쪽 고정. 왼팔: tag_1 잡기 -> 왼쪽(-x) 15 cm -> tag_2 놓기/다시 잡기 -> 오른쪽(+x) 15 cm -> tag_1 놓기, 10회 반복."""
     shift_motion = (3.0, 0.1, 0.3, 0.5)
     runs = 10                        # 첫 실행 포함 총 반복 횟수
 
@@ -783,13 +857,13 @@ def test1() -> RunnableTaskDefinition:
 
     task.extend(object_gripping_initial_pose('left'))
 
-    task.extend(pick_up_object_in_place('tag_3', arm='left_arm'))
+    task.extend(pick_up_object_in_place('tag_1', arm='left_arm'))
     task.linear_relative('left_arm', (-0.25, 0.0, 0.0, 0.0, 0.0, 0.0), shift_motion)  # 왼쪽으로
-    task.extend(put_down_object_in_place('tag_0', arm='left_arm'))
+    task.extend(put_down_object_in_place('tag_2', arm='left_arm'))
 
-    task.extend(pick_up_object_in_place('tag_0', arm='left_arm'))
+    task.extend(pick_up_object_in_place('tag_2', arm='left_arm'))
     task.linear_relative('left_arm', (0.15, 0.0, 0.0, 0.0, 0.0, 0.0), shift_motion)  # 오른쪽으로 복귀
-    task.extend(put_down_object_in_place('tag_3', arm='left_arm'))
+    task.extend(put_down_object_in_place('tag_1', arm='left_arm'))
     
     task.rewind(runs)
     return task.build()
@@ -802,12 +876,16 @@ def test2() -> RunnableTaskDefinition:
     task.extend(transfer('LH2', 'LH1'))  # 오기
     return task.build()
 
+# move_base: base 만 상대 이동 (Measurements 탭 Start frame xy 를 그대로 넣으면 된다)
+def test_move_base(x: float, y: float, yaw_deg: float = 0.0) -> RunnableTaskDefinition:
+    """지금 base 기준 x 전방 / y 왼쪽 [m] 만큼 이동, yaw_deg 만큼 회전. 팔/허리는 그대로."""
+    task = Task('test_move_base')
+    task.move_to(x, y, math.radians(yaw_deg), timeout_sec=15.0)
+    return task.build()
 
 # ===========================================================================
 # Scenario UI 등록
 # ===========================================================================
-
-
 def build_tasks() -> dict[str, RunnableTaskDefinition]:
     # Scenario 목록은 이 순서 그대로 표시된다 (레벨 순).
     return {
@@ -827,10 +905,15 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         'align_base_to_door(close)': align_base_to_door('ZS', 'close'),
 
         # --- 4. 장비 단위 ---
+        # 집기/놓기 지점 base 정렬만 (허리 side 는 settings.yaml 지점 side 로 자동)
+        'align_at_station(LH1)': align_at_station('LH1'),
+        'align_at_station(LH2)': align_at_station('LH2'),
+        'align_at_station(ZS)': align_at_station('ZS'),
         'pick_at_station(ZS)': pick_at_station('ZS'),
 
         # --- 6. 데모 ---
         'transfer_demo(LH1->ZS, LH1->LH2)': transfer_demo(),
+        'lh1_to_lh2_demo(LH1->LH2)': lh1_to_lh2_demo(),
         'impedance_demo_press': impedance_demo_press(),
         'impedance_demo_joint': impedance_demo_joint(),
         'wave_both_arms': wave_both_arms(),
@@ -842,6 +925,7 @@ def build_tasks() -> dict[str, RunnableTaskDefinition]:
         'test0': test0(),
         'test1': test1(),
         'test2': test2(),
+        'test_move_base': test_move_base(0.2964, -0.3427),
     }
 
 
@@ -859,7 +943,7 @@ __all__ = [
     'open_door', 'push_switch',
     'move_hand_from_door_to_switch', 'close_door',
     # 4. 장비 단위 / 5. 운반
-    'go_to', 'pick_at_station', 'place_at_station', 'transfer', 'transfer_demo',
+    'go_to', 'align_at_station', 'pick_at_station', 'place_at_station', 'transfer', 'transfer_demo', 'lh1_to_lh2_demo',
     # 6. 데모
     'impedance_demo_press', 'impedance_demo_joint', 'wave_both_arms',
     # 8. VSLAM

@@ -105,6 +105,8 @@
     motion_goal_timeout_margin_sec: 2.0
 
     cartesian_state_period_sec: 0.25
+    # Drop and resend a GetCartesianPose request with no reply after this.
+    cartesian_pose_request_timeout_sec: 1.0
     # Joint-space policy used by both JS hard-limit validation and the CS
     # runtime guard. Relative paths resolve inside this package's config dir.
     joint_limits_file: joint_limits_rby1m_v1_3.yaml
@@ -121,6 +123,8 @@
     manual_cartesian_linear_velocity_limit: 0.05
     manual_cartesian_angular_velocity_limit: 0.2
     manual_cartesian_acceleration_scaling: 0.2
+    # Task (task.py) head Joint commands: acceleration cap (rad/s^2). No verified model limit.
+    task_head_joint_acceleration_limit: 1.5
 
     # Streamed Cartesian path (Task linear_path_relative / linear_path_absolute
     # steps). The Task runner turns the driver stream on only for these steps

@@ -44,7 +44,7 @@
     # ee_left / ee_right 프레임은 서로 y 축이 뒤집힌 거울 관계이므로, 좌우 대칭
     # 장착에서는 왼손 값 [0.077391, -0.0035, 0.019559] 의 y 부호만 반대가 된다.
     # 회전은 y 축(pitch) 회전뿐이라 거울 변환에서도 그대로다.
-    parent_to_camera_center_translation: [0.077391, 0.0035, 0.019559]
+    parent_to_camera_center_translation: [0.077391, 0.002, 0.019559]
     parent_to_camera_center_rotation: [0.0, 111.0, 0.0]
 
     # T_d405_right_camera_center_d405_right_link
@@ -52,7 +52,7 @@
     # d405_right_camera_center -> d405_right_link 원점 벡터이다.
     # 실제 TF translation은 R_center_link * offset으로 계산한다.
     camera_center_to_camera_link_offset_in_link_axes: [0.0, 0.009, 0.0]
-    camera_center_to_camera_link_rotation: [90.0, 0.0, 0.0]
+    camera_center_to_camera_link_rotation: [180.0, 0.0, 0.0]
 
 
 # ── 오른손 D405 AprilTag 검출 ────────────────────────────────

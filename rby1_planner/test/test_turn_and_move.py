@@ -13,9 +13,15 @@ from station_settings import HEAD_PITCH_DEG, stations_settings
 
 
 def head_move():
-    """turn_and_move 가 이동 전에 넣는 머리 절대 이동 명령 (head_pitch_deg.move).
+    """turn_and_move 가 허리를 돌리지 않을 때 이동 전에 넣는 머리 절대 이동 명령 (head_pitch_deg.move).
     도착 후 머리는 건드리지 않는다 (뒤따르는 장비 작업이 지점 각도로 맞춘다)."""
     return task_source.head_pitch_pose(HEAD_PITCH_DEG['move']).commands[0]
+
+
+def turn_pose(side):
+    """허리를 돌릴 때: 준비 자세와 머리 이동이 한 스텝이다."""
+    pitch = HEAD_PITCH_DEG['move']
+    return task_source.object_gripping_initial_pose(side, head_pitch_deg=pitch).commands[0]
 
 
 @pytest.fixture
@@ -41,8 +47,7 @@ def settings_file(tmp_path, monkeypatch):
 def test_default_locations_turn_then_move(settings_file, start, end, side, y):
     definition = task_source.turn_and_move(start, end)
     expected = Task('expected')
-    expected.extend(task_source.head_pitch_pose(HEAD_PITCH_DEG['move']))
-    expected.extend(task_source.object_gripping_initial_pose(side))
+    expected.extend(task_source.object_gripping_initial_pose(side, head_pitch_deg=HEAD_PITCH_DEG['move']))
     expected.move_to(0.0, y, 0.0, timeout_sec=15.0)
     assert definition.name == 'turn_and_move'
     assert definition.commands == expected.build().commands
@@ -61,14 +66,12 @@ def test_xy_difference_and_destination_side(settings_file, start, end, expected_
             'D': {'position': [0.3, 0.3], 'side': 'left'},
         })), encoding='utf-8')
     commands = task_source.turn_and_move(start, end).commands
-    assert len(commands) == 3
-    pose = task_source.object_gripping_initial_pose(side)
-    assert commands[0] == head_move()
-    assert commands[1] == pose.commands[0]
-    assert isinstance(commands[2], MoveToStep)
-    assert (commands[2].x, commands[2].y) == pytest.approx(expected_xy)
-    assert commands[2].yaw == 0.0
-    assert commands[2].timeout_sec == 15.0
+    assert len(commands) == 2
+    assert commands[0] == turn_pose(side)
+    assert isinstance(commands[1], MoveToStep)
+    assert (commands[1].x, commands[1].y) == pytest.approx(expected_xy)
+    assert commands[1].yaw == 0.0
+    assert commands[1].timeout_sec == 15.0
 
 
 @pytest.mark.parametrize('side', ['left', 'right'])
@@ -101,7 +104,7 @@ def test_same_side_skips_both_preparation_poses(
 
 
 def test_settings_are_reloaded_on_each_call(settings_file):
-    assert task_source.turn_and_move('A', 'B').commands[2].y == 0.87
+    assert task_source.turn_and_move('A', 'B').commands[1].y == 0.87
     settings_file.write_text(yaml.safe_dump(stations_settings({
             'A': {'position': [0, 0], 'side': 'right'},
             'B': {'position': [0.1, 0.5], 'side': 'right'},
@@ -117,11 +120,11 @@ def test_head_is_set_to_move_angle_before_moving_only(settings_file):
     data['stations']['B']['points']['place']['head_pitch_deg'] = 25.0   # 도착 지점 각도는 쓰지 않는다
     settings_file.write_text(yaml.safe_dump(data), encoding='utf-8')
     commands = task_source.turn_and_move('A', 'B').commands
-    heads = [c for c in commands if getattr(c, 'group', None) == 'head']
-    assert [c.kind for c in heads] == [CommandKind.JOINT_ABSOLUTE]
-    assert [c.values for c in heads] == [(0.0, 5.0)]
-    assert commands[0] == heads[0]
+    # 허리가 돌면 머리는 준비 자세 스텝에 같이 들어간다
+    assert commands[0].kind is CommandKind.JOINT_ABSOLUTE_MULTI
+    assert dict(commands[0].joint_targets)['head'] == (0.0, 5.0)
     assert isinstance(commands[-1], MoveToStep)
+    assert len(commands) == 2
 
 
 def test_move_head_false_leaves_head_alone(settings_file):
@@ -212,4 +215,56 @@ def test_installed_package_uses_share_config(settings_file, tmp_path, monkeypatc
     definition = task_source.turn_and_move('A', 'B')
     # 장비 위치와 머리 각도를 읽을 때마다 설치 share 경로를 쓴다
     assert calls and set(calls) == {'rby1_planner'}
-    assert definition.commands[2] == MoveToStep(0.0, 0.87, 0.0, 15.0)
+    assert definition.commands[1] == MoveToStep(0.0, 0.87, 0.0, 15.0)
+
+
+def test_turn_to_front_uses_gripping_pose_with_head(settings_file):
+    settings_file.write_text(yaml.safe_dump(stations_settings({
+            'A': {'position': [0.0, 0.0], 'side': 'left'},
+            'B': {'position': [0.0, 0.5], 'side': 'front'},
+        })), encoding='utf-8')
+    commands = task_source.turn_and_move('A', 'B').commands
+    assert len(commands) == 2
+    assert commands[0] == turn_pose('front')
+    assert [g for g, _ in commands[0].joint_targets] == ['torso', 'right_arm', 'left_arm', 'head']
+
+
+def test_move_head_false_turn_has_no_head(settings_file):
+    commands = task_source.turn_and_move('A', 'B', move_head=False).commands
+    assert commands[0] == task_source.object_gripping_initial_pose('left').commands[0]
+
+
+def _fixed_settings(settings_file):
+    data = stations_settings({
+        'A': {'position': [0.0, 0.0], 'side': 'left'},
+        'B': {'position': [0.0, 0.5], 'side': 'front'},
+    })
+    data['stations']['A']['points']['via'] = {'position': [0.3, 0.0], 'side': 'fixed'}
+    settings_file.write_text(yaml.safe_dump(data), encoding='utf-8')
+
+
+def test_fixed_destination_keeps_torso(settings_file):
+    _fixed_settings(settings_file)
+    commands = task_source.turn_and_move('B', 'A.via').commands
+    assert commands[0] == head_move()
+    assert isinstance(commands[1], MoveToStep) and len(commands) == 2
+
+
+def test_fixed_start_uses_current_side(settings_file):
+    _fixed_settings(settings_file)
+    with pytest.raises(ValueError, match='current_side'):
+        task_source.turn_and_move('A.via', 'B')
+    commands = task_source.turn_and_move('A.via', 'B', current_side='front').commands
+    assert commands[0] == head_move()            # 이미 front: 허리 그대로
+    commands = task_source.turn_and_move('A.via', 'B', current_side='left').commands
+    assert commands[0] == turn_pose('front')
+
+
+def test_fixed_side_is_rejected_for_place_point(settings_file):
+    data = stations_settings({
+        'A': {'position': [0.0, 0.0], 'side': 'fixed'},
+        'B': {'position': [0.0, 0.5], 'side': 'front'},
+    })
+    settings_file.write_text(yaml.safe_dump(data), encoding='utf-8')
+    with pytest.raises(ValueError, match='cannot be fixed'):
+        task_source.turn_and_move('A', 'B')

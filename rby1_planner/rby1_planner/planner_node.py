@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Optional
 
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 
 from .camera import CameraClient
 from .control_client import ControlClient
+from .measurements import OdometryTracker, yaw_from_quaternion
 from .navigation_client import NavigationClient
 from .task_commands import RunnableTaskDefinition
 from .task_lifecycle import TaskProgress, TaskRunResult
@@ -95,6 +98,9 @@ class PlannerNode(Node):
             'rby1_navigation_node',
         )
 
+        # Wheel odometry from the vendor driver (Measurements tab).
+        self.declare_parameter('base_odom_topic', '/rby1/odom')
+
         shared_camera_options = {
             'target_frame': str(
                 self.get_parameter('object_pose_target_frame').value
@@ -143,6 +149,13 @@ class PlannerNode(Node):
             ),
         )
         self.vslam = self._create_vslam_client()
+        self.base_odometry = OdometryTracker()
+        self.create_subscription(
+            Odometry,
+            str(self.get_parameter('base_odom_topic').value),
+            self._base_odom_callback,
+            10,
+        )
         self.vision = VisionManager(
             self,
             {
@@ -227,6 +240,23 @@ class PlannerNode(Node):
         except Exception as exc:
             self.get_logger().warning(f'VSLAM client is unavailable: {exc}')
             return None
+
+    def _base_odom_callback(self, message: Odometry) -> None:
+        pose = message.pose.pose
+        q = pose.orientation
+        stamp = message.header.stamp
+        stamp_sec = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        if stamp_sec <= 0.0:
+            stamp_sec = self.get_clock().now().nanoseconds * 1e-9
+        self.base_odometry.update(
+            (
+                float(pose.position.x),
+                float(pose.position.y),
+                yaw_from_quaternion(q.x, q.y, q.z, q.w),
+            ),
+            stamp_sec,
+            received_at=time.monotonic(),
+        )
 
     def run_task(self, task: RunnableTaskDefinition) -> None:
         """Start one explicitly supplied Task through the control backend."""

@@ -30,6 +30,8 @@ CARTESIAN_ARMS = ("right_arm", "left_arm")
 # Streamed paths stay arm-only: the backend IK solves arm joints only.
 CARTESIAN_GROUPS = CARTESIAN_ARMS + ("torso",)
 BODY_JOINT_GROUPS = ("torso", "right_arm", "left_arm")
+# Groups one JOINT_ABSOLUTE_MULTI command may carry (head moves with the body).
+MULTI_JOINT_GROUPS = BODY_JOINT_GROUPS + ("head",)
 GRIPPER_SIDES = ("right", "left", "both")
 DEFAULT_GRIPPER_SETTLE_TIME_SEC = 1.0
 
@@ -682,7 +684,7 @@ class TaskCommand:
                 if not isinstance(item, tuple) or len(item) != 2:
                     raise ValueError("multi-group joint target is invalid")
                 group, values = item
-                if group not in BODY_JOINT_GROUPS:
+                if group not in MULTI_JOINT_GROUPS:
                     raise ValueError(
                         f"unsupported multi-group joint target: {group}"
                     )
@@ -692,6 +694,8 @@ class TaskCommand:
                     )
                 seen.add(group)
                 _values(values, JOINT_GROUP_DOF[group], f"{group} target")
+            if self.impedance is not None and "head" in seen:
+                raise ValueError("head cannot use joint impedance")
             _number(self.velocity_limit, "velocity_limit", positive=True)
             _number(self.acceleration_limit, "acceleration_limit", positive=True)
             if any(value is not None for value in (
@@ -933,7 +937,7 @@ class Task:
         )
         normalized = []
         for group, positions in targets.items():
-            if group not in BODY_JOINT_GROUPS:
+            if group not in MULTI_JOINT_GROUPS:
                 raise ValueError(
                     f"unsupported multi-group joint target: {group}"
                 )
@@ -965,6 +969,7 @@ class Task:
         torso: Optional[Sequence[object]] = None,
         right_arm: Optional[Sequence[object]] = None,
         left_arm: Optional[Sequence[object]] = None,
+        head: Optional[Sequence[object]] = None,
         joint_motion: Sequence[object],
         impedance: ImpedanceSpec = None,
     ) -> "Task":
@@ -972,6 +977,8 @@ class Task:
 
         Omitted or None groups receive no new target. At least one group is
         required; multiple groups move together in one synchronized command.
+        ``head`` rides along with the body; the control backend caps its
+        velocity/acceleration to the head limits, and it cannot use impedance.
         """
 
         targets = {
@@ -980,12 +987,14 @@ class Task:
                 ("torso", torso),
                 ("right_arm", right_arm),
                 ("left_arm", left_arm),
+                ("head", head),
             )
             if positions is not None
         }
         if not targets:
             raise ValueError(
-                "at least one of torso, right_arm, or left_arm must be provided"
+                "at least one of torso, right_arm, left_arm, or head must be "
+                "provided"
             )
         if len(targets) == 1:
             group, positions = next(iter(targets.items()))

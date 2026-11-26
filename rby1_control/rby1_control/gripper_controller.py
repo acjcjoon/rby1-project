@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 import threading
 import time
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Iterable, Optional, Sequence, Tuple
 
 
 GripperPair = Tuple[float, float]
@@ -259,6 +259,10 @@ class GripperController:
         self._command_started_at: Optional[float] = None
         self._command_deadline: Optional[float] = None
         self._motion_active = False
+        # Sides (0=right, 1=left) whose target the active command must reach.
+        # An unselected side keeps its hold target but is never checked: a
+        # hand that is grasping an object rests short of its close target.
+        self._goal_sides: frozenset[int] = frozenset()
         self._error: Optional[str] = None
 
     def update_ready(self, ready: bool) -> Optional[str]:
@@ -286,7 +290,9 @@ class GripperController:
             self._expire_locked(now)
             if not self._motion_active or self._target is None:
                 return False
-            if not self._goal_reached(measured, self._target):
+            if not self._goal_reached(
+                measured, self._target, self._goal_sides,
+            ):
                 return False
 
             # Feedback at the final target supersedes any remaining planned
@@ -297,6 +303,7 @@ class GripperController:
             self._sample_pending = True
             self._profile_completed_at = now
             self._motion_active = False
+            self._goal_sides = frozenset()
             self._command_started_at = None
             self._command_deadline = None
             self._error = None
@@ -402,6 +409,7 @@ class GripperController:
                 self._sample_pending = True
             self._profile_completed_at = now
             self._motion_active = False
+            self._goal_sides = frozenset()
             self._command_started_at = None
             self._command_deadline = None
 
@@ -494,6 +502,7 @@ class GripperController:
             self._profile_completed_at = None
             self._planned_duration_sec = None
             self._motion_active = False
+            self._goal_sides = frozenset()
             self._command_started_at = None
             self._command_deadline = None
             return hold_target
@@ -618,6 +627,10 @@ class GripperController:
                 for index in range(2)
             )  # type: ignore[assignment]
             self._target = (targets[0], targets[1])
+            # A side still moving from an earlier, unfinished command stays
+            # checked; a side that only holds its last target does not.
+            pending = self._goal_sides if self._motion_active else frozenset()
+            self._goal_sides = pending | frozenset(selected)
             self._sample_pending = True
             self._error = None
             self._profile_completed_at = None
@@ -642,8 +655,11 @@ class GripperController:
 
             if self._profile_active_locked():
                 self._motion_active = True
-            elif self._goal_reached(self._positions, self._target):
+            elif self._goal_reached(
+                self._positions, self._target, self._goal_sides,
+            ):
                 self._motion_active = False
+                self._goal_sides = frozenset()
                 self._profile_completed_at = now
                 self._command_started_at = None
                 self._command_deadline = None
@@ -731,6 +747,7 @@ class GripperController:
         self._profile_completed_at = None
         self._planned_duration_sec = None
         self._motion_active = False
+        self._goal_sides = frozenset()
         self._command_started_at = None
         self._command_deadline = None
         self._error = str(message)
@@ -762,8 +779,9 @@ class GripperController:
         self,
         measured: GripperPair,
         target: GripperPair,
+        sides: Iterable[int] = (0, 1),
     ) -> bool:
         return all(
-            abs(actual - expected) <= self._goal_tolerance
-            for actual, expected in zip(measured, target)
+            abs(measured[index] - target[index]) <= self._goal_tolerance
+            for index in sides
         )

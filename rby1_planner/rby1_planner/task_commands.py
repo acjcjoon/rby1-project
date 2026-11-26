@@ -71,6 +71,11 @@ WRIST_CAMERA_FRAME_BY_ARM = {
     'right_arm': 'd405_right_camera_center',
     'left_arm': 'd405_left_camera_center',
 }
+# 팔 -> end effector 프레임 (base 정렬 목표를 카메라 중심에서 옮길 방향).
+END_EFFECTOR_FRAME_BY_ARM = {
+    'right_arm': 'ee_right',
+    'left_arm': 'ee_left',
+}
 
 
 def wrist_camera_source(arm: str, camera_source: Optional[str] = None) -> str:
@@ -95,6 +100,14 @@ def wrist_camera_frame(arm: str, camera_frame: Optional[str] = None) -> str:
         raise ValueError(
             f'{arm!r} has no wrist camera; pass camera_frame explicitly'
         ) from None
+
+
+def end_effector_frame(arm: str) -> str:
+    """arm 의 end effector 프레임 (ee_left / ee_right)."""
+    try:
+        return END_EFFECTOR_FRAME_BY_ARM[str(arm).strip()]
+    except KeyError:
+        raise ValueError(f'{arm!r} has no end effector frame') from None
 
 
 def _finite_number(
@@ -475,11 +488,26 @@ class CameraMoveToTagStep:
     minimum_confidence: Optional[float] = None
     threshold_x_minus: float = 0.0
     threshold_y_plus: float = 0.0
+    # 목표점을 base XY 에서 shift_toward_frame 쪽으로 shift_toward_m 만큼 옮긴다.
+    shift_toward_frame: Optional[str] = None
+    shift_toward_m: float = 0.0
 
     def __post_init__(self) -> None:
         camera_source = str(self.camera_source).strip()
         object_id = str(self.object_id).strip()
         desired_tag_frame = str(self.desired_tag_frame).strip()
+        shift_toward_m = _finite_number(self.shift_toward_m, 'shift_toward_m')
+        if shift_toward_m < 0.0:
+            raise ValueError('shift_toward_m must be nonnegative')
+        shift_toward_frame = (
+            None
+            if self.shift_toward_frame is None
+            else str(self.shift_toward_frame).strip() or None
+        )
+        if shift_toward_m > 0.0 and shift_toward_frame is None:
+            raise ValueError('shift_toward_m requires shift_toward_frame')
+        object.__setattr__(self, 'shift_toward_m', shift_toward_m)
+        object.__setattr__(self, 'shift_toward_frame', shift_toward_frame)
         if not camera_source:
             raise ValueError('camera_source must not be empty')
         if not object_id:
@@ -815,8 +843,13 @@ class Task(_CanonicalTask):
         max_yaw_rad: float = 0.5,
         max_age_sec: Optional[float] = None,
         minimum_confidence: Optional[float] = None,
+        shift_toward_frame: Optional[str] = None,
+        shift_toward_m: float = 0.0,
     ) -> 'Task':
         """Defer a tag observation used to calculate a relative base goal.
+
+        ``shift_toward_m`` moves the desired point that far in base XY toward
+        the origin of ``shift_toward_frame`` (looked up at execution time).
 
         ``desired_tag_x`` and ``desired_tag_y`` describe where the tag should
         appear in ``desired_tag_frame`` after navigation. That point is
@@ -847,6 +880,8 @@ class Task(_CanonicalTask):
             max_yaw_rad=max_yaw_rad,
             max_age_sec=max_age_sec,
             minimum_confidence=minimum_confidence,
+            shift_toward_frame=shift_toward_frame,
+            shift_toward_m=shift_toward_m,
         ))
         return self
 
@@ -1385,6 +1420,7 @@ set_impedance_preset_loader(load_impedance_preset)
 #       kind: plain                # plain | door_switch
 #       enabled: true              # 생략 시 true. false 면 이동/파지에 쓸 수 없다
 #       points: {place: {position: [x, y], side: front|left|right}}
+#                  side: fixed = 경유 지점 전용. 그 지점으로 갈 때 허리를 돌리지 않는다
 #       place: {point: place, tag: tag_3, offset: [dx, dy, dz]}
 #     ZS:
 #       kind: door_switch
@@ -1399,7 +1435,8 @@ set_impedance_preset_loader(load_impedance_preset)
 # 태그 ID 는 모든 장비를 통틀어 한 곳에서만 쓸 수 있다.
 # ---------------------------------------------------------------------------
 STATION_KINDS = ('plain', 'door_switch')
-POINT_SIDES = ('left', 'right', 'front')
+FIXED_SIDE = 'fixed'   # 경유 지점 전용: 도착할 때 허리 방향을 바꾸지 않는다
+POINT_SIDES = ('left', 'right', 'front', FIXED_SIDE)
 
 
 def _finite_list(value: object, count: int, what: str) -> tuple[float, ...]:
@@ -1486,7 +1523,7 @@ def _validate_station(name: object, station: object) -> None:
             raise ValueError(f'{where} must contain position and side')
         _finite_list(point.get('position'), 2, f'{where} position [x, y]')
         if point.get('side') not in POINT_SIDES:
-            raise ValueError(f'{where} side must be left, right, or front')
+            raise ValueError(f'{where} side must be left, right, front, or fixed')
         if 'head_pitch_deg' in point:   # 없으면 0° (POINT_HEAD_PITCH_DEFAULT_DEG)
             _head_pitch_value(point['head_pitch_deg'], f'{where} head_pitch_deg')
     place = station.get('place')
@@ -1494,6 +1531,12 @@ def _validate_station(name: object, station: object) -> None:
         raise ValueError(f'Station {name!r} place must be a mapping')
     if place.get('point') not in points:
         raise ValueError(f'Station {name!r} place.point must name one of its points')
+    # 출입/작업 지점은 허리 방향이 정해져 있어야 한다 (fixed 는 경유 지점만).
+    for point_name in (place['point'], 'work'):
+        if point_name in points and points[point_name]['side'] == FIXED_SIDE:
+            raise ValueError(
+                f'Location {name}.{point_name} side cannot be fixed (waypoints only)'
+            )
     if place.get('tag') is not None:
         _finite_list(place.get('offset'), 3, f'Station {name!r} place offset [x, y, z] in metres')
     if 'head_pitch_deg' in place:

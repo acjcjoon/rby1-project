@@ -105,3 +105,29 @@ def test_whole_body_still_requires_joint_motion(task):
     with pytest.raises(TypeError, match='joint_motion'):
         task.whole_body_joint_absolute(left_arm=TARGETS['left_arm'])
     assert task.task_list == []
+
+
+def test_head_rides_along_with_body_in_one_command(task):
+    task.whole_body_joint_absolute(
+        torso=TARGETS['torso'], head=(0.0, 2.0), joint_motion=(5.0, 2.0, 3.0),
+    )
+    command = task.build().commands[0]
+    assert command.kind is CommandKind.JOINT_ABSOLUTE_MULTI
+    assert command.joint_targets == (('torso', TARGETS['torso']), ('head', (0.0, 2.0)))
+    assert task_command_from_dict(task_command_to_dict(command)) == command
+
+
+def test_head_alone_is_a_single_head_command(task):
+    task.whole_body_joint_absolute(head=(0.0, 2.0), joint_motion=(1.5, 1.5, 1.5))
+    command = task.build().commands[0]
+    assert command.kind is CommandKind.JOINT_ABSOLUTE
+    assert command.group == 'head'
+
+
+def test_head_cannot_use_joint_impedance_in_multi(task):
+    with pytest.raises(ValueError, match='head'):
+        task.joint_absolute_multi(
+            {'torso': TARGETS['torso'], 'head': (0.0, 2.0)},
+            (5.0, 1.0, 1.0),
+            impedance={'torso': (100.0,) * 6, 'head': (10.0,) * 2},
+        )

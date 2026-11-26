@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict
 
 from .main_window import MainWindow
+from .measurements_ui import MeasurementsPanel
 from .qt_compat import QComboBox, QHBoxLayout, QLabel, QTimer, QWidget
 from .scenario_ui import ScenarioPanel
 
@@ -346,9 +347,24 @@ class PlannerMainWindow(MainWindow):
             runner=backend.task_runner,
         )
         self.tabs.insertTab(self.tabs.count() - 1, self.vslam_panel, 'VSLAM')
+        self.measurements_panel = MeasurementsPanel(
+            backend,
+            on_log=self.append_log,
+        )
+        self.tabs.insertTab(
+            self.tabs.count() - 1,
+            self.measurements_panel,
+            'Measurements',
+        )
         backend.task_runner.on_operator_control = (
             self._operator_base_control_changed
         )
+
+    def closeEvent(self, event):  # noqa: N802
+        panel = getattr(self, 'measurements_panel', None)
+        if panel is not None:
+            panel.close_panel()
+        super().closeEvent(event)
 
     def _base_jog_blocked(self) -> bool:
         # A Nav2 Goto owns the base: Base tab jog must not fight it.

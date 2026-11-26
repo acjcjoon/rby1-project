@@ -26,6 +26,8 @@ CARTESIAN_ARMS = ("right_arm", "left_arm")
 # Streamed paths stay arm-only: the backend IK solves arm joints only.
 CARTESIAN_GROUPS = CARTESIAN_ARMS + ("torso",)
 BODY_JOINT_GROUPS = ("torso", "right_arm", "left_arm")
+# Groups one JOINT_ABSOLUTE_MULTI command may carry (head moves with the body).
+MULTI_JOINT_GROUPS = BODY_JOINT_GROUPS + ("head",)
 GRIPPER_SIDES = ("right", "left", "both")
 DEFAULT_GRIPPER_SETTLE_TIME_SEC = 1.0
 
@@ -578,7 +580,7 @@ class TaskCommand:
                 if not isinstance(item, tuple) or len(item) != 2:
                     raise ValueError("multi-group joint target is invalid")
                 group, values = item
-                if group not in BODY_JOINT_GROUPS:
+                if group not in MULTI_JOINT_GROUPS:
                     raise ValueError(
                         f"unsupported multi-group joint target: {group}"
                     )
@@ -588,6 +590,8 @@ class TaskCommand:
                     )
                 seen.add(group)
                 _values(values, JOINT_GROUP_DOF[group], f"{group} target")
+            if self.impedance is not None and "head" in seen:
+                raise ValueError("head cannot use joint impedance")
             _number(self.velocity_limit, "velocity_limit", positive=True)
             _number(self.acceleration_limit, "acceleration_limit", positive=True)
             if any(value is not None for value in (
